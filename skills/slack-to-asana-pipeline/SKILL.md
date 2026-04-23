@@ -2,7 +2,7 @@
 name: slack-to-asana-pipeline
 description: Monitor a Slack channel for task requests and automatically create Asana tasks from them. Use this skill whenever the user wants to turn Slack messages into Asana tasks, set up a Slack-to-Asana automation, process a backlog of unread Slack requests, or build a task intake pipeline from Slack. Also trigger when the user says things like "check my Slack for tasks", "pick up requests from Slack", "turn that Slack message into a task", or "monitor a channel for work items". Works for any team or project type — not just marketing.
 ---
-Add slack-to-asana-pipeline skill# Slack-to-Asana Pipeline
+# Slack-to-Asana Pipeline
 
 This skill reads messages from a Slack channel and creates Asana tasks from them — handling categorization, section placement, multi-homing for visibility, and posting a confirmation back to Slack. It's designed to eliminate manual Asana entry for teams that communicate work through Slack.
 
