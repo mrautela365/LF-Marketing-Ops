@@ -1,334 +1,298 @@
 ---
 name: campaign-implementation
 description: >
-  Creates live, paused campaign drafts across Google Ads (Search + Display), Meta Ads
-  Manager, and LinkedIn Campaign Manager using browser automation. Requires an approved
-  campaign brief (Excel file from campaign-brief-generator). All campaigns are created
-  in paused/draft state — no budget is spent until the user explicitly activates them.
+  Creates platform-ready campaign files (bulk upload CSVs/JSON) and/or live paused
+  drafts for Google Ads (Search + Display), Meta Ads, and LinkedIn. Two modes:
+  (1) Bulk Upload — generates import-ready files the marketer loads manually, no
+  browser auth needed, 100% reliable; (2) Browser — creates live drafts via browser
+  automation, faster but requires Chrome logged in to each platform.
 
   Trigger after the user approves the campaign brief and says: "implement the campaigns",
-  "create the campaigns", "set up the ads", or "proceed to implementation".
+  "create the campaigns", "set up the ads", "generate the upload files", or
+  "proceed to implementation".
 
-  Prerequisites: approved campaign brief Excel file, browser logged into each ad platform.
+  Prerequisites: approved campaign brief Excel file + campaign state file.
 ---
 
 # Campaign Implementation
 
-Automates campaign creation across ad platforms using browser automation
-(`mcp__Claude_in_Chrome__computer`). Always creates campaigns in paused or draft state.
-Never activates a campaign or spends budget without a second explicit user confirmation.
+Two execution paths — choose based on what's available:
 
-## ⚠️ Safety Rules
+| Mode | When to use | Reliability |
+|------|------------|-------------|
+| **Bulk Upload** (default) | Always works; no browser auth needed | ✅ 100% — pure file generation |
+| **Browser Automation** | Faster; creates live drafts directly | ⚠️ Requires Chrome logged in to each platform |
 
-1. **Paused by default**: All Google Ads campaigns must be published then immediately paused.
-   Never leave a campaign in "Enabled" state after creation.
-2. **Draft/paused for Meta and LinkedIn**: Save as draft — do not publish to active.
-3. **Budget placeholders**: Use $1.00/day as a placeholder. Real budgets must be filled
-   by the campaign stakeholder before activation.
-4. **Second approval gate**: Before any campaign goes live (spending real money), stop and
-   ask the user for explicit confirmation. This skill only creates drafts.
+**Recommendation:** Use Bulk Upload for first-time setup or when browser auth is
+uncertain. Use Browser Automation when all platforms are already logged in and
+you want live drafts immediately.
 
-## Prerequisites
+## ⚠️ Safety Rules (both modes)
 
-| Requirement | Details |
-|-------------|---------|
-| Campaign brief | Approved `{event_slug}-campaign-brief.xlsx` |
-| Browser auth | Chrome must be logged into Google Ads, Meta Ads Manager, LinkedIn Campaign Manager |
-| Tab ID | Use `tabs_context_mcp` to get the active tab ID before starting |
+1. **Paused by default**: All campaigns created in paused/draft state. No spend.
+2. **Budget placeholders**: Use `[TO BE FILLED]` in bulk files, `$1.00/day` in browser.
+3. **Second approval gate**: Before any campaign goes live, stop and ask for explicit
+   user confirmation. This skill only creates drafts.
+4. **Never activate**: Do not publish or enable any campaign in this skill.
 
 ## Configuration
 
 | Setting | Value |
 |---------|-------|
-| Google Ads account | LF Core (select from account switcher if not already active) |
+| Google Ads account | LF Core |
 | Campaign naming pattern | `Events \| {Event Name} {Year} \| {Region} \| Conversions \| Prospecting \| {Platform} \| {Brand} \| BoFU` |
-| Default daily budget | `$1.00` (placeholder — stakeholder fills real budget) |
-| Default bid strategy | Maximize conversions (no CPA target for new events) |
+| Default daily budget | `$1.00` (browser) / `[TO BE FILLED]` (bulk upload files) |
+| Bid strategy | Maximize conversions (no CPA target for new events) |
 
 ---
 
-## Platform 1: Google Ads — Search Campaign
+## Step 0: Load state file
 
-### 1a. Navigate to New Campaign
+Read `{event_slug}-campaign-state.json`. Extract:
+- `event_name`, `dates`, `year`, `city`, `region_code`
+- `registration_url`, `hs_utm`
+- `campaigns` — skip any platform whose status is already `paused` or `live`
 
-1. Go to `https://ads.google.com/aw/campaigns`
-2. Click the blue **+** button → **New campaign**
-3. Objective: **Website traffic** → Goal: **Website visits**
-4. Campaign type: **Search**
+If state file is missing, ask the user to run `lf-event-scraper` and
+`campaign-brief-generator` first, or provide the brief file path manually.
 
-### 1b. Campaign Settings
+Also read the campaign brief Excel to get copy (headlines, descriptions, sitelinks,
+keywords) — use pandas: `pd.read_excel("{event_slug}-campaign-brief.xlsx", sheet_name=None)`.
+
+---
+
+## MODE A: Bulk Upload Files (default, no API required)
+
+Generates one import-ready file per platform. The marketer imports these into each
+ad platform's bulk upload interface — no browser automation, no auth issues.
+
+### A1. Google Ads Search — Editor CSV
+
+Generate `{event_slug}-google-search.csv` following Google Ads Editor bulk upload schema.
+
+**Required columns and row types:**
+
+```
+Row Type    | Campaign          | Ad Group          | Keyword  | Headline 1..15 | Description 1..10 | ...
+------------|-------------------|-------------------|----------|----------------|-------------------|----
+Campaign    | Events | MCP...  |                   |          |                |                   |
+Ad Group    | Events | MCP...  | MCP - High Intent |          |                |                   |
+Keyword     | Events | MCP...  | MCP - High Intent | [kw text]|                |                   | Match Type
+RSA         | Events | MCP...  | MCP - High Intent |          | [h1]..[h15]    | [d1]..[d10]       |
+Sitelink    | Events | MCP...  |                   |          |                |                   | Headline, Desc1, Desc2, URL
+```
+
+**Header row (exact column names Google Ads Editor expects):**
+
+`Row Type, Campaign, Ad Group, Keyword, Match Type, Final URL, Headline 1, Headline 2, ..., Headline 15, Description 1, ..., Description 10, Sitelink Text, Sitelink Description Line 1, Sitelink Description Line 2, Sitelink Final URL, Campaign Status, Ad Group Status, Campaign Daily Budget, Campaign Bid Strategy Type`
+
+Fill from brief:
+- Keywords: all rows from brief's `Google Search` tab where Intent ≠ 🟢 Low
+- Headlines/descriptions: from RSA section of `Google Search` tab
+- Final URL: `registration_url` + UTM params (utm_source=google, utm_medium=paid-search, utm_campaign={hs_utm})
+- Campaign Status: `Paused`
+- Campaign Daily Budget: `[TO BE FILLED]`
+- Campaign Bid Strategy Type: `Maximize Conversions`
+
+### A2. Google Ads Display — Editor CSV
+
+Generate `{event_slug}-google-display.csv` with the Responsive Display Ad row:
+
+`Row Type, Campaign, Ad Group, Short Headline, Long Headline, Description, Business Name, Final URL, Campaign Status, Campaign Daily Budget`
+
+Fill from brief's `Google Display` tab. Campaign Status: `Paused`.
+
+Add a comment row at the top:
+```
+# ⚠️ Images must be uploaded manually in Google Ads UI after import.
+# Required: 1 landscape (1.91:1, min 1200×628) + 1 square (1:1, min 1200×1200).
+# Design team to provide square image — auto-crop from event page often fails.
+```
+
+### A3. Meta Ads — Bulk Upload CSV
+
+Generate `{event_slug}-meta-bulk.csv` following Meta Ads Manager bulk upload format:
+
+`Campaign Name, Campaign Objective, Ad Set Name, Age Min, Age Max, Location, Interests, Budget, Ad Name, Primary Text, Headline, Description, CTA, Destination URL, Image Hash`
+
+Fill from brief's `Meta` tab (Variant 1 as default). Leave `Image Hash` as `[UPLOAD IMAGE FIRST]`.
 
 | Field | Value |
 |-------|-------|
-| Campaign name | `Events \| {Event Name} {Year} \| {Region} \| Conversions \| Prospecting \| Search \| {Brand} \| BoFU` |
-| Networks | Uncheck "Include Google Display Network" and "Include Google Search Partners" (keep only Google Search) |
-| Locations | Target: event country (e.g. India). Exclude: none |
-| Languages | English |
-| Budget | `$1.00` / day (placeholder) |
-| Bid strategy | Maximize clicks (or Maximize conversions if conversion tracking is configured) |
-| Start/end date | Leave blank — stakeholder sets actual dates |
-
-### 1c. Ad Group + Keywords
-
-Create one ad group named `MCP - High Intent` (or event-appropriate name).
-
-Add all high-intent keywords from the brief's keyword list (🔴 High intent rows).
-Use the match type specified in the brief (Exact / Phrase / BMM).
-
-Skip 🟢 Low intent keywords (informational) or add as negatives.
-
-### 1d. Create RSA Ad
-
-Fill in exactly the values from the `Google Search` tab of the brief:
-- 15 headlines (add all — Google optimises which to show)
-- 10 descriptions
-- Final URL: registration URL with UTM parameters from the brief's Overview tab
-- Display path: e.g. `events.linuxfoundation.org/register`
-
-### 1e. Add Sitelinks
-
-Add all 6 sitelinks from the brief. Each needs:
-- Headline (≤ 25 chars)
-- Description line 1 (≤ 35 chars)
-- Description line 2 (≤ 35 chars)
-- Final URL (with UTM)
-
-### 1f. Publish then immediately pause
-
-1. Click **Publish campaign**
-2. Wait for the "Campaign published" confirmation
-3. Navigate to the Campaigns list
-4. Find the campaign by name
-5. Click the green **Enabled** status dot → select **Paused**
-6. Confirm the status dot turns grey/paused
-
-> **Why publish-then-pause?** Drafts in the Google Ads wizard are fragile (URL-based,
-> lost on navigation). Publishing locks the campaign into the Campaigns list where it
-> can be reliably found, edited, and paused. Pausing before any budget period begins
-> ensures zero spend.
-
-**Record the campaign ID** from the URL (`campaignId=XXXXXXXXXX`).
-
----
-
-## Platform 2: Google Ads — Display Campaign
-
-### 2a. Navigate to New Campaign
-
-1. Go to `https://ads.google.com/aw/campaigns`
-2. Click **+** → **New campaign**
-3. Objective: **Website traffic**
-4. Campaign type: **Display**
-5. Subtype: **Standard Display campaign**
-6. Final URL: registration URL from brief
-
-### 2b. Campaign Settings
-
-| Field | Value |
-|-------|-------|
-| Campaign name | `Events \| {Event Name} {Year} \| {Region} \| Conversions \| Prospecting \| Display \| {Brand} \| BoFU` |
-| Locations | Event country |
-| Languages | English |
-| Budget | `$1.00` / day |
-| Bid strategy | **Maximize conversions** — uncheck "Set a target cost per action" for new events with no conversion history |
-
-### 2c. Targeting
-
-- No keyword targeting needed (Display uses audience signals)
-- Optionally add audience segments: In-market for Software, Technology
-
-### 2d. Create Responsive Display Ad
-
-Fill fields from the `Google Display` tab of the brief:
-
-| Field | Value from Brief |
-|-------|-----------------|
-| Business name | `Linux Foundation Events` (≤ 25 chars) |
-| Short headline | From brief (≤ 30 chars) |
-| Long headline | From brief (≤ 90 chars) |
-| Description | From brief (≤ 90 chars) |
-| Final URL | Registration URL + UTM (utm_medium=display) |
-
-**Images — critical:**
-- Add images using the event URL scanner (paste registration URL → let Google suggest)
-- Accept **landscape (1.91:1)** images — these usually succeed
-- ⚠️ **Square (1:1) images often fail auto-crop** from event pages. If "Something went
-  wrong. Try cropping again" error appears: dismiss, proceed without square image,
-  and flag for Design team
-- Campaign cannot be published without at least 1 landscape AND 1 square image
-- If square image is missing: **save as draft** and record the campaignId + draftId
-
-### 2e. Save state
-
-If both image formats are available: publish then immediately pause (same as Search).
-
-If square image is missing: save as draft. Record:
-- `campaignId` (from URL)
-- `draftId` (from URL)
-- Note for Design team: needs square (1:1) brand image + logo before publishing
-
----
-
-## Platform 3: Meta Ads Manager
-
-### 3a. Navigate to Ads Manager
-
-Go to `https://adsmanager.facebook.com/adsmanager/manage/campaigns`
-
-Ensure the correct ad account is selected (check top-left account switcher).
-
-### 3b. Create Campaign
-
-1. Click **+ Create**
-2. Objective: **Leads** or **Website conversions**
-3. Campaign name: `Events \| {Event Name} {Year} \| {Region} \| Conversions \| Prospecting \| Meta \| {Brand} \| BoFU`
-4. Budget: Campaign Budget Optimisation OFF (set at ad set level)
-5. Click **Next**
-
-### 3c. Ad Set (Audience + Placements)
-
-**Audience — Prospecting mode (default for new events):**
-
-| Setting | Value |
-|---------|-------|
-| Locations | Event country + major tech metros |
-| Age | 25–55 |
-| Interests | Artificial intelligence, Machine learning, APIs, Developer tools, Software development |
-| Behaviours | Technology early adopters |
-| Custom audiences | None (prospecting) |
-
-> If retargeting lists exist: create custom audience segments from website visitors,
-> email list, or past purchasers. ⚠️ Audiences take 2–3 days to populate — create early.
-
-**Placements:** Advantage+ Placements (recommended) or manual: Facebook Feed,
-Instagram Feed, Facebook/Instagram Stories.
-
-**Budget:** $1.00/day (placeholder). **Start date:** Leave blank.
-
-### 3d. Ad Creative
-
-| Field | Value |
-|-------|-------|
-| Ad name | `{Event Name} - Primary` |
-| Identity | Select the LF Events Facebook page |
-| Format | Single image |
-| Image | Upload event image (Design team to provide; or use event banner from registration page) |
-| Primary text | Use Variant 1 from the brief's Meta tab |
-| Headline | Use Variant 1 from the brief's Meta tab |
-| Description | Optional |
-| CTA | **Register Now** |
-| Website URL | Registration URL + UTM (utm_source=facebook, utm_medium=paid-social) |
-
-**Save as draft** — do not publish.
-
-### 3e. Duplicate for additional variants (optional)
-
-If time permits, duplicate the ad and apply primary text + headline Variants 2 and 3
-from the brief for A/B testing.
-
----
-
-## Platform 4: LinkedIn Campaign Manager
-
-### 4a. Navigate to Campaign Manager
-
-Go to `https://www.linkedin.com/campaignmanager/`
-
-Select the correct account.
-
-### 4b. Create Campaign Group
-
-Click **+ Create** → **Campaign Group**
-- Name: `Events | {Event Name} {Year}`
-- Status: Paused
-- Budget: None at group level
-
-### 4c. Create Campaign
-
-Inside the campaign group, click **+ Create campaign**:
-
-| Setting | Value |
-|---------|-------|
-| Objective | **Website visits** or **Lead generation** |
-| Campaign name | `Events \| {Event Name} {Year} \| {Region} \| Conversions \| Prospecting \| LinkedIn \| {Brand} \| BoFU` |
-| LinkedIn Audience Network | Enabled |
-| Targeting | See below |
-| Format | Single image ad |
-| Budget | $1.00/day (placeholder) |
-| Schedule | No end date; start date blank |
-
-**Targeting:**
-
-| Dimension | Values |
-|-----------|--------|
-| Job titles | Software Engineer, AI Engineer, ML Engineer, Solutions Architect, CTO, VP Engineering, Platform Engineer |
-| Industries | Information Technology, Financial Services, Computer Software |
-| Company size | 50–10,000+ employees |
+| Campaign Objective | `LEAD_GENERATION` |
+| Age Min / Max | `25` / `55` |
 | Location | Event country |
+| Interests | `Artificial intelligence; Machine learning; Software development` |
+| CTA | `SIGN_UP` |
+| Budget | `[TO BE FILLED]` |
 
-### 4d. Ad Creative
+Add note row: `# Run Meta image upload first, then paste image hashes into this column.`
+
+### A4. LinkedIn Campaigns — CSV
+
+Generate `{event_slug}-linkedin-campaigns.csv`:
+
+`Campaign Group, Campaign Name, Objective, Ad Format, Budget, Bid Type, Location, Job Titles, Industries, Ad Name, Intro Text, Headline, Destination URL, CTA, Status`
+
+Fill from brief's `LinkedIn` tab. Status: `DRAFT`. Budget: `[TO BE FILLED]`.
+
+### A5. Save files and update state
+
+Write all files to working directory. Update `{event_slug}-campaign-state.json`:
+
+```json
+{
+  "campaigns": {
+    "google_search":  { "bulk_file": "{slug}-google-search.csv",  "status": "bulk_ready" },
+    "google_display": { "bulk_file": "{slug}-google-display.csv", "status": "bulk_ready", "blocker": "needs square image" },
+    "meta":           { "bulk_file": "{slug}-meta-bulk.csv",      "status": "bulk_ready" },
+    "linkedin":       { "bulk_file": "{slug}-linkedin-campaigns.csv", "status": "bulk_ready" }
+  },
+  "last_updated": "YYYY-MM-DD"
+}
+```
+
+### A6. Present import instructions
+
+```
+✅ Bulk upload files generated:
+
+  {slug}-google-search.csv   → Google Ads Editor → File → Import CSV
+  {slug}-google-display.csv  → Google Ads Editor → File → Import CSV
+  {slug}-meta-bulk.csv       → Meta Ads Manager → ⬆ Import → Spreadsheet
+  {slug}-linkedin-campaigns.csv → LinkedIn Campaign Manager → Bulk Operations → Upload
+
+⚠️ Before importing:
+  1. Fill [TO BE FILLED] budget fields in each file
+  2. Upload square (1:1) image to Google Display campaign after import
+  3. Upload ad images to Meta before importing (get image hashes first)
+
+All campaigns import in Paused/Draft state — no spend until you activate.
+State saved to: {event_slug}-campaign-state.json
+```
+
+---
+
+## MODE B: Browser Automation (live drafts)
+
+Use when Chrome is already logged into all ad platforms. Faster but fragile — if
+any platform shows an auth prompt or unexpected UI change, fall back to Mode A.
+
+### Prerequisites check
+
+Before starting, take a screenshot and confirm:
+1. Chrome tab is open and logged into Google Ads (ads.google.com)
+2. Correct account is active (LF Core)
+
+If not logged in: switch to Mode A.
+
+### B1. Google Ads Search Campaign
+
+#### Navigate
+Go to `https://ads.google.com/aw/campaigns` → **+** → **New campaign** →
+**Website traffic** → **Search**
+
+#### Campaign settings
 
 | Field | Value |
 |-------|-------|
-| Ad name | `{Event Name} - Primary` |
-| Intro text | Variant 1 from brief's LinkedIn tab (≤ 150 chars) |
-| Headline | Variant 1 from brief's LinkedIn tab (≤ 70 chars) |
-| Image | Upload event image |
-| CTA | **Register** |
-| Destination URL | Registration URL + UTM (utm_source=linkedin, utm_medium=paid-social) |
+| Campaign name | From naming pattern above |
+| Networks | Google Search only (uncheck Display Network + Search Partners) |
+| Locations | Event country (e.g. India) |
+| Languages | English |
+| Budget | `$1.00`/day (placeholder) |
+| Bid strategy | Maximize clicks or Maximize conversions |
 
-**Save as draft.**
+#### Ad group + keywords
+Name: `{Event Name} - High Intent`. Add all 🔴 High intent keywords from brief.
 
----
+#### RSA ad
+Fill 15 headlines + 10 descriptions from brief. Final URL = registration URL + UTM.
 
-## Handoff Record
+#### Sitelinks
+Add all 6 sitelinks from brief (headline + 2 description lines + URL each).
 
-After completing all platforms, output a structured summary:
+#### Publish then immediately pause
+1. Click **Publish campaign**
+2. Wait for confirmation screen
+3. Go to Campaigns list → find by name → click Enabled dot → **Paused**
+4. Confirm status is grey/paused
 
-```
-## Campaign Implementation Summary — {Event Name}
+Record `campaignId` from URL. Update state file.
 
-### Google Ads Search
-- Campaign ID: XXXXXXXXXX
-- Status: Paused ✅
-- Keywords: {N} loaded
-
-### Google Ads Display
-- Campaign ID: XXXXXXXXXX / Draft ID: XXXXXXXXXX
-- Status: Draft ⚠️ (needs square image from Design team before publishing)
-- Action needed: Upload 1:1 square brand image + logo
-
-### Meta Ads
-- Campaign name: Events | {Event Name}...
-- Status: Draft ✅
-- Account: {account name}
-
-### LinkedIn
-- Campaign group: Events | {Event Name} {Year}
-- Campaign name: Events | {Event Name}...
-- Status: Draft ✅
-
----
-⚠️ BEFORE GOING LIVE — stakeholder must:
-  1. Set real budget (replace $1.00/day placeholders)
-  2. Set campaign start/end dates
-  3. Upload square (1:1) image to Google Display draft
-  4. Review all ad copy for brand accuracy
-  5. Confirm conversion tracking is firing
-  6. Then explicitly say "activate campaigns" for a second approval step
-```
-
-**Do not activate any campaign without a second, explicit user instruction.**
-
----
-
-## Troubleshooting Reference
+#### Known issues + fixes
 
 | Issue | Fix |
 |-------|-----|
-| Google Ads: "Bidding: Enter an amount" error on Display review | Uncheck "Set a target cost per action" checkbox — use pure Maximize conversions |
-| Google Ads: "Ad creation: Fix errors" on Display publish | Missing square (1:1) image — save as draft, flag for Design team |
-| Google Ads: Image crop error toast | Dismiss and proceed; auto-crop of event page images fails for square format |
-| Google Ads: Accidentally clicked copy/duplicate icon | Click the trash icon on the duplicate → confirm "Yes remove" |
-| Meta: Ad account not visible | Check account switcher top-left; may need access granted by Ads manager |
-| LinkedIn: Campaign won't save | Ensure targeting has at least one location selected |
+| "Bidding: Enter an amount" on review | Uncheck "Set a target cost per action" |
+| Image crop toast error on Display | Dismiss; save as draft; flag for Design team |
+| Accidentally duplicated an ad | Click trash icon on duplicate → "Yes remove" |
+| Search bar opens instead of URL bar | Press Escape; use navigate tool instead |
+
+### B2. Google Ads Display Campaign
+
+Follow same navigation pattern but select **Display** type.
+- Bid strategy: Maximize conversions, **uncheck "Set a target CPA"**
+- Add images from event URL (landscape usually works; square often fails — see Known Issues)
+- If square image missing: save as draft, record campaignId + draftId
+
+### B3. Meta Ads Manager
+
+Go to `https://adsmanager.facebook.com/adsmanager/manage/campaigns`
+
+1. **+Create** → Objective: **Leads** → name from pattern
+2. Ad set: location = event country, age 25–55, interests (AI/ML, APIs, developer tools)
+3. Ad: single image, primary text + headline Variant 1 from brief, CTA = **Register Now**
+4. **Save as draft** — do not publish
+
+### B4. LinkedIn Campaign Manager
+
+Go to `https://www.linkedin.com/campaignmanager/`
+
+1. Create campaign group: `Events | {Event Name} {Year}`
+2. Inside group → create campaign → objective: **Website visits**
+3. Targeting: job titles (Software/AI/ML Engineer, Solutions Architect, CTO, VP Engineering),
+   industries (IT, Financial Services), company size 50–10,000+, location = event country
+4. Ad: single image, intro text + headline Variant 1 from brief, CTA = **Register**
+5. **Save as draft**
+
+### B5. Update state file
+
+```json
+{
+  "campaigns": {
+    "google_search":  { "id": "XXXXXXXXXX", "status": "paused" },
+    "google_display": { "id": "XXXXXXXXXX", "draft_id": "XXXXXXXXXX", "status": "draft", "blocker": "needs square image" },
+    "meta":           { "status": "draft" },
+    "linkedin":       { "status": "draft" }
+  }
+}
+```
+
+---
+
+## Handoff Summary (both modes)
+
+```
+## Campaign Implementation Complete — {Event Name}
+
+Mode used: [Bulk Upload / Browser Automation]
+
+Platform         Status         Notes
+Google Search    paused/ready   {campaign_id or bulk file}
+Google Display   draft/ready    ⚠️ Needs square (1:1) image from Design team
+Meta             draft/ready    ⚠️ Upload ad image before activating
+LinkedIn         draft/ready
+
+State file: {event_slug}-campaign-state.json
+
+─── BEFORE GOING LIVE — stakeholder checklist ───────────────────────────
+  □ Set real budget (replace placeholders)
+  □ Set campaign start/end dates
+  □ Upload square (1:1) image → Google Display
+  □ Upload ad image → Meta
+  □ Confirm conversion tracking is firing
+  □ Review all copy for brand accuracy
+  □ Say "activate campaigns" for final approval step
+─────────────────────────────────────────────────────────────────────────
+```
