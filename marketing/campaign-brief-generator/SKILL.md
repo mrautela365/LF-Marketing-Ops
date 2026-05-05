@@ -21,12 +21,15 @@ and approval before any ad spend begins.
 
 ## Prerequisites
 
-| Requirement | Details |
-|-------------|---------|
-| Event data | JSON output from `lf-event-scraper`, or manually provided fields |
-| HubSpot MCP | `search_crm_objects` + `manage_crm_objects` tools must be connected |
-| Google Ads MCP | `build_utm_url` tool must be connected |
-| Python + openpyxl | For assembling the Excel file |
+| Requirement | Available? | Fallback if missing |
+|-------------|-----------|---------------------|
+| Event data | JSON from `lf-event-scraper` or state file | Ask user for fields manually |
+| HubSpot MCP (`search_crm_objects`, `manage_crm_objects`) | Optional | Ask user for `hs_utm` token directly |
+| Google Ads MCP (`build_utm_url`) | Optional | Use built-in Python UTM builder (see below) |
+| Python + openpyxl | Required | Install: `pip install openpyxl` |
+
+**This skill is designed to work with zero external MCP connections.** All MCP tools
+are optional — see the fallback paths in each step.
 
 ## Configuration
 
@@ -34,7 +37,30 @@ and approval before any ad spend begins.
 |---------|-------|
 | UTM Link Builder Sheet ID | `1AVFVYTo92kncOdtwyblS_M96m_gq6k2dG1rpueEMy6Q` |
 | Output file pattern | `{event_slug}-campaign-brief.xlsx` |
-| Output directory | `/Users/misharautela/` (or current working directory) |
+| State file pattern | `{event_slug}-campaign-state.json` |
+| Output directory | Working directory (or `/Users/misharautela/`) |
+
+## Fallback UTM Builder (no MCP needed)
+
+If `build_utm_url` MCP tool is not connected, construct URLs with this Python snippet:
+
+```python
+from urllib.parse import urlencode, urlparse, urlunparse, parse_qs
+
+def build_utm_url(base_url, utm_source, utm_medium, utm_campaign,
+                  utm_term="", utm_content=""):
+    params = {
+        "utm_source": utm_source,
+        "utm_medium": utm_medium,
+        "utm_campaign": utm_campaign,
+    }
+    if utm_term:   params["utm_term"]    = utm_term
+    if utm_content: params["utm_content"] = utm_content
+    sep = "&" if "?" in base_url else "?"
+    return base_url.rstrip("/") + "/" + sep + urlencode(params)
+```
+
+Use this function wherever `build_utm_url` MCP calls appear in the steps below.
 
 ## Output
 
@@ -53,6 +79,22 @@ A `.xlsx` workbook with 6 tabs:
 
 ## Step-by-Step Workflow
 
+### Step 0: Load state file (token saver)
+
+Check for `{event_slug}-campaign-state.json` in the working directory.
+
+**If the file exists**, load it and skip any steps whose outputs are already populated:
+
+| State field populated | Skip |
+|-----------------------|------|
+| `event_name`, `dates`, `registration_url` | Step 1 validation (data already confirmed) |
+| `hs_utm` | Steps 2a–2d (HubSpot already resolved) |
+| `utm_sheet_rows` | Steps 3–4 (UTMs already built and registered) |
+| `brief_file` (and file exists on disk) | Steps 5–8 (brief already generated) |
+
+Tell the user what was loaded vs what will be regenerated. This saves re-running
+HubSpot API calls and UTM construction on subsequent sessions.
+
 ### Step 1: Validate event data
 
 Confirm the following fields are present. If any are missing, ask the user:
@@ -67,9 +109,21 @@ HubSpot is the source of truth for campaign attribution. Every paid campaign mus
 linked to a HubSpot campaign object so UTM-tagged visits can be attributed in HubSpot
 reporting. The campaign's `hs_utm` token is what ties all platform UTMs together.
 
-#### 2a. Search for an existing HubSpot campaign
+#### 2a. Check state file first
 
-Call `search_crm_objects`:
+If `hs_utm` is already set in the state file, skip the HubSpot API calls entirely
+and proceed directly to Step 3. The token is already resolved.
+
+#### 2b. Search for an existing HubSpot campaign (if hs_utm missing)
+
+**If HubSpot MCP is not connected:** ask the user:
+> "HubSpot MCP is not available. Please provide the hs_utm token for this campaign
+> (format: `{numericId}-{URL-encoded-name}`, e.g. `42462239-MCP%20Dev%20Summit%20Mumbai`).
+> You can find it in HubSpot → Marketing → Campaigns → [campaign] → UTM parameters."
+
+If the user provides it, save to state file and skip to Step 3.
+
+**If HubSpot MCP is connected:** call `search_crm_objects`:
 ```json
 {
   "objectType": "campaigns",
@@ -87,7 +141,7 @@ Call `search_crm_objects`:
 If multiple results return, pick the one whose `hs_name` most closely matches the
 full event name (including year if present).
 
-#### 2b. Extract the hs_utm token
+#### 2c. Extract the hs_utm token
 
 The `hs_utm` property has the format:
 
@@ -102,7 +156,7 @@ platform. It is how HubSpot links a website visit back to this specific campaign
 
 **Save this token** — it is used in every UTM URL in Steps 3 and 4.
 
-#### 2c. Create campaign if not found
+#### 2d. Create campaign if not found
 
 If no matching campaign exists, call `manage_crm_objects` to create one:
 
@@ -121,7 +175,7 @@ If no matching campaign exists, call `manage_crm_objects` to create one:
 After creation, call `search_crm_objects` again to retrieve the `hs_utm` token
 (it is generated server-side and not returned directly from the create call).
 
-#### 2d. Verify campaign properties
+#### 2e. Verify campaign properties
 
 Confirm or update these HubSpot campaign properties (call `manage_crm_objects`
 with operation `update` if any are missing):
@@ -305,12 +359,30 @@ Save as `{event_slug}-campaign-brief.xlsx`.
 
 Run `scripts/recalc.py` if available to force-evaluate LEN formulas.
 
-### Step 9: Present summary and wait for approval
+### Step 9: Update state file and present summary
 
-After saving the file, summarise in chat:
+**Update `{event_slug}-campaign-state.json`** with all resolved values:
+
+```json
+{
+  "event_slug": "...",
+  "event_name": "...",
+  "dates": "...",
+  "registration_url": "...",
+  "hs_campaign_id": "...",
+  "hs_utm": "42462239-MCP%20Dev%20Summit%20Mumbai",
+  "utm_sheet_rows": "1040-1047",
+  "brief_file": "mcp-dev-summit-mumbai-campaign-brief.xlsx",
+  "campaigns": {},
+  "last_updated": "YYYY-MM-DD"
+}
+```
+
+Then present the summary in chat:
 
 ```
 ✅ Campaign brief saved: {event_slug}-campaign-brief.xlsx
+✅ State saved: {event_slug}-campaign-state.json
 
 Platforms covered: Google Search · Google Display · Meta · LinkedIn · X/Twitter
 Keywords: {N} keywords across Exact/Phrase/BMM match types
@@ -323,6 +395,7 @@ HubSpot campaign token: {hs_utm}
   - Retargeting audiences (create now if using retargeting)
 
 Ready to proceed to campaign-implementation? Reply "yes" to create platform drafts.
+(Next session: load state from {event_slug}-campaign-state.json to skip re-computation.)
 ```
 
 **Do not proceed to implementation without explicit user approval.**
