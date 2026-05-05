@@ -70,71 +70,165 @@ ad platform's bulk upload interface — no browser automation, no auth issues.
 
 Generate `{event_slug}-google-search.csv` following Google Ads Editor bulk upload schema.
 
-**Required columns and row types:**
+**How entity type works — no "Row Type" column.**
+Google Ads Editor infers the entity from which columns are populated in each row.
+Leave all irrelevant columns blank for each row type.
+
+| Entity | Columns that must be populated | Columns that must be blank |
+|--------|-------------------------------|---------------------------|
+| Campaign row | `Campaign`, `Campaign Type`, `Campaign Status`, `Campaign daily budget` | Ad group, Keyword, headlines |
+| Ad Group row | `Campaign`, `Ad group`, `Max CPC` | Keyword, headlines |
+| Keyword row | `Campaign`, `Ad group`, `Keyword`, `Criterion Type` | Headlines, descriptions |
+| RSA Ad row | `Campaign`, `Ad group`, `Final URL`, `Headline 1`–`3` min, `Description 1`–`2` min | Keyword |
+| Sitelink row | `Campaign`, `Sitelink text`, `Final URL` | Ad group, Keyword, headlines |
+
+**Exact column headers (case-insensitive, spelling must be exact):**
 
 ```
-Row Type    | Campaign          | Ad Group          | Keyword  | Headline 1..15 | Description 1..10 | ...
-------------|-------------------|-------------------|----------|----------------|-------------------|----
-Campaign    | Events | MCP...  |                   |          |                |                   |
-Ad Group    | Events | MCP...  | MCP - High Intent |          |                |                   |
-Keyword     | Events | MCP...  | MCP - High Intent | [kw text]|                |                   | Match Type
-RSA         | Events | MCP...  | MCP - High Intent |          | [h1]..[h15]    | [d1]..[d10]       |
-Sitelink    | Events | MCP...  |                   |          |                |                   | Headline, Desc1, Desc2, URL
+Campaign, Campaign Type, Campaign Status, Campaign daily budget, Campaign Bid Strategy Type,
+Ad group, Max CPC, Ad group status,
+Keyword, Criterion Type,
+Final URL, Path 1, Path 2,
+Headline 1, Headline 2, Headline 3, Headline 4, Headline 5, Headline 6, Headline 7,
+Headline 8, Headline 9, Headline 10, Headline 11, Headline 12, Headline 13, Headline 14, Headline 15,
+Description 1, Description 2, Description 3, Description 4,
+Sitelink text, Description line 1, Description line 2, Sitelink Final URL, Sitelink status
 ```
 
-**Header row (exact column names Google Ads Editor expects):**
+> Note: Descriptions only go to **4** (not 10) in Google Ads Editor. RSA requires minimum
+> 3 headlines and 2 descriptions; Google optimises which to show.
+> `Criterion Type` values: `Exact`, `Phrase`, `Broad` (not "Match Type").
 
-`Row Type, Campaign, Ad Group, Keyword, Match Type, Final URL, Headline 1, Headline 2, ..., Headline 15, Description 1, ..., Description 10, Sitelink Text, Sitelink Description Line 1, Sitelink Description Line 2, Sitelink Final URL, Campaign Status, Ad Group Status, Campaign Daily Budget, Campaign Bid Strategy Type`
+**Row structure example:**
+
+```csv
+Campaign,Campaign Type,Campaign Status,Campaign daily budget,...
+Events | MCP Dev Summit Mumbai 2026 | IN | Conversions | Prospecting | Search | AAIF | BoFU,Search,Paused,[TO BE FILLED],...
+Events | MCP...,,,,,MCP - High Intent,1.00,,,,,,,,,,,,,,,,,,,,,,,,,,
+Events | MCP...,,,,,MCP - High Intent,,,"MCP Dev Summit",Exact,,,,,,,,,,,,,,,
+Events | MCP...,,,,,MCP - High Intent,,,,,https://events.../register/?utm_...,,register,now,Headline 1 text,...
+Events | MCP...,,,,,,,,,,https://events.../register/?...,,,,,,,Register Now,Desc line 1,Desc line 2,,
+```
 
 Fill from brief:
-- Keywords: all rows from brief's `Google Search` tab where Intent ≠ 🟢 Low
-- Headlines/descriptions: from RSA section of `Google Search` tab
-- Final URL: `registration_url` + UTM params (utm_source=google, utm_medium=paid-search, utm_campaign={hs_utm})
+- Keywords: all rows from `Google Search` tab where Intent ≠ 🟢 Low
+- Headlines 1–15 + Descriptions 1–4: from RSA section of `Google Search` tab
+- Final URL: `registration_url` + UTM (utm_source=google, utm_medium=paid-search, utm_campaign={hs_utm})
+- `Criterion Type`: map from brief's Match Type column (Exact → `Exact`, Phrase → `Phrase`, BMM → `Broad`)
 - Campaign Status: `Paused`
-- Campaign Daily Budget: `[TO BE FILLED]`
+- Campaign daily budget: `[TO BE FILLED]`
 - Campaign Bid Strategy Type: `Maximize Conversions`
 
 ### A2. Google Ads Display — Editor CSV
 
-Generate `{event_slug}-google-display.csv` with the Responsive Display Ad row:
+Generate `{event_slug}-google-display.csv`. Same column inference logic as Search —
+no Row Type column; entity type inferred from populated columns.
 
-`Row Type, Campaign, Ad Group, Short Headline, Long Headline, Description, Business Name, Final URL, Campaign Status, Campaign Daily Budget`
+**Display-specific columns needed:**
 
-Fill from brief's `Google Display` tab. Campaign Status: `Paused`.
-
-Add a comment row at the top:
 ```
-# ⚠️ Images must be uploaded manually in Google Ads UI after import.
-# Required: 1 landscape (1.91:1, min 1200×628) + 1 square (1:1, min 1200×1200).
-# Design team to provide square image — auto-crop from event page often fails.
+Campaign, Campaign Type, Campaign Status, Campaign daily budget, Campaign Bid Strategy Type,
+Ad group, Max CPC,
+Short headline, Long headline 1, Description 1, Business name, Final URL, Ad status
 ```
 
-### A3. Meta Ads — Bulk Upload CSV
+Fill from brief's `Google Display` tab. `Campaign Type`: `Display`. `Campaign Status`: `Paused`.
 
-Generate `{event_slug}-meta-bulk.csv` following Meta Ads Manager bulk upload format:
+> ⚠️ **Images cannot be imported via CSV** — Google Ads Editor does not support image
+> asset import. After importing this file, open the campaign in the Google Ads UI and
+> add images manually to the Responsive Display Ad:
+> - At least 1 landscape image (1.91:1, min 1200×628 px)
+> - At least 1 square image (1:1, min 1200×1200 px) — Design team must provide this;
+>   auto-crop from event page often fails
+> - Logo recommended (1:1 format)
+> Flag this in the handoff summary as a required post-import action.
 
-`Campaign Name, Campaign Objective, Ad Set Name, Age Min, Age Max, Location, Interests, Budget, Ad Name, Primary Text, Headline, Description, CTA, Destination URL, Image Hash`
+### A3. Meta Ads — Bulk Upload Spreadsheet
 
-Fill from brief's `Meta` tab (Variant 1 as default). Leave `Image Hash` as `[UPLOAD IMAGE FIRST]`.
+> ⚠️ **Meta's template must be downloaded from inside Ads Manager.**
+> There is no public URL and the column names differ from the Ads Manager UI.
+> Go to: Ads Manager → any campaign view → Import/Export icon → "Import Ads in Bulk"
+> → "Download a sample spreadsheet". Use that file as the base.
 
-| Field | Value |
-|-------|-------|
-| Campaign Objective | `LEAD_GENERATION` |
-| Age Min / Max | `25` / `55` |
-| Location | Event country |
-| Interests | `Artificial intelligence; Machine learning; Software development` |
-| CTA | `SIGN_UP` |
-| Budget | `[TO BE FILLED]` |
+**Critical: UI names vs spreadsheet column names**
 
-Add note row: `# Run Meta image upload first, then paste image hashes into this column.`
+| What you see in Ads Manager UI | Actual column name in the spreadsheet |
+|-------------------------------|---------------------------------------|
+| Primary Text | `Body` |
+| Headline | `Title` |
+| Campaign ID | Leave blank (new campaign) |
+| Ad Set ID | Leave blank (new ad set) |
+| Ad ID | Leave blank (new ad) |
 
-### A4. LinkedIn Campaigns — CSV
+**Key required fields and correct values:**
 
-Generate `{event_slug}-linkedin-campaigns.csv`:
+| Column | Value |
+|--------|-------|
+| `Campaign Name` | From naming pattern |
+| `Campaign Objective` | `OUTCOME_LEADS` (API enum — NOT "Lead Generation") |
+| `Daily Budget` | `[TO BE FILLED]` |
+| `Start Date` | Required — use campaign start date or leave for stakeholder |
+| `Ad Set Name` | `{Event Name} - Prospecting - India` |
+| `Age Min` / `Age Max` | `25` / `55` |
+| `Body` | Primary text Variant 1 from brief's Meta tab |
+| `Title` | Headline Variant 1 from brief's Meta tab |
+| `Call to Action` | `SIGN_UP` |
+| `Link` | Registration URL + UTM (utm_source=facebook, utm_medium=paid-social) |
+| Image hash | `[UPLOAD IMAGE FIRST — get hash from Meta media library]` |
 
-`Campaign Group, Campaign Name, Objective, Ad Format, Budget, Bid Type, Location, Job Titles, Industries, Ad Name, Intro Text, Headline, Destination URL, CTA, Status`
+**Other common objective API enum values for reference:**
+`OUTCOME_TRAFFIC`, `OUTCOME_AWARENESS`, `OUTCOME_ENGAGEMENT`, `OUTCOME_SALES`
 
-Fill from brief's `LinkedIn` tab. Status: `DRAFT`. Budget: `[TO BE FILLED]`.
+Add a top-row note in the file:
+```
+INSTRUCTIONS: 1) Upload your ad image to Meta's media library first to get the image hash.
+2) Fill [TO BE FILLED] fields. 3) Start Date is required (format: YYYY-MM-DD).
+4) Import via Ads Manager → Import/Export → Import Ads in Bulk.
+```
+
+### A4. LinkedIn — Campaign + Campaign Group CSV
+
+> ⚠️ **LinkedIn bulk CSV cannot create ads (creatives).** It only supports creating
+> campaign groups and campaigns. Ad creative must still be added in the Campaign Manager
+> UI after importing the CSV. The template must be downloaded from Campaign Manager:
+> Campaigns tab → Bulk Actions → Download Template.
+
+**What LinkedIn bulk CSV covers:**
+- ✅ Campaign group creation
+- ✅ Campaign settings (name, budget, dates, status, targeting)
+- ❌ Ad creation — must be done in UI after import
+
+Generate two files:
+
+**File 1: `{event_slug}-linkedin-campaign-groups.csv`**
+
+Download the Campaign Group template from Campaign Manager and fill:
+
+| Column | Value |
+|--------|-------|
+| Account ID | *(read-only, pre-filled in template)* |
+| Campaign Group Name | `Events \| {Event Name} {Year}` |
+| Campaign Group Status | `paused` |
+| Start Date | MM/DD/YYYY — use campaign start date |
+| End Date | *(leave blank)* |
+
+**File 2: `{event_slug}-linkedin-campaigns.csv`**
+
+Download the Campaign template and fill:
+
+| Column | Value |
+|--------|-------|
+| Account ID | *(read-only)* |
+| Campaign Name | From naming pattern |
+| Campaign Status | `paused` |
+| Campaign Start Date | MM/DD/YYYY |
+| Campaign Objective | `WEBSITE_VISITS` |
+| Daily Budget | `[TO BE FILLED]` |
+
+> After importing both files, add ad creatives manually in Campaign Manager:
+> open the new campaign → Ads tab → + Create ad → fill from brief's LinkedIn tab.
+
+Add a top-row note: `INSTRUCTIONS: 1) Download template from Campaign Manager → Bulk Actions → Download Template. 2) Copy these values into that template (do not use this file directly). 3) Import via Bulk Actions → Upload. 4) After import, add ad creatives in the UI.`
 
 ### A5. Save files and update state
 
@@ -146,7 +240,7 @@ Write all files to working directory. Update `{event_slug}-campaign-state.json`:
     "google_search":  { "bulk_file": "{slug}-google-search.csv",  "status": "bulk_ready" },
     "google_display": { "bulk_file": "{slug}-google-display.csv", "status": "bulk_ready", "blocker": "needs square image" },
     "meta":           { "bulk_file": "{slug}-meta-bulk.csv",      "status": "bulk_ready" },
-    "linkedin":       { "bulk_file": "{slug}-linkedin-campaigns.csv", "status": "bulk_ready" }
+    "linkedin":       { "bulk_file": "{slug}-linkedin-campaigns.csv", "status": "bulk_ready", "note": "ads must be created in UI after CSV import" }
   },
   "last_updated": "YYYY-MM-DD"
 }
@@ -157,15 +251,33 @@ Write all files to working directory. Update `{event_slug}-campaign-state.json`:
 ```
 ✅ Bulk upload files generated:
 
-  {slug}-google-search.csv   → Google Ads Editor → File → Import CSV
-  {slug}-google-display.csv  → Google Ads Editor → File → Import CSV
-  {slug}-meta-bulk.csv       → Meta Ads Manager → ⬆ Import → Spreadsheet
-  {slug}-linkedin-campaigns.csv → LinkedIn Campaign Manager → Bulk Operations → Upload
+  Google Ads (Search + Display):
+    {slug}-google-search.csv   → Google Ads Editor → File → Import CSV
+    {slug}-google-display.csv  → Google Ads Editor → File → Import CSV
 
-⚠️ Before importing:
-  1. Fill [TO BE FILLED] budget fields in each file
-  2. Upload square (1:1) image to Google Display campaign after import
-  3. Upload ad images to Meta before importing (get image hashes first)
+  Meta Ads:
+    {slug}-meta-bulk.csv       → use as a reference/fill-in guide ONLY
+    ⚠️ Must use Meta's own template: Ads Manager → Import/Export → Import Ads in Bulk
+       → Download a sample spreadsheet → copy values from reference file into template
+
+  LinkedIn:
+    {slug}-linkedin-campaign-groups.csv  → reference for Campaign Group values
+    {slug}-linkedin-campaigns.csv        → reference for Campaign values
+    ⚠️ Must use LinkedIn's own template: Campaign Manager → Bulk Actions → Download Template
+       → copy values into that template, then upload
+
+──── POST-IMPORT REQUIRED ACTIONS ────────────────────────────────────────────
+  Google Display:
+    □ Open campaign in Google Ads UI → add images manually
+    □ Need: 1 landscape (1.91:1, ≥1200×628) + 1 square (1:1, ≥1200×1200) — Design team
+  Meta:
+    □ Upload ad image to Meta media library first → get image hash
+    □ Paste image hash into spreadsheet before importing
+    □ Start Date field is required — fill before import
+  LinkedIn:
+    □ After CSV import creates campaign, open it in Campaign Manager
+    □ Add ad creative manually (Ads tab → + Create ad) using copy from brief
+──────────────────────────────────────────────────────────────────────────────
 
 All campaigns import in Paused/Draft state — no spend until you activate.
 State saved to: {event_slug}-campaign-state.json
@@ -280,9 +392,9 @@ Mode used: [Bulk Upload / Browser Automation]
 
 Platform         Status         Notes
 Google Search    paused/ready   {campaign_id or bulk file}
-Google Display   draft/ready    ⚠️ Needs square (1:1) image from Design team
-Meta             draft/ready    ⚠️ Upload ad image before activating
-LinkedIn         draft/ready
+Google Display   draft/ready    ⚠️ Add images in UI after import (landscape + square)
+Meta             bulk_ready     ⚠️ Use Meta's own template; upload image hash first
+LinkedIn         bulk_ready     ⚠️ Campaigns only via CSV; add ad creative in UI
 
 State file: {event_slug}-campaign-state.json
 
