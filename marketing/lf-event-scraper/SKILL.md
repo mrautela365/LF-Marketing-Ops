@@ -27,10 +27,28 @@ fetch the live page and extract dates from the HTML — never infer them.
 |-------|-------------|
 | `event_url` | Full URL of the LF event, e.g. `https://events.linuxfoundation.org/mcp-dev-summit-mumbai/` |
 
+## Step 0: Check for existing state file (token saver)
+
+Before fetching anything, check whether a campaign state file already exists for
+this event. State files are saved at:
+
+```
+{working_directory}/{event_slug}-campaign-state.json
+```
+
+If you don't know the slug yet, derive it from the URL path segment
+(e.g. `mcp-dev-summit-mumbai` from `.../mcp-dev-summit-mumbai/`).
+
+**If state file exists and has `event_name` + `dates` + `registration_url`:**
+- Skip Steps 1–3. Load those values directly from the file.
+- Confirm to the user: "Found existing state for {event_name} ({dates}). Using cached
+  event data — skipping page scrape. Run with `--force-scrape` flag to re-fetch."
+
+**If state file does not exist:** proceed to Step 1.
+
 ## Output Schema
 
-Produce a fenced JSON block with this exact schema. This is consumed directly by
-`campaign-brief-generator`:
+Produce a fenced JSON block with this exact schema (consumed by `campaign-brief-generator`):
 
 ```json
 {
@@ -95,11 +113,36 @@ Never proceed with incomplete or assumed dates.
 | `agenda_url` | If not found, construct as `{event_url}schedule/` |
 | `cfp_url` | If not found on page, set to `null` |
 
-### Step 4: Output
+### Step 4: Write state file and output
 
-Return the completed JSON block. Summarise in one sentence what was found and flag
-any fields that defaulted to null or constructed values so the user can verify.
+**Write `{event_slug}-campaign-state.json`** with the scraped fields under a top-level
+`event` key. Create the file if it doesn't exist; merge if it does (preserve existing
+`campaigns`, `hs_utm`, etc.).
+
+Minimal state file after this step:
+
+```json
+{
+  "event_slug": "mcp-dev-summit-mumbai",
+  "event_name": "MCP Dev Summit Mumbai",
+  "dates": "Jun 14–15, 2026",
+  "start_date": "2026-06-14",
+  "end_date": "2026-06-15",
+  "year": "2026",
+  "city": "Mumbai",
+  "country": "India",
+  "region_code": "IN",
+  "registration_url": "https://...",
+  "hs_utm": null,
+  "utm_sheet_rows": null,
+  "brief_file": null,
+  "campaigns": {},
+  "last_updated": "YYYY-MM-DD"
+}
+```
+
+Then return the full event JSON and a one-line summary, flagging any null/constructed fields.
 
 **Example summary:**
-> "Scraped MCP Dev Summit Mumbai. Dates: Jun 14–15, 2026. CFP URL not found on page —
-> set to null. Registration URL constructed (not explicitly linked on home page)."
+> "Scraped MCP Dev Summit Mumbai. Dates: Jun 14–15, 2026. CFP URL not found — set to null.
+> State saved to mcp-dev-summit-mumbai-campaign-state.json."
