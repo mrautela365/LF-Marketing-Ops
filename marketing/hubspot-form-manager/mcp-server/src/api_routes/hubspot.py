@@ -278,13 +278,13 @@ async def create_form(req: CreateFormRequest) -> ApiResponse:
                 req.privacy_text
                 if getattr(req, "privacy_text", None)
                 else (
-                    "<p>By submitting this form, I consent to receive marketing emails from "
-                    "the Linux Foundation and its projects regarding their events, training, "
-                    "research, developments, and related announcements. I understand that I "
-                    "can unsubscribe at any time using the links in the footers of the emails "
-                    "I receive. "
-                    "<a href='https://www.linuxfoundation.org/legal/privacy-policy' "
-                    "target='_blank' rel='nofollow noopener noreferrer'>Privacy Policy</a></p>"
+                    f"<p>By submitting this form, I consent to receive marketing emails from "
+                    f"{req.brand} regarding their events, training, "
+                    f"research, developments, and related announcements. I understand that I "
+                    f"can unsubscribe at any time using the links in the footers of the emails "
+                    f"I receive. "
+                    f"<a href='https://www.linuxfoundation.org/legal/privacy-policy' "
+                    f"target='_blank' rel='nofollow noopener noreferrer'>Privacy Policy</a></p>"
                 )
             )
             form_payload["legalConsentOptions"] = {
