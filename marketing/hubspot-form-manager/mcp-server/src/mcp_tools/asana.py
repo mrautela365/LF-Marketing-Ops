@@ -38,9 +38,16 @@ def _classify_request_type(notes: str) -> list[str]:
 
 
 def _extract_hint(notes: str, pattern: str) -> str | None:
-    """Extract first regex match from notes, or None."""
+    """
+    Extract first regex match from notes, or None.
+    Handles alternation patterns (e.g. group1|group2) by returning
+    the first non-None capture group so .strip() never sees None.
+    """
     m = re.search(pattern, notes, re.IGNORECASE)
-    return m.group(1).strip() if m else None
+    if not m:
+        return None
+    matched = next((g for g in m.groups() if g is not None), None)
+    return matched.strip() if matched else None
 
 
 def register(mcp: FastMCP) -> None:
