@@ -16,6 +16,7 @@ from ..models.hubspot import (
     CreateEmailRequest,
     CreateFormRequest,
     DeleteFormsRequest,
+    UpdateFormDetailsRequest,
     UpdateNotificationsRequest,
 )
 
@@ -350,6 +351,45 @@ async def create_form(req: CreateFormRequest) -> ApiResponse:
 
     except Exception as e:
         logger.exception("Error creating HubSpot form")
+        return ApiResponse(success=False, error=str(e))
+
+
+@router.patch("/forms/{form_id}/update")
+async def update_form_details(form_id: str, req: UpdateFormDetailsRequest) -> ApiResponse:
+    """
+    Update editable form details: name, submit button text, thank-you message,
+    and/or notification email recipients.
+    Only fields that are explicitly provided (not None) are sent to HubSpot.
+    """
+    try:
+        patch: dict = {}
+
+        if req.name is not None:
+            patch["name"] = req.name
+
+        if req.submit_button_text is not None:
+            patch.setdefault("displayOptions", {})["submitButtonText"] = req.submit_button_text
+
+        if req.thank_you_message is not None:
+            patch.setdefault("configuration", {})["postSubmitAction"] = {
+                "type": "thank_you",
+                "value": req.thank_you_message,
+            }
+
+        if req.notification_emails is not None:
+            patch.setdefault("configuration", {})["notifyRecipients"] = [
+                str(e) for e in req.notification_emails
+            ]
+
+        if not patch:
+            return ApiResponse(success=False, error="No fields to update were provided.")
+
+        data = await hs_patch(f"/marketing/v3/forms/{form_id}", json=patch)
+        return ApiResponse(success=True, data={
+            "form_id": form_id,
+            "name": data.get("name"),
+        })
+    except Exception as e:
         return ApiResponse(success=False, error=str(e))
 
 

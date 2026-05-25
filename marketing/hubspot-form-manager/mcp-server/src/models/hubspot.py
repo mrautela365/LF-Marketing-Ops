@@ -43,6 +43,15 @@ class CreateFormRequest(BaseModel):
     workflow_name_query: str | None = None
 
 
+class UpdateFormDetailsRequest(BaseModel):
+    name: str | None = Field(default=None, description="New form name")
+    submit_button_text: str | None = Field(default=None, description="New submit button label")
+    thank_you_message: str | None = Field(default=None, description="New post-submit thank-you message")
+    notification_emails: list[str] | None = Field(
+        default=None, description="New notification list. Pass empty list to disable all."
+    )
+
+
 class DeleteFormsRequest(BaseModel):
     form_ids: list[str] = Field(..., description="List of HubSpot form GUIDs to delete")
     confirmed_names: list[str] = Field(..., description="Matching human-readable names for confirmation display")

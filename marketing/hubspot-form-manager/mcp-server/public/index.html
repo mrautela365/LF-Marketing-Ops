@@ -19,6 +19,7 @@
   <button class="tab-btn active" data-tab="create">➕ Create Form</button>
   <button class="tab-btn" data-tab="delete">🗑️ Delete Forms</button>
   <button class="tab-btn" data-tab="notifications">🔕 Disable Notifications</button>
+  <button class="tab-btn" data-tab="update">✏️ Update Form</button>
 </div>
 
 <!-- ═══════════════════════════════════════════════════════════
@@ -213,6 +214,58 @@
       <span id="notif-selected-count" style="font-size:13px; color:#718096"></span>
     </div>
     <div id="notif-result" class="result-area hidden"></div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════
+     TAB 4 — UPDATE FORM
+     ═══════════════════════════════════════════════════════════ -->
+<div id="tab-update" class="tab-content">
+
+  <!-- Form picker -->
+  <div class="card">
+    <h2>Find Form to Update</h2>
+    <div class="field-group" style="margin:0">
+      <label for="update-form-search">Search for a form <span class="required">*</span></label>
+      <div class="autocomplete-wrapper">
+        <input type="text" id="update-form-search" placeholder="Search existing HubSpot forms…" autocomplete="off">
+        <ul class="autocomplete-list" id="update-form-list" style="display:none"></ul>
+      </div>
+      <input type="hidden" id="update-form-id">
+      <small>Type to search, then select a form to load its current values.</small>
+    </div>
+  </div>
+
+  <!-- Editable fields (shown after a form is selected) -->
+  <div class="card" id="update-details-card" style="display:none">
+    <h2>Edit Form Details</h2>
+
+    <div class="field-group">
+      <label for="update-form-name">Form Name</label>
+      <input type="text" id="update-form-name" placeholder="e.g. 26Q2 - LF Events - CloudNativeCon Europe 2026">
+    </div>
+
+    <div class="field-group">
+      <label for="update-submit-text">Submit Button Text</label>
+      <input type="text" id="update-submit-text" placeholder="Submit">
+    </div>
+
+    <div class="field-group">
+      <label for="update-thank-you">Thank-You Message</label>
+      <textarea id="update-thank-you" rows="2" placeholder="Thank you for registering!"></textarea>
+    </div>
+
+    <div class="field-group">
+      <label for="update-notification-emails">Notification Emails <span class="optional">(leave blank for none)</span></label>
+      <input type="text" id="update-notification-emails" placeholder="email1@example.com, email2@example.com">
+      <small>Comma-separated. Clear and save to disable all notifications.</small>
+    </div>
+
+    <div class="form-actions">
+      <button type="button" class="btn-primary" id="btn-save-form">Save Changes</button>
+      <button type="button" class="btn-secondary" id="btn-update-reset">Clear</button>
+    </div>
+    <div id="update-result" class="result-area hidden"></div>
   </div>
 </div>
 

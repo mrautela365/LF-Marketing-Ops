@@ -38,19 +38,20 @@ def extract_task_gid(url_or_gid: str) -> str:
     Extract the numeric task GID from a full Asana URL or return it unchanged
     if it's already a bare GID.
 
-    Asana URL patterns:
-      https://app.asana.com/1/{workspace}/project/{project}/task/{task_id}
-      https://app.asana.com/0/search/{task_id}
-      https://app.asana.com/0/{project}/{task_id}
+    Asana URL patterns (task GID is always the LAST long numeric segment):
+      https://app.asana.com/1/{workspace}/{project}/{task_gid}/f   ← new format
+      https://app.asana.com/1/{workspace}/task/{task_gid}
+      https://app.asana.com/0/{project}/{task_gid}
+      https://app.asana.com/0/search/{task_gid}
     """
     url_or_gid = url_or_gid.strip()
-    # If it's already a pure numeric ID, return as-is
+    # Already a bare numeric GID
     if re.fullmatch(r"\d+", url_or_gid):
         return url_or_gid
-    # Extract the last numeric segment from the URL
-    match = re.search(r"/(\d{10,})(?:[/?#]|$)", url_or_gid)
-    if match:
-        return match.group(1)
+    # Find ALL long numeric segments — task GID is always the last one
+    matches = re.findall(r"/(\d{10,})(?=[/?#]|$)", url_or_gid)
+    if matches:
+        return matches[-1]
     raise ValueError(
         f"Cannot extract a task GID from: {url_or_gid!r}. "
         "Please provide either an Asana task URL or a bare numeric GID."

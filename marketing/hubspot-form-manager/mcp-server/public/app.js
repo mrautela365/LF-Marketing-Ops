@@ -646,6 +646,109 @@ function updateNotifCount() {
 $('btn-notif-search').addEventListener('click', runNotifSearch);
 $('notif-search').addEventListener('keydown', e => { if (e.key === 'Enter') runNotifSearch(); });
 
+// ── Update Form ────────────────────────────────────────────────────────────────
+
+setupAutocomplete({
+  inputId: 'update-form-search',
+  listId: 'update-form-list',
+  searchFn: async q => {
+    const res = await api('GET', `/api/hubspot/forms/search?q=${encodeURIComponent(q)}&limit=10`);
+    return res.success ? res.data : [];
+  },
+  onSelect: async (id, _name) => {
+    $('update-form-id').value = id;
+    const card   = $('update-details-card');
+    const result = $('update-result');
+
+    result.className = 'result-area info';
+    result.textContent = 'Loading form details…';
+    show(card);
+
+    const res = await api('GET', `/api/hubspot/forms/${id}`);
+    if (res.success) {
+      const form = res.data;
+      $('update-form-name').value = form.name || '';
+      $('update-submit-text').value = form.displayOptions?.submitButtonText || 'Submit';
+
+      // Thank-you message lives in configuration.postSubmitAction.value
+      const postSubmit = form.configuration?.postSubmitAction;
+      $('update-thank-you').value = (postSubmit?.type === 'thank_you' ? postSubmit.value : '') || '';
+
+      // Notification recipients
+      const notifs = form.configuration?.notifyRecipients || [];
+      $('update-notification-emails').value = notifs.join(', ');
+
+      result.className = 'result-area hidden';
+    } else {
+      result.className = 'result-area error';
+      result.textContent = '❌ Could not load form: ' + (res.error || 'Unknown error');
+    }
+  },
+});
+
+$('btn-save-form').addEventListener('click', async () => {
+  const formId = $('update-form-id').value;
+  if (!formId) {
+    alert('No form selected. Search and select a form first.');
+    return;
+  }
+
+  const name              = $('update-form-name').value.trim();
+  const submitText        = $('update-submit-text').value.trim();
+  const thankYou          = $('update-thank-you').value.trim();
+  const notificationEmails = $('update-notification-emails').value
+    .split(',').map(e => e.trim()).filter(Boolean);
+
+  const confirmText = [
+    `Form ID:          ${formId}`,
+    `Name:             ${name || '(unchanged)'}`,
+    `Submit button:    ${submitText || '(unchanged)'}`,
+    `Thank-you:        ${thankYou ? thankYou.slice(0, 60) + (thankYou.length > 60 ? '…' : '') : '(unchanged)'}`,
+    `Notifications:    ${notificationEmails.length ? notificationEmails.join(', ') : 'none (will disable)'}`,
+  ].join('\n');
+
+  const confirmed = await openModal('Confirm Form Update', confirmText);
+  if (!confirmed) return;
+
+  const btn    = $('btn-save-form');
+  const result = $('update-result');
+  btn.disabled    = true;
+  btn.textContent = 'Saving…';
+  result.className    = 'result-area info';
+  result.textContent  = 'Saving changes…';
+
+  try {
+    const payload = {};
+    if (name)       payload.name               = name;
+    if (submitText) payload.submit_button_text  = submitText;
+    if (thankYou)   payload.thank_you_message   = thankYou;
+    // Always send notification_emails (empty list = disable)
+    payload.notification_emails = notificationEmails;
+
+    const res = await api('PATCH', `/api/hubspot/forms/${formId}/update`, payload);
+    showResult(result, res, data =>
+      `✅ Form updated!\n\nForm name: ${data.name}\nForm ID:   ${data.form_id}`
+    );
+  } catch (err) {
+    result.className   = 'result-area error';
+    result.textContent = '❌ Network error: ' + err.message;
+  } finally {
+    btn.disabled    = false;
+    btn.textContent = 'Save Changes';
+  }
+});
+
+$('btn-update-reset').addEventListener('click', () => {
+  $('update-form-search').value       = '';
+  $('update-form-id').value           = '';
+  $('update-form-name').value         = '';
+  $('update-submit-text').value       = '';
+  $('update-thank-you').value         = '';
+  $('update-notification-emails').value = '';
+  hide($('update-details-card'));
+  $('update-result').className = 'result-area hidden';
+});
+
 $('btn-disable-notifs').addEventListener('click', async () => {
   const checked = Array.from(document.querySelectorAll('.notif-check:checked'));
   if (!checked.length) return;
