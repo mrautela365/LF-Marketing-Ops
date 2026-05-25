@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HubSpot Draft Email</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<!-- Header -->
+<div class="app-header">
+  <h1>✉️ HubSpot Draft Email</h1>
+  <a href="/setup" class="settings-link">⚙️ Settings</a>
+</div>
+
+<!-- Tab bar -->
+<div class="tab-bar">
+  <button class="tab-btn active" data-tab="compose">✏️ Compose Draft</button>
+  <button class="tab-btn" data-tab="qa">🔍 QA Review</button>
+  <button class="tab-btn" data-tab="drafts">📋 Drafts</button>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════
+     TAB 1 — COMPOSE DRAFT
+     ═══════════════════════════════════════════════════════════ -->
+<div id="tab-compose" class="tab-content active">
+
+  <!-- Sender Configuration -->
+  <div class="card">
+    <h2>Sender Configuration</h2>
+    <div class="guardrail-note">
+      ⚠️ All sender fields are mandatory. Freemail addresses (Gmail, Yahoo, etc.) are blocked.
+      Reply-to must be a monitored inbox — noreply@ addresses are not allowed.
+    </div>
+
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.75rem">
+      <div class="field-group">
+        <label for="from-name">From Name <span class="required">*</span></label>
+        <input type="text" id="from-name" placeholder="LF Events">
+      </div>
+      <div class="field-group">
+        <label for="from-email">From Email <span class="required">*</span></label>
+        <input type="email" id="from-email" placeholder="events@linuxfoundation.org">
+        <small>Must be a brand domain — no Gmail/Yahoo/Hotmail.</small>
+      </div>
+    </div>
+    <div class="field-group">
+      <label for="reply-to">Reply-To <span class="required">*</span></label>
+      <input type="email" id="reply-to" placeholder="events@linuxfoundation.org">
+      <small>Must be a monitored inbox. noreply@ addresses will be flagged.</small>
+    </div>
+  </div>
+
+  <!-- Email Identity -->
+  <div class="card">
+    <h2>Email Identity</h2>
+
+    <div class="field-group">
+      <label for="email-name">Email Name <span class="required">*</span></label>
+      <input type="text" id="email-name" placeholder="26Q2 - LF Events - OSS India 2026 - Attendees">
+      <small>Use the LF naming convention: <code>[YYQ#] - [Team] - [Event] - [Segment]</code></small>
+    </div>
+
+    <div class="field-group">
+      <label for="subject">Subject Line <span class="required">*</span></label>
+      <input type="text" id="subject" placeholder="Join us at OSS India 2026 — Early bird ends Friday">
+      <small>40–60 characters recommended. No ALL CAPS. No spam trigger words.</small>
+      <span class="char-counter" id="subject-counter">0 / 60</span>
+    </div>
+
+    <div class="field-group">
+      <label for="preheader">Preheader Text</label>
+      <input type="text" id="preheader" placeholder="Save your seat before early bird pricing ends on June 1.">
+      <small>≤100 characters. Must add new info — don't repeat the subject.</small>
+      <span class="char-counter" id="preheader-counter">0 / 100</span>
+    </div>
+  </div>
+
+  <!-- Subscription Type (guardrail) -->
+  <div class="card">
+    <h2>Subscription Type <span class="required">*</span></h2>
+    <div class="guardrail-note">
+      ⚠️ Required — cannot be assumed or skipped. Select the correct type that matches this email's
+      purpose. The user must confirm this before the draft is created.
+    </div>
+    <div class="field-group" style="margin-top:0.75rem">
+      <select id="subscription-type">
+        <option value="">— Loading subscription types… —</option>
+      </select>
+    </div>
+  </div>
+
+  <!-- Audience & Suppression Lists -->
+  <div class="card">
+    <h2>Audience &amp; Suppression Lists</h2>
+
+    <div class="field-group">
+      <label>Audience List(s)</label>
+      <div class="list-search-wrapper">
+        <div style="display:flex; gap:0.5rem">
+          <input type="text" id="audience-search" placeholder="Search lists by name…" style="flex:1">
+          <button type="button" class="btn-secondary" id="btn-audience-search">Search</button>
+        </div>
+        <div class="list-results" id="audience-results"></div>
+        <div class="selected-lists" id="audience-selected">
+          <p class="empty-hint">No audience lists selected.</p>
+        </div>
+      </div>
+      <small>Lists with 0 contacts or missing GDPR consent will be flagged by QA.</small>
+    </div>
+
+    <div class="field-group" style="margin-top:1rem">
+      <label>Suppression List(s)</label>
+      <div class="list-search-wrapper">
+        <div style="display:flex; gap:0.5rem">
+          <input type="text" id="suppression-search" placeholder="Search suppression lists…" style="flex:1">
+          <button type="button" class="btn-secondary" id="btn-suppression-search">Search</button>
+        </div>
+        <div class="list-results" id="suppression-results"></div>
+        <div class="selected-lists" id="suppression-selected">
+          <p class="empty-hint">No suppression lists selected. Confirm opt-outs, bounces, and GDPR lists are applied.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- UTM Parameters -->
+  <div class="card">
+    <h2>UTM Parameters</h2>
+    <p style="font-size:13px; color:#718096; margin-bottom:0.75rem">
+      All outbound links will be scanned and corrected after draft creation. Fill in the campaign slug now.
+    </p>
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.75rem">
+      <div class="field-group">
+        <label>utm_source</label>
+        <input type="text" id="utm-source" value="hubspot" readonly>
+      </div>
+      <div class="field-group">
+        <label>utm_medium</label>
+        <input type="text" id="utm-medium" value="email" readonly>
+      </div>
+    </div>
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.75rem">
+      <div class="field-group">
+        <label for="utm-campaign">utm_campaign <span class="required">*</span></label>
+        <input type="text" id="utm-campaign" placeholder="26q2-oss-india-2026">
+        <small>Pattern: <code>{quarter}-{topic}-{year}</code> — lowercase, hyphens</small>
+      </div>
+      <div class="field-group">
+        <label for="utm-content">utm_content (primary CTA)</label>
+        <input type="text" id="utm-content" placeholder="register-cta">
+      </div>
+    </div>
+  </div>
+
+  <!-- Email Body -->
+  <div class="card">
+    <h2>Email Body (HTML)</h2>
+    <div class="field-group">
+      <textarea id="body-html" rows="14"
+        placeholder="<p>Hi {{ contact.firstname | default: 'there' }},</p>&#10;<p>Join us at OSS India 2026 in Hyderabad...</p>&#10;&#10;<!-- Primary CTA -->&#10;<a href='https://events.linuxfoundation.org/oss-india/' class='btn'>Register Now</a>&#10;&#10;<!-- Footer -->&#10;<p><a href='{{ unsubscribe_link }}'>Unsubscribe</a> | Linux Foundation, 1 Letterman Dr, San Francisco CA 94129</p>"></textarea>
+      <small>
+        Required tokens: <code>{{ unsubscribe_link }}</code> in footer.
+        Personalization: <code>{{ contact.firstname | default: 'there' }}</code> (always include fallback).
+      </small>
+    </div>
+  </div>
+
+  <!-- Actions -->
+  <div class="form-actions">
+    <button type="button" class="btn-secondary" id="btn-run-qa">🔍 Run QA First</button>
+    <button type="button" class="btn-primary" id="btn-create-draft">✏️ Create Draft</button>
+    <button type="button" class="btn-ghost" id="btn-reset-compose">Reset</button>
+  </div>
+  <div id="compose-result" class="result-area hidden"></div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════
+     TAB 2 — QA REVIEW
+     ═══════════════════════════════════════════════════════════ -->
+<div id="tab-qa" class="tab-content">
+  <div class="card">
+    <h2>Pre-Send QA Check</h2>
+    <p style="font-size:13px; color:#718096; margin-bottom:1rem">
+      Paste a draft spec below and run the full 5-section QA suite. Alternatively, use the
+      <strong>Run QA First</strong> button on the Compose tab to QA as you build.
+    </p>
+
+    <div class="field-group">
+      <label for="qa-draft-id">Check an Existing Draft</label>
+      <div style="display:flex; gap:0.5rem">
+        <input type="text" id="qa-draft-id" placeholder="HubSpot draft ID or search by name" style="flex:1">
+        <button type="button" class="btn-secondary" id="btn-fetch-draft-qa">Fetch &amp; QA</button>
+      </div>
+    </div>
+
+    <div class="form-actions" style="margin-top:0.5rem">
+      <button type="button" class="btn-primary" id="btn-qa-from-compose">← QA Current Compose Form</button>
+    </div>
+  </div>
+
+  <div id="qa-result-container" class="hidden">
+    <div id="qa-verdict-banner" class="verdict-banner"></div>
+    <div id="qa-checks-table"></div>
+    <div id="qa-action-plan" class="card" style="margin-top:1rem"></div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════
+     TAB 3 — DRAFTS
+     ═══════════════════════════════════════════════════════════ -->
+<div id="tab-drafts" class="tab-content">
+  <div class="card">
+    <h2>Email Drafts</h2>
+    <div class="search-bar">
+      <input type="text" id="drafts-search" placeholder="Search drafts by name…">
+      <button type="button" class="btn-secondary" id="btn-drafts-search">Search</button>
+      <button type="button" class="btn-ghost" id="btn-drafts-refresh">↻ Refresh</button>
+    </div>
+    <div id="drafts-list" class="drafts-list">
+      <p class="empty-hint">Click Refresh to load drafts.</p>
+    </div>
+  </div>
+
+  <!-- Delete confirmation -->
+  <div class="card" id="delete-confirm-card" style="display:none">
+    <h2>Confirm Deletion</h2>
+    <div class="danger-confirm">
+      <input type="checkbox" id="delete-confirm-checkbox">
+      <label for="delete-confirm-checkbox">
+        I understand that deleting this draft is <strong>permanent and cannot be undone</strong>.
+      </label>
+    </div>
+    <div class="form-actions">
+      <button type="button" class="btn-danger" id="btn-delete-draft" disabled>🗑️ Delete Draft</button>
+      <button type="button" class="btn-ghost" id="btn-cancel-delete">Cancel</button>
+    </div>
+    <div id="delete-result" class="result-area hidden"></div>
+  </div>
+</div>
+
+<!-- Modal (for schedule / apply UTM) -->
+<div class="modal-backdrop" id="confirm-modal" style="display:none">
+  <div class="modal">
+    <h3 id="modal-title">Confirm Action</h3>
+    <pre id="modal-body"></pre>
+    <div class="modal-actions">
+      <button type="button" class="btn-secondary" id="modal-cancel">Cancel</button>
+      <button type="button" class="btn-primary" id="modal-confirm">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
