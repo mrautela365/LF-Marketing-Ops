@@ -112,10 +112,13 @@ def build_field_groups(fields: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if not hs_fields:
         return []
 
+    # HubSpot limits each group to 3 fields max.
+    # Put each field in its own group (matches HubSpot UI default — one field per row).
     return [
         {
             "groupType": "default_group",
             "richTextType": "text",
-            "fields": hs_fields,
+            "fields": [field],
         }
+        for field in hs_fields
     ]

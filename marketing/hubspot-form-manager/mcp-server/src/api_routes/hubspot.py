@@ -136,6 +136,66 @@ async def get_brands() -> ApiResponse:
     return ApiResponse(success=True, data={"brands": [], "source": "none"})
 
 
+@router.get("/properties")
+async def get_contact_properties() -> ApiResponse:
+    """
+    Return all active HubSpot contact properties for the field picker.
+    Maps HubSpot field types to the simplified types used by the form builder.
+    """
+    # Map HubSpot property types → form builder field types
+    _type_map = {
+        "string":          "text",
+        "enumeration":     "select",
+        "bool":            "checkbox",
+        "number":          "number",
+        "date":            "date",
+        "datetime":        "date",
+        "phone_number":    "phone",
+    }
+    # Map specific field-type overrides by fieldType key
+    _fieldtype_map = {
+        "email":              "email",
+        "phone_number":       "phone",
+        "textarea":           "textarea",
+        "text":               "text",
+        "select":             "select",
+        "radio":              "select",
+        "checkbox":           "checkbox",
+        "booleancheckbox":    "checkbox",
+        "number":             "number",
+        "date":               "date",
+    }
+    try:
+        data = await hs_get("/crm/v3/properties/contacts", params={"limit": 500})
+        props = data.get("results", []) if isinstance(data, dict) else []
+        results = []
+        for p in props:
+            if p.get("hidden") or p.get("calculated") or p.get("externalOptions"):
+                continue
+            hs_field_type = p.get("fieldType", "")
+            hs_type       = p.get("type", "string")
+            form_type = (
+                _fieldtype_map.get(hs_field_type)
+                or _type_map.get(hs_type)
+                or "text"
+            )
+            results.append({
+                "name":       p.get("name"),
+                "label":      p.get("label"),
+                "type":       form_type,
+                "fieldType":  hs_field_type,
+                "groupName":  p.get("groupName", ""),
+            })
+        # Sort: standard contact props first, then alphabetically by label
+        results.sort(key=lambda x: (
+            0 if x["groupName"] == "contactinformation" else 1,
+            x["label"].lower()
+        ))
+        return ApiResponse(success=True, data=results)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
 @router.get("/workflows/search")
 async def search_workflows(q: str = Query("", alias="q")) -> ApiResponse:
     try:
@@ -182,9 +242,17 @@ async def create_form(req: CreateFormRequest) -> ApiResponse:
         # Step 1: Create the form
         field_groups = build_field_groups([f.model_dump() for f in req.fields])
 
+        from datetime import datetime, timezone
+        _now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+        # Per the HubSpot legacy forms API schema, createdAt, updatedAt, and archived
+        # are required top-level fields on every form create request.
         form_payload: dict = {
             "name": req.name,
             "formType": "hubspot",
+            "archived": False,
+            "createdAt": _now,
+            "updatedAt": _now,
             "fieldGroups": field_groups,
             "configuration": {
                 "language": "en",
@@ -195,13 +263,15 @@ async def create_form(req: CreateFormRequest) -> ApiResponse:
                 "notifyContactOwner": False,
                 "createNewContactForNewEmail": False,
                 "prePopulateKnownValues": True,
+                **({"notifyRecipients": [str(e) for e in req.notification_emails]}
+                   if req.notification_emails else {}),
             },
             "displayOptions": {
                 "submitButtonText": req.submit_button_text,
             },
         }
 
-        # Subscription type → legalConsentOptions (privacyText + createdAt required by HubSpot)
+        # Subscription type → legalConsentOptions
         if req.subscription_type_id:
             privacy_text = (
                 req.privacy_text
@@ -216,20 +286,12 @@ async def create_form(req: CreateFormRequest) -> ApiResponse:
                     "target='_blank' rel='nofollow noopener noreferrer'>Privacy Policy</a></p>"
                 )
             )
-            from datetime import datetime, timezone
             form_payload["legalConsentOptions"] = {
+                "type": "legitimate_interest",
                 "subscriptionTypeIds": [int(req.subscription_type_id)],
                 "lawfulBasis": "lead",
                 "privacyText": privacy_text,
-                "type": "legitimate_interest",
-                "createdAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z"),
             }
-
-        # Notification emails — pass as top-level notificationEmails
-        # (HubSpot also supports notifyRecipients with user IDs, but emails work via this field)
-        if req.notification_emails:
-            form_payload["configuration"]["notifyRecipients"] = []  # cleared; use separate field
-            form_payload["notificationEmails"] = [str(e) for e in req.notification_emails]
 
         form_data = await hs_post("/marketing/v3/forms/", json=form_payload)
         form_id = form_data.get("id")

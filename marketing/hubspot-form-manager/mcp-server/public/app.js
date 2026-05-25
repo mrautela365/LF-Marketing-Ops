@@ -98,45 +98,125 @@ function setupAutocomplete({ inputId, listId, searchFn, onSelect }) {
   });
 }
 
-// ── Field builder ─────────────────────────────────────────────────────────────
+// ── Field builder (HubSpot property picker) ───────────────────────────────────
 
-const FIELD_TYPES = ['text','email','phone','textarea','select','checkbox','number','country','date'];
-let fieldCounter = 0;
+let hsProperties = [];   // [{name, label, type, fieldType, groupName}]
+let fieldCounter  = 0;
+
+async function loadHubSpotProperties() {
+  const loadingEl = $('fields-loading');
+  try {
+    const res = await api('GET', '/api/hubspot/properties');
+    if (res.success && res.data.length) {
+      hsProperties = res.data;
+      if (loadingEl) loadingEl.style.display = 'none';
+    } else {
+      if (loadingEl) loadingEl.textContent = '⚠️ Could not load properties — field names will be free-text.';
+    }
+  } catch {
+    if (loadingEl) loadingEl.textContent = '⚠️ Could not load properties — field names will be free-text.';
+  }
+  // Render default fields after properties are loaded
+  const DEFAULTS = [
+    { name: 'firstname',  label: 'First Name',    type: 'text',  required: true  },
+    { name: 'lastname',   label: 'Last Name',      type: 'text',  required: true  },
+    { name: 'email',      label: 'Email Address',  type: 'email', required: true  },
+    { name: 'company',    label: 'Company',        type: 'text',  required: false },
+  ];
+  DEFAULTS.forEach(d => addField(d));
+}
 
 function addField(data = {}) {
   fieldCounter++;
-  const id = `field-${fieldCounter}`;
+  const uid = `field-${fieldCounter}`;
   const row = document.createElement('div');
   row.className = 'field-row';
-  row.dataset.id = id;
+  row.dataset.id = uid;
+
+  // Build dropdown options from loaded properties, or fall back to a text input
+  const useDropdown = hsProperties.length > 0;
+
   row.innerHTML = `
-    <input type="text" placeholder="Field name" value="${data.name || ''}" class="f-name">
-    <select class="f-type">
-      ${FIELD_TYPES.map(t => `<option value="${t}" ${t === (data.type || 'text') ? 'selected' : ''}>${t}</option>`).join('')}
-    </select>
-    <label class="required-toggle">
+    <div class="f-prop-wrapper" style="flex:2; position:relative;">
+      ${useDropdown
+        ? `<input type="text" class="f-label-search" placeholder="Search property…"
+              value="${data.label || data.name || ''}" autocomplete="off"
+              style="width:100%">
+           <input type="hidden" class="f-name" value="${data.name || ''}">
+           <ul class="autocomplete-list f-prop-list" style="display:none"></ul>`
+        : `<input type="text" class="f-label-search f-name" placeholder="Field name"
+              value="${data.name || ''}" style="width:100%">`
+      }
+    </div>
+    <input type="text" class="f-type-display" value="${data.type || 'text'}"
+           readonly style="flex:0.8; background:#f7fafc; color:#718096; font-size:12px; cursor:default"
+           title="Field type (auto-set from HubSpot property)">
+    <label class="required-toggle" style="flex:0 0 auto">
       <input type="checkbox" class="f-required" ${data.required ? 'checked' : ''}> Required
     </label>
     <button type="button" class="btn-remove" title="Remove field">✕</button>
   `;
+
   row.querySelector('.btn-remove').addEventListener('click', () => row.remove());
+
+  if (useDropdown) {
+    const searchInput = row.querySelector('.f-label-search');
+    const hiddenName  = row.querySelector('.f-name');
+    const typeDisplay = row.querySelector('.f-type-display');
+    const list        = row.querySelector('.f-prop-list');
+    let debounce      = null;
+
+    searchInput.addEventListener('input', () => {
+      clearTimeout(debounce);
+      const q = searchInput.value.trim().toLowerCase();
+      if (q.length < 1) { hide(list); list.innerHTML = ''; return; }
+      debounce = setTimeout(() => {
+        const matches = hsProperties
+          .filter(p => p.label.toLowerCase().includes(q) || p.name.toLowerCase().includes(q))
+          .slice(0, 12);
+        if (!matches.length) { hide(list); return; }
+        list.innerHTML = matches.map(p =>
+          `<li data-name="${p.name}" data-label="${encodeURIComponent(p.label)}" data-type="${p.type}">
+             <span style="font-weight:500">${p.label}</span>
+             <small style="color:#718096; margin-left:6px">${p.name}</small>
+           </li>`
+        ).join('');
+        show(list);
+      }, 200);
+    });
+
+    list.addEventListener('click', e => {
+      const li = e.target.closest('li');
+      if (!li) return;
+      searchInput.value   = decodeURIComponent(li.dataset.label);
+      hiddenName.value    = li.dataset.name;
+      typeDisplay.value   = li.dataset.type;
+      hide(list); list.innerHTML = '';
+    });
+
+    document.addEventListener('click', e => {
+      if (!row.contains(e.target)) { hide(list); list.innerHTML = ''; }
+    });
+  }
+
   $('fields-list').appendChild(row);
 }
 
 $('btn-add-field').addEventListener('click', () => addField());
 
 function getFields() {
-  return Array.from($('fields-list').querySelectorAll('.field-row')).map(row => ({
-    name: row.querySelector('.f-name').value.trim(),
-    type: row.querySelector('.f-type').value,
-    required: row.querySelector('.f-required').checked,
-  })).filter(f => f.name);
+  return Array.from($('fields-list').querySelectorAll('.field-row')).map(row => {
+    const nameEl  = row.querySelector('.f-name');
+    const typeEl  = row.querySelector('.f-type-display');
+    const name    = nameEl ? nameEl.value.trim() : '';
+    const type    = typeEl ? typeEl.value.trim() : 'text';
+    const required = row.querySelector('.f-required').checked;
+    return { name, type, required };
+  }).filter(f => f.name);
 }
 
-// Add default fields on load
-['First Name', 'Last Name', 'Email Address', 'Company'].forEach(name => {
-  addField({ name, type: name.toLowerCase().includes('email') ? 'email' : 'text', required: name !== 'Company' });
-});
+// Load properties then render default fields
+loadHubSpotProperties();
 
 // ── Brand / Business Unit dropdown ────────────────────────────────────────────
 
@@ -423,9 +503,12 @@ $('btn-reset-create').addEventListener('click', () => {
   hide($('prefill-banner'));
   $('fields-list').innerHTML = '';
   fieldCounter = 0;
-  ['First Name','Last Name','Email Address','Company'].forEach(name => {
-    addField({ name, type: name.toLowerCase().includes('email') ? 'email' : 'text', required: name !== 'Company' });
-  });
+  [
+    { name: 'firstname', label: 'First Name',   type: 'text',  required: true  },
+    { name: 'lastname',  label: 'Last Name',     type: 'text',  required: true  },
+    { name: 'email',     label: 'Email Address', type: 'email', required: true  },
+    { name: 'company',   label: 'Company',       type: 'text',  required: false },
+  ].forEach(d => addField(d));
   $('create-result').className = 'result-area hidden';
 });
 
