@@ -224,12 +224,17 @@ async function loadBrands() {
   const sel = $('brand-select');
   const customInput = $('brand-custom');
   const hidden = $('brand');
+  const hiddenBuId = $('brand-bu-id');
 
   function syncHidden() {
     if (sel.value === '__other__') {
       hidden.value = customInput.value.trim();
+      if (hiddenBuId) hiddenBuId.value = '';
     } else {
+      // sel.value = brand name; data-bu-id = business unit id (may be empty)
+      const opt = sel.options[sel.selectedIndex];
       hidden.value = sel.value;
+      if (hiddenBuId) hiddenBuId.value = opt ? (opt.dataset.buId || '') : '';
     }
   }
 
@@ -240,7 +245,9 @@ async function loadBrands() {
     if (brands.length) {
       sel.innerHTML =
         '<option value="">— Select brand / business unit —</option>' +
-        brands.map(b => `<option value="${b}">${b}</option>`).join('') +
+        brands.map(b =>
+          `<option value="${b.name}" data-bu-id="${b.id || ''}">${b.name}</option>`
+        ).join('') +
         '<option value="__other__">✏️ Other (type manually)…</option>';
     } else {
       // No brands from API — fall straight to free-text
@@ -428,6 +435,18 @@ $('btn-create-form').addEventListener('click', async () => {
     return;
   }
 
+  // Validate notification emails — must all be valid email addresses
+  const rawEmails = $('notification-emails').value.trim();
+  if (rawEmails) {
+    const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    const badEmails = rawEmails.split(',').map(e => e.trim()).filter(e => e && !emailRe.test(e));
+    if (badEmails.length) {
+      result.className = 'result-area error';
+      result.textContent = `❌ Notification Emails contains invalid addresses: ${badEmails.join(', ')}`;
+      return;
+    }
+  }
+
   // Show confirmation modal
   const confirmText = [
     `Form name:     ${formName}`,
@@ -449,9 +468,11 @@ $('btn-create-form').addEventListener('click', async () => {
   result.textContent = 'Creating form…';
 
   try {
+    const buId = $('brand-bu-id') ? $('brand-bu-id').value.trim() : '';
     const payload = {
       name: formName,
       brand,
+      ...(buId ? { business_unit_id: buId } : {}),
       fields,
       submit_button_text: $('submit-text').value.trim() || 'Submit',
       thank_you_message: $('thank-you').value.trim() || 'Thank you for your submission.',

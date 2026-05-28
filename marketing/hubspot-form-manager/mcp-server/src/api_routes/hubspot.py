@@ -88,24 +88,33 @@ async def get_brands() -> ApiResponse:
       3. Unique team tokens parsed from existing form names  ([YYQ#] - <TEAM> - …)
     """
     # ── Attempt 1: Business Units (HubSpot Enterprise) ───────────────────────
+    # Returns id + name so the form can be assigned to the correct business unit.
     try:
         data = await hs_get("/business-units/v3/business-units/")
         units = data.get("results", []) if isinstance(data, dict) else []
         if units:
-            names = sorted({u.get("name", "").strip() for u in units if u.get("name", "").strip()})
-            if names:
-                return ApiResponse(success=True, data={"brands": names, "source": "business_units"})
+            brands = sorted(
+                [{"id": str(u["id"]), "name": u["name"].strip()}
+                 for u in units if u.get("name", "").strip()],
+                key=lambda x: x["name"],
+            )
+            if brands:
+                return ApiResponse(success=True, data={"brands": brands, "source": "business_units"})
     except Exception:
         pass  # not on enterprise plan — try next
 
-    # ── Attempt 2: Teams ──────────────────────────────────────────────────────
+    # ── Attempt 2: Teams ─────────────────────────────────────────────────────
     try:
         data = await hs_get("/settings/v3/users/teams")
         teams = data.get("results", []) if isinstance(data, dict) else []
         if teams:
-            names = sorted({t.get("name", "").strip() for t in teams if t.get("name", "").strip()})
-            if names:
-                return ApiResponse(success=True, data={"brands": names, "source": "teams"})
+            brands = sorted(
+                [{"id": str(t["id"]), "name": t["name"].strip()}
+                 for t in teams if t.get("name", "").strip() and t.get("id")],
+                key=lambda x: x["name"],
+            )
+            if brands:
+                return ApiResponse(success=True, data={"brands": brands, "source": "teams"})
     except Exception:
         pass
 
@@ -114,21 +123,19 @@ async def get_brands() -> ApiResponse:
     try:
         data = await hs_get("/marketing/v3/forms/", params={"limit": 100})
         forms = data.get("results", []) if isinstance(data, dict) else []
-        # Capture the token between the first and second " - " separators
         pattern = re.compile(r"^\d{2}Q\d\s*-\s*(.+?)\s*-\s*.+$")
         teams_found: set[str] = set()
         for f in forms:
             m = pattern.match(f.get("name", ""))
             if m:
                 token = m.group(1).strip()
-                # Sanity-check: brand tokens should be short and look like real names
-                # (drop anything over 50 chars or containing non-printable characters)
                 if token and len(token) <= 50 and token.isprintable():
                     teams_found.add(token)
         if teams_found:
+            brands = [{"id": None, "name": n} for n in sorted(teams_found)]
             return ApiResponse(
                 success=True,
-                data={"brands": sorted(teams_found), "source": "form_names"},
+                data={"brands": brands, "source": "form_names"},
             )
     except Exception:
         pass
@@ -171,7 +178,10 @@ async def get_contact_properties() -> ApiResponse:
         props = data.get("results", []) if isinstance(data, dict) else []
         results = []
         for p in props:
+            # Skip properties that cannot appear in HubSpot forms
             if p.get("hidden") or p.get("calculated") or p.get("externalOptions"):
+                continue
+            if not p.get("formField", True):   # formField: false → not usable in forms
                 continue
             hs_field_type = p.get("fieldType", "")
             hs_type       = p.get("type", "string")
@@ -254,6 +264,9 @@ async def create_form(req: CreateFormRequest) -> ApiResponse:
             "archived": False,
             "createdAt": _now,
             "updatedAt": _now,
+            # businessUnitId only works when HubSpot Business Units are configured
+            # (Marketing Hub Enterprise). With null IDs this is a no-op.
+            **({"businessUnitId": int(req.business_unit_id)} if req.business_unit_id else {}),
             "fieldGroups": field_groups,
             "configuration": {
                 "language": "en",
@@ -293,6 +306,9 @@ async def create_form(req: CreateFormRequest) -> ApiResponse:
                 "lawfulBasis": "lead",
                 "privacyText": privacy_text,
             }
+
+        import json as _json
+        logger.info("Form payload being sent to HubSpot:\n%s", _json.dumps(form_payload, indent=2))
 
         form_data = await hs_post("/marketing/v3/forms/", json=form_payload)
         form_id = form_data.get("id")

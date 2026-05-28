@@ -29,6 +29,11 @@ class CreateFormRequest(BaseModel):
     subscription_type_id: str = Field(
         ..., description="HubSpot subscription type ID. Use list_hubspot_subscription_types to get valid IDs."
     )
+    # HubSpot Business Unit ID — assigned when brands come from the Business Units API
+    business_unit_id: str | None = Field(
+        default=None,
+        description="HubSpot Business Unit ID to assign this form to. None = default unit."
+    )
     # Legal consent / privacy text (optional — defaults to standard LF privacy text)
     privacy_text: str | None = Field(
         default=None,

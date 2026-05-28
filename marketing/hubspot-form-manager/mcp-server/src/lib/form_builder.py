@@ -7,17 +7,20 @@ from __future__ import annotations
 
 from typing import Any
 
-# Map of simple field type names → HubSpot fieldType + objectTypeId
+# Map of simple field type names → HubSpot Forms v3 API fieldType + objectTypeId
+# Valid HubSpot Forms v3 fieldType values (from API error response):
+#   single_line_text, multi_line_text, dropdown, single_checkbox, multiple_checkboxes,
+#   email, phone, mobile_phone, number, datepicker, radio, file
 _FIELD_TYPE_MAP: dict[str, dict[str, str]] = {
-    "text": {"fieldType": "single_line_text", "objectTypeId": "0-1"},
-    "email": {"fieldType": "email", "objectTypeId": "0-1"},
-    "phone": {"fieldType": "phone_number", "objectTypeId": "0-1"},
-    "textarea": {"fieldType": "multi_line_text", "objectTypeId": "0-1"},
-    "select": {"fieldType": "dropdown", "objectTypeId": "0-1"},
-    "checkbox": {"fieldType": "single_checkbox", "objectTypeId": "0-1"},
-    "number": {"fieldType": "number", "objectTypeId": "0-1"},
-    "country": {"fieldType": "dropdown", "objectTypeId": "0-1"},
-    "date": {"fieldType": "date", "objectTypeId": "0-1"},
+    "text":     {"fieldType": "single_line_text", "objectTypeId": "0-1"},
+    "email":    {"fieldType": "email",            "objectTypeId": "0-1"},
+    "phone":    {"fieldType": "phone",            "objectTypeId": "0-1"},
+    "textarea": {"fieldType": "multi_line_text",  "objectTypeId": "0-1"},
+    "select":   {"fieldType": "dropdown",         "objectTypeId": "0-1"},
+    "checkbox": {"fieldType": "single_checkbox",  "objectTypeId": "0-1"},
+    "number":   {"fieldType": "number",           "objectTypeId": "0-1"},
+    "country":  {"fieldType": "dropdown",         "objectTypeId": "0-1"},
+    "date":     {"fieldType": "datepicker",       "objectTypeId": "0-1"},
 }
 
 # Well-known HubSpot internal field names that map to built-in contact properties
