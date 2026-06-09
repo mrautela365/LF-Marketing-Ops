@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Email Staging — Linux Foundation</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+
+<header>
+  <span class="logo">LF Email Staging</span>
+  <span class="subtitle">Powered by Claude AI</span>
+</header>
+
+<div id="mode-banner" class="hidden"></div>
+<div class="container">
+
+  <!-- Steps indicator -->
+  <div class="steps">
+    <div class="step active" id="s1">
+      <div class="step-circle">1</div>
+      <span class="step-label">Configure</span>
+    </div>
+    <div class="step" id="s2">
+      <div class="step-circle">2</div>
+      <span class="step-label">Review Plan</span>
+    </div>
+    <div class="step" id="s3">
+      <div class="step-circle">3</div>
+      <span class="step-label">Add Content</span>
+    </div>
+    <div class="step" id="s4">
+      <div class="step-circle">✓</div>
+      <span class="step-label">Done</span>
+    </div>
+  </div>
+
+  <!-- ── Step 1: Configure ── -->
+  <div id="step-1" class="step-panel">
+    <div class="card">
+      <div class="card-title">Start Email Request</div>
+      <div class="card-desc">
+        Paste the event or campaign URL. Claude will research the page, identify the brand,
+        look up HubSpot history, and generate a complete staging plan for you to review.
+      </div>
+
+      <div class="field">
+        <label>Event / Campaign URL <span style="color:red">*</span></label>
+        <input id="event_url" type="url"
+          placeholder="https://events.linuxfoundation.org/kubecon-europe/" />
+        <div class="hint">Any LF event, registration, or campaign page URL.</div>
+      </div>
+
+      <div class="field-row">
+        <div class="field">
+          <label>Email Type <span style="color:var(--gray-400)">(optional)</span></label>
+          <select id="email_type">
+            <option value="">— Auto-detect —</option>
+            <option value="Newsletter">Newsletter</option>
+            <option value="Invite">Invite</option>
+            <option value="Reminder">Reminder</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Additional context <span style="color:var(--gray-400)">(optional)</span></label>
+          <input id="extra_context" type="text"
+            placeholder="e.g. EMEA audience, transactional" />
+        </div>
+      </div>
+
+      <div id="step1-status" class="hidden"></div>
+
+      <div class="btn-row">
+        <button class="btn btn-primary" id="plan-btn" onclick="generatePlan()">
+          Generate Plan →
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Step 2: Review Plan ── -->
+  <div id="step-2" class="step-panel hidden">
+    <div class="card">
+      <div class="card-title">Review Claude's Plan</div>
+      <div class="card-desc">
+        Claude has researched the event and prepared the staging plan below.
+        Provide any missing fields and approve to proceed.
+      </div>
+
+      <div id="plan-message" class="hidden"></div>
+
+      <!-- Reference email chip — shown when a source email is found -->
+      <div id="source-email-chip" class="hidden" style="
+        display:flex; align-items:center; gap:6px;
+        margin-top:8px; padding:7px 11px;
+        background:var(--yellow-light); border:1px solid #fcd34d; border-radius:6px;
+        font-size:12px; color:var(--gray-700);
+      ">
+        <span style="font-size:14px">📋</span>
+        <span><strong>Cloning from:</strong> <span id="source-email-name" style="font-family:monospace"></span></span>
+      </div>
+
+      <!-- Ask Claude anything -->
+      <div style="margin-top:8px">
+        <div style="font-size:12px;color:var(--gray-600);margin-bottom:6px">
+          Ask Claude to adjust anything before approving:
+        </div>
+        <div class="chat-row">
+          <input id="plan-chat-input" type="text" placeholder="e.g. Use a different suppression list…"
+            onkeydown="onChatKey(event,'plan-message','plan-chat-input')" />
+          <button class="btn btn-outline" onclick="sendChat('plan-message','plan-chat-input')">Ask</button>
+        </div>
+        <div id="plan-message-status" class="hidden" style="margin-top:8px"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title" style="font-size:15px">Provide Missing Details</div>
+      <div class="card-desc">Fill in any fields marked ⚠️ REQUIRED in the plan above.</div>
+
+      <div class="field-row">
+        <div class="field">
+          <label>Subject Line</label>
+          <input id="subject" type="text" placeholder="Enter subject line" />
+        </div>
+        <div class="field">
+          <label>Preview Text</label>
+          <input id="preview_text" type="text" placeholder="Short inbox preview" />
+        </div>
+      </div>
+
+      <div class="field">
+        <label>Send List <span style="color:var(--gray-400)">(optional — search to override)</span></label>
+        <div class="list-picker">
+          <input id="list-search-input" type="text" placeholder="Type to search HubSpot lists…"
+            oninput="onListSearch(this.value)" autocomplete="off" />
+          <div id="list-dropdown" class="list-dropdown hidden"></div>
+        </div>
+        <div id="list-selected" class="hidden"></div>
+        <input type="hidden" id="send_list_id" />
+        <div class="hint">Leave blank to use the list from brand history.</div>
+      </div>
+
+      <div id="step2-status" class="hidden"></div>
+
+      <div class="btn-row">
+        <button class="btn btn-success" id="approve-btn" onclick="approvePlan()">
+          ✓ Approve &amp; Clone Email
+        </button>
+        <button class="btn btn-outline" onclick="editPlan()">← Edit Inputs</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Step 3: Add Content ── -->
+  <div id="step-3" class="step-panel hidden">
+    <div class="card">
+      <div class="card-title">Email Cloned</div>
+
+      <div id="clone-message" class="hidden"></div>
+      <div id="clone-draft-link" class="hidden"></div>
+
+      <!-- Chat about the clone -->
+      <div style="margin-top:8px">
+        <div class="chat-row">
+          <input id="clone-chat-input" type="text" placeholder="Ask Claude about the clone or settings…"
+            onkeydown="onChatKey(event,'clone-message','clone-chat-input')" />
+          <button class="btn btn-outline" onclick="sendChat('clone-message','clone-chat-input')">Ask</button>
+        </div>
+        <div id="clone-message-status" class="hidden" style="margin-top:8px"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title" style="font-size:15px">Provide Email Content</div>
+      <div class="card-desc">
+        Paste a Google Doc URL, raw HTML, or plain text. Claude will convert it to
+        email-ready HTML and update the body.
+      </div>
+
+      <div class="field">
+        <label>Content</label>
+        <textarea id="content" placeholder="https://docs.google.com/document/d/...&#10;&#10;— or paste HTML/text directly —"></textarea>
+        <div class="hint">Google Doc URL · Raw HTML · Plain text — all accepted.</div>
+      </div>
+
+      <div id="step3-status" class="hidden"></div>
+
+      <div class="btn-row">
+        <button class="btn btn-primary" id="content-btn" onclick="submitContent()">
+          Update Email Body →
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Step 4: Done ── -->
+  <div id="step-4" class="step-panel hidden">
+    <div class="card">
+      <div class="card-title">Email Staged as Draft</div>
+      <div class="card-desc">
+        Claude has completed all steps. The email is saved as a DRAFT — review it in
+        HubSpot before scheduling.
+      </div>
+
+      <div id="done-message" class="hidden"></div>
+      <div id="done-draft-link" class="hidden"></div>
+
+      <!-- Final chat -->
+      <div style="margin-top:12px">
+        <div style="font-size:12px;color:var(--gray-600);margin-bottom:6px">
+          Any final questions for Claude?
+        </div>
+        <div class="chat-row">
+          <input id="done-chat-input" type="text" placeholder="e.g. How many suppression lists were applied?"
+            onkeydown="onChatKey(event,'done-message','done-chat-input')" />
+          <button class="btn btn-outline" onclick="sendChat('done-message','done-chat-input')">Ask</button>
+        </div>
+        <div id="done-message-status" class="hidden" style="margin-top:8px"></div>
+      </div>
+
+      <div class="btn-row">
+        <button class="btn btn-outline" onclick="startOver()">+ Stage Another Email</button>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /container -->
+
+<script src="/static/app.js"></script>
+</body>
+</html>
