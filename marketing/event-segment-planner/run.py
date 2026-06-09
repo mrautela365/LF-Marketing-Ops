@@ -1,219 +1,40 @@
 """
-Event Segment Planner – local web UI
-Uses the Anthropic Python SDK directly (no claude subprocess).
-
-Setup:
-  1. Copy .env.example to .env and add your ANTHROPIC_API_KEY
-  2. Run: .venv\Scripts\python run.py
-  3. Open: http://localhost:8081
+Event Segment Planner - local web UI
+Run:  .venv/Scripts/python run.py
+Open: http://localhost:8081
 """
 
 import json
-import os
 import queue
+import subprocess
 import threading
 import webbrowser
 from pathlib import Path
 
-import anthropic
-import httpx
-from dotenv import load_dotenv
 from flask import Flask, Response, request
-
-load_dotenv(Path(__file__).parent / ".env")
 
 app = Flask(__name__)
 _jobs: dict[str, queue.Queue] = {}
 
-# ── Anthropic client (key from .env or environment) ───────────────────────────
-def _make_client() -> anthropic.Anthropic:
-    key = os.environ.get("ANTHROPIC_API_KEY", "")
-    if not key:
-        raise RuntimeError("ANTHROPIC_API_KEY not set. Add it to the .env file.")
-    return anthropic.Anthropic(api_key=key)
+CLAUDE_EXE = (
+    Path.home()
+    / "AppData/Roaming/npm/node_modules/@anthropic-ai/claude-code/bin/claude.exe"
+)
 
-
-# ── Tools exposed to Claude ───────────────────────────────────────────────────
-TOOLS = [
-    {
-        "name": "web_fetch",
-        "description": (
-            "Fetch the contents of a public web page. "
-            "Use this to scrape the Linux Foundation event page for event details."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "url": {"type": "string", "description": "The URL to fetch"},
-            },
-            "required": ["url"],
-        },
-    }
-]
-
-
-def _execute_tool(name: str, tool_input: dict) -> str:
-    """Run a tool call requested by Claude and return the result as a string."""
-    if name == "web_fetch":
-        url = tool_input.get("url", "")
-        try:
-            r = httpx.get(
-                url,
-                timeout=15,
-                follow_redirects=True,
-                headers={"User-Agent": "Mozilla/5.0 (compatible; LFSegmentPlanner/1.0)"},
-            )
-            r.raise_for_status()
-            # Return first 12 000 chars — enough for an event page
-            return r.text[:12_000]
-        except Exception as exc:
-            return f"Error fetching {url}: {exc}"
-    return f"Unknown tool: {name}"
-
-
-# ── System prompt ─────────────────────────────────────────────────────────────
-SYSTEM = """You are an expert Linux Foundation email audience strategist with deep knowledge
-of HubSpot list structures, the LF event portfolio, and the organisation's segmentation patterns.
-
-You have access to a web_fetch tool to retrieve event pages. Use it in Step 1.
-
-For Steps 2-3, you will not have live HubSpot or Snowflake access — draw on your knowledge of
-LF's typical segmentation patterns and clearly flag any list names or counts you cannot verify.
-
-Write the full Segment Plan Report in the exact format specified, section by section.
-Always end with: "Ready to proceed? Say yes and I'll build the segment in HubSpot."
-"""
-
-USER_PROMPT = """Plan the HubSpot audience segment for this Linux Foundation event:
+PROMPT = """Plan the HubSpot audience segment for this Linux Foundation event:
 
 {url}
 
 Follow the event-segment-planner skill instructions exactly, working through all 4 steps:
+1. Scrape the event page — extract event name, brand/foundation, location, dates, event type
+2. Find previous edition emails in HubSpot — search for prior sends and check the LF Event Audiences Foundation OptIn Report
+3. Analyse historical segmentation logic — reconstruct inclusion, exclusion, and opt-in filter strategy
+4. Produce the full Segment Plan Report in the standard format
 
-**Step 1** — Use web_fetch to scrape the event page. Extract: event name, foundation/brand,
-location, dates, year, event type.
-
-**Step 2** — Search your knowledge of prior HubSpot email sends for this event series.
-Note: you do not have live HubSpot access, so document what you know and flag anything unverified.
-
-**Step 3** — Reconstruct the inclusion sources, exclusion/suppression lists, and opt-in filter
-logic used for this event historically (or the closest comparable event if new).
-
-**Step 4** — Write the complete Segment Plan Report in the standard format:
-- Event summary
-- Historical context (prior master list name, send counts, changes)
-- Recommended master list name (following LF naming convention)
-- Inclusion strategy (past registrants, web visitors, geo, topic, foundation subs)
-- Exclusion strategy (LF Events Global Opt Outs, GDPR suppression, current registrants, etc.)
-- Opt-in filter recommendation
-- Estimated list size
-- Recommended HubSpot filter group sketch
-- Open questions / flags
-
+Narrate what you are doing at every sub-step.
 End with: "Ready to proceed? Say yes and I'll build the segment in HubSpot."
 """
 
-
-# ── Agentic loop: stream Claude + handle tool calls ──────────────────────────
-def _run_agent(job_id: str, url: str, q: queue.Queue):
-    try:
-        client = _make_client()
-    except RuntimeError as exc:
-        q.put({"type": "output", "text": f"❌ {exc}"})
-        q.put({"type": "done", "done": True, "success": False})
-        return
-
-    messages = [{"role": "user", "content": USER_PROMPT.format(url=url)}]
-
-    def emit(text: str):
-        if text:
-            q.put({"type": "output", "text": text})
-
-    try:
-        while True:
-            # Stream the response
-            full_text = ""
-            tool_calls = []
-
-            with client.messages.stream(
-                model="claude-opus-4-5",
-                max_tokens=8096,
-                system=SYSTEM,
-                tools=TOOLS,
-                messages=messages,
-            ) as stream:
-                current_tool = None
-
-                for event in stream:
-                    # Text delta — stream to browser immediately
-                    if hasattr(event, "type"):
-                        if event.type == "content_block_start":
-                            block = event.content_block
-                            if block.type == "tool_use":
-                                current_tool = {"id": block.id, "name": block.name, "input_raw": ""}
-                                emit(f"\n🔧 Calling tool: **{block.name}**\n")
-                            elif block.type == "text":
-                                current_tool = None
-
-                        elif event.type == "content_block_delta":
-                            delta = event.delta
-                            if hasattr(delta, "text"):
-                                full_text += delta.text
-                                emit(delta.text)
-                            elif hasattr(delta, "partial_json"):
-                                if current_tool:
-                                    current_tool["input_raw"] += delta.partial_json
-
-                        elif event.type == "content_block_stop":
-                            if current_tool:
-                                try:
-                                    current_tool["input"] = json.loads(current_tool["input_raw"] or "{}")
-                                except Exception:
-                                    current_tool["input"] = {}
-                                tool_calls.append(current_tool)
-                                current_tool = None
-
-                stop_reason = stream.get_final_message().stop_reason
-
-            # No tool calls → we're done
-            if not tool_calls or stop_reason == "end_turn":
-                break
-
-            # Execute each tool call and feed results back
-            assistant_content = []
-            if full_text:
-                assistant_content.append({"type": "text", "text": full_text})
-            for tc in tool_calls:
-                assistant_content.append({
-                    "type": "tool_use",
-                    "id": tc["id"],
-                    "name": tc["name"],
-                    "input": tc["input"],
-                })
-
-            messages.append({"role": "assistant", "content": assistant_content})
-
-            tool_results = []
-            for tc in tool_calls:
-                emit(f"  → Fetching: {tc['input'].get('url','')}\n")
-                result = _execute_tool(tc["name"], tc["input"])
-                emit(f"  ✓ Got {len(result)} chars\n\n")
-                tool_results.append({
-                    "type": "tool_result",
-                    "tool_use_id": tc["id"],
-                    "content": result,
-                })
-
-            messages.append({"role": "user", "content": tool_results})
-
-        q.put({"type": "done", "done": True, "success": True})
-
-    except Exception as exc:
-        emit(f"\n\n❌ Error: {exc}")
-        q.put({"type": "done", "done": True, "success": False})
-
-
-# ── Flask routes ──────────────────────────────────────────────────────────────
 HTML = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -222,7 +43,7 @@ HTML = r"""<!DOCTYPE html>
   <title>Event Segment Planner</title>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <style>
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    *, *::before, *::after { box-sizing:border-box; margin:0; padding:0; }
     :root {
       --blue:#003366; --teal:#009cde; --light:#e8f4fb;
       --idle:#d1d5db; --active:#f59e0b; --done:#10b981; --err:#ef4444;
@@ -243,15 +64,9 @@ HTML = r"""<!DOCTYPE html>
             padding:1.5rem; max-width:860px; margin:0 auto 1.25rem;
             box-shadow:0 1px 4px rgba(0,0,0,.06); }
 
-    /* api key warning */
-    #key-warn { background:#fff7ed; border:1.5px solid #fed7aa; border-radius:8px;
-                padding:.75rem 1rem; font-size:.82rem; color:#9a3412; margin-bottom:1rem;
-                display:none; }
-
     .row { display:flex; gap:.75rem; }
-    input[type=url],input[type=text],input[type=password] {
-      flex:1; padding:.65rem 1rem; border:1.5px solid var(--border);
-      border-radius:8px; font-size:.95rem; outline:none; transition:border-color .15s; }
+    input[type=url] { flex:1; padding:.65rem 1rem; border:1.5px solid var(--border);
+                      border-radius:8px; font-size:.95rem; outline:none; transition:border-color .15s; }
     input:focus { border-color:var(--teal); }
     .hint { font-size:.78rem; color:var(--muted); margin-top:.45rem; }
 
@@ -266,8 +81,7 @@ HTML = r"""<!DOCTYPE html>
     .btn-teal:hover:not(:disabled) { background:#007bb0; }
     .btn-sm { padding:.35rem .9rem; font-size:.8rem; }
 
-    /* Steps */
-    .steps-wrap { margin-bottom:1.5rem; }
+    /* ── Step bubbles ── */
     .steps { display:flex; position:relative; margin-bottom:1rem; }
     .steps::before { content:""; position:absolute; top:18px; left:32px; right:32px;
                      height:2px; background:var(--idle); z-index:0; }
@@ -276,30 +90,28 @@ HTML = r"""<!DOCTYPE html>
     .bubble { width:36px; height:36px; border-radius:50%; background:var(--idle); color:#fff;
               font-weight:700; font-size:.85rem; display:flex; align-items:center;
               justify-content:center; transition:background .3s, transform .25s; }
-    .step.active .bubble {
-      background:var(--active); transform:scale(1.18);
-      animation:pulse-ring 1.5s ease-out infinite;
-    }
+    .step.active .bubble { background:var(--active); transform:scale(1.18);
+                            animation:pulse-ring 1.5s ease-out infinite; }
     @keyframes pulse-ring {
-      0%   { box-shadow:0 0 0 0   rgba(245,158,11,.45); }
-      70%  { box-shadow:0 0 0 10px rgba(245,158,11,0);  }
-      100% { box-shadow:0 0 0 0   rgba(245,158,11,0);   }
+      0%  { box-shadow:0 0 0 0   rgba(245,158,11,.45); }
+      70% { box-shadow:0 0 0 10px rgba(245,158,11,0);  }
+      100%{ box-shadow:0 0 0 0   rgba(245,158,11,0);   }
     }
     .step.done  .bubble { background:var(--done); animation:none; transform:scale(1); }
     .step.done  .bubble::after { content:"✓"; }
     .step.done  .bubble span { display:none; }
     .step.error .bubble { background:var(--err); animation:none; }
-    .step-label { font-size:.68rem; color:var(--muted); text-align:center;
-                  line-height:1.3; max-width:90px; }
+    .step-label { font-size:.68rem; color:var(--muted); text-align:center; line-height:1.3; max-width:90px; }
     .step.active .step-label { color:var(--active); font-weight:700; }
     .step.done   .step-label { color:var(--done);   font-weight:600; }
 
-    .step-details { display:grid; grid-template-columns:repeat(4,1fr); gap:.75rem; }
-    .step-detail { border:1.5px solid var(--border); border-radius:8px; padding:.75rem;
+    /* ── Static step detail cards ── */
+    .step-details { display:grid; grid-template-columns:repeat(4,1fr); gap:.65rem; margin-bottom:1rem; }
+    .step-detail { border:1.5px solid var(--border); border-radius:8px; padding:.7rem .85rem;
                    font-size:.77rem; transition:border-color .3s, background .3s; }
-    .step-detail .sd-num   { font-size:.65rem; font-weight:700; color:var(--muted);
+    .step-detail .sd-num   { font-size:.63rem; font-weight:700; color:var(--muted);
                               text-transform:uppercase; letter-spacing:.04em; margin-bottom:.2rem; }
-    .step-detail .sd-title { font-weight:700; color:#374151; margin-bottom:.25rem; }
+    .step-detail .sd-title { font-weight:700; color:#374151; margin-bottom:.2rem; font-size:.8rem; }
     .step-detail .sd-body  { color:var(--muted); line-height:1.45; }
     .step-detail.active { border-color:var(--active); background:#fffbeb; }
     .step-detail.active .sd-num   { color:var(--active); }
@@ -310,18 +122,56 @@ HTML = r"""<!DOCTYPE html>
     .step-detail.done   .sd-title { color:#065f46; }
     .step-detail.error  { border-color:var(--err); }
 
-    /* Activity line */
-    #activity-wrap { display:flex; align-items:center; gap:.6rem; margin:.6rem 0;
-                     min-height:26px; }
-    #activity-icon { font-size:1rem; flex-shrink:0; }
-    #activity-text { font-size:.82rem; color:#374151; flex:1; font-style:italic;
-                     overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
-    #activity-text.idle { color:var(--muted); }
-    .dots::after { content:""; animation:dots 1.4s steps(4,end) infinite; }
-    @keyframes dots { 0%{content:""} 25%{content:"."} 50%{content:".."} 75%{content:"..."} }
+    /* ── Active step detail panel ── */
+    #active-panel {
+      border:1.5px solid var(--active); border-radius:10px;
+      background:#fffbeb; padding:1rem 1.25rem; margin-bottom:1rem;
+      display:none; transition:all .3s;
+    }
+    #active-panel.done-panel { border-color:var(--done); background:#f0fdf4; }
+    #active-panel.err-panel  { border-color:var(--err);  background:#fef2f2; }
 
-    /* Report */
-    #report-panel { display:none; margin-top:.75rem; }
+    .panel-top { display:flex; align-items:center; gap:.75rem; margin-bottom:.6rem; }
+    .panel-icon { font-size:1.4rem; flex-shrink:0; }
+    .panel-title { font-weight:700; color:#92400e; font-size:.95rem; }
+    .panel-title.done-title { color:#065f46; }
+    .panel-title.err-title  { color:#991b1b; }
+
+    /* Elapsed timer */
+    #elapsed { font-size:.75rem; color:var(--muted); margin-left:auto; font-variant-numeric:tabular-nums; }
+
+    /* Sub-step ticker */
+    #substep-wrap { display:flex; align-items:flex-start; gap:.5rem; }
+    #substep-icon { font-size:.9rem; flex-shrink:0; margin-top:1px; }
+    #substep-text { font-size:.83rem; color:#374151; line-height:1.5; }
+    #substep-text.fade { animation:fadeSlide .4s ease; }
+    @keyframes fadeSlide {
+      from { opacity:0; transform:translateY(4px); }
+      to   { opacity:1; transform:translateY(0);   }
+    }
+
+    /* Sub-step checklist */
+    #substep-list { list-style:none; margin-top:.6rem; display:flex; flex-direction:column; gap:.3rem; }
+    #substep-list li { font-size:.8rem; display:flex; align-items:center; gap:.5rem; color:var(--muted); }
+    #substep-list li.done   { color:var(--done); }
+    #substep-list li.active { color:#92400e; font-weight:600; }
+    #substep-list li::before { content:"○"; font-size:.7rem; flex-shrink:0; }
+    #substep-list li.done::before   { content:"✓"; color:var(--done); }
+    #substep-list li.active::before { content:"▶"; color:var(--active); }
+
+    /* ── Claude output line (latest) ── */
+    #claude-line-wrap { background:#f8fafc; border:1px solid var(--border); border-radius:8px;
+                        padding:.6rem .9rem; margin-bottom:1rem; display:none;
+                        display:flex; align-items:center; gap:.6rem; }
+    #claude-line-wrap { display:none; }
+    #claude-dot { width:8px; height:8px; border-radius:50%; background:var(--active);
+                  flex-shrink:0; animation:blink 1s ease-in-out infinite; }
+    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.3} }
+    #claude-line { font-size:.78rem; color:#374151; font-style:italic;
+                   white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex:1; }
+
+    /* ── Report panel ── */
+    #report-panel { display:none; }
     #report-toolbar { display:flex; justify-content:space-between; align-items:center;
                       margin-bottom:.6rem; flex-wrap:wrap; gap:.5rem; }
     #report-toolbar span { font-weight:600; font-size:.9rem; color:var(--blue); }
@@ -331,7 +181,7 @@ HTML = r"""<!DOCTYPE html>
     .tab.active { background:var(--blue); color:#fff; border-color:var(--blue); }
 
     #report-md { border:1px solid var(--border); border-radius:8px; padding:1.5rem;
-                 max-height:500px; overflow-y:auto; font-size:.88rem; line-height:1.75; }
+                 max-height:480px; overflow-y:auto; font-size:.88rem; line-height:1.75; }
     #report-md h1,#report-md h2,#report-md h3 { color:var(--blue); margin:1.1rem 0 .4rem; }
     #report-md h3 { font-size:1rem; }
     #report-md p  { margin-bottom:.6rem; }
@@ -344,7 +194,7 @@ HTML = r"""<!DOCTYPE html>
 
     #report-raw { display:none; background:#0f172a; color:#cbd5e1; border-radius:8px;
                   padding:1rem; font-family:"Cascadia Code","Fira Code",monospace;
-                  font-size:.76rem; line-height:1.65; max-height:500px; overflow-y:auto;
+                  font-size:.76rem; line-height:1.65; max-height:480px; overflow-y:auto;
                   white-space:pre-wrap; word-break:break-word; }
 
     #action-btns { display:none; gap:.75rem; flex-wrap:wrap; margin-top:1rem; }
@@ -378,65 +228,72 @@ HTML = r"""<!DOCTYPE html>
   </div>
 </header>
 
-<!-- Input card -->
+<!-- Input -->
 <div class="card" id="input-card">
-  <div id="key-warn">⚠️ No API key configured. Add <code>ANTHROPIC_API_KEY=sk-…</code> to the <code>.env</code> file in the event-segment-planner folder, then restart.</div>
-
-  <!-- API key field (shown only if not set server-side) -->
-  <div id="key-row" style="display:none; margin-bottom:.75rem;">
-    <div class="row">
-      <input type="password" id="api-key" placeholder="sk-ant-… (paste Anthropic API key)" />
-      <button class="btn-outline" onclick="saveKey()">Save key</button>
-    </div>
-    <p class="hint">Key is stored only for this browser session and sent only to your local server.</p>
-  </div>
-
   <div class="row">
     <input type="url" id="url"
       placeholder="https://events.linuxfoundation.org/confidential-computing-summit/" />
     <button id="go-btn" onclick="start()">Plan Segment</button>
   </div>
-  <p class="hint">Paste any events.linuxfoundation.org URL — Claude will scrape the page and produce a full segment plan.</p>
+  <p class="hint">Paste any events.linuxfoundation.org URL — Claude will research prior sends and produce a full segment plan.</p>
 </div>
 
-<!-- Progress card -->
+<!-- Progress -->
 <div class="card" id="prog-card" style="display:none">
-  <div class="steps-wrap">
-    <div class="steps">
-      <div class="step" id="s1"><div class="bubble"><span>1</span></div><div class="step-label">Scrape<br>event page</div></div>
-      <div class="step" id="s2"><div class="bubble"><span>2</span></div><div class="step-label">Find prior<br>sends</div></div>
-      <div class="step" id="s3"><div class="bubble"><span>3</span></div><div class="step-label">Analyse<br>segmentation</div></div>
-      <div class="step" id="s4"><div class="bubble"><span>4</span></div><div class="step-label">Write<br>plan</div></div>
+
+  <!-- Step bubbles -->
+  <div class="steps">
+    <div class="step" id="s1"><div class="bubble"><span>1</span></div><div class="step-label">Scrape<br>event page</div></div>
+    <div class="step" id="s2"><div class="bubble"><span>2</span></div><div class="step-label">Find prior<br>sends</div></div>
+    <div class="step" id="s3"><div class="bubble"><span>3</span></div><div class="step-label">Analyse<br>segmentation</div></div>
+    <div class="step" id="s4"><div class="bubble"><span>4</span></div><div class="step-label">Write<br>plan</div></div>
+  </div>
+
+  <!-- Static step detail cards (always visible) -->
+  <div class="step-details">
+    <div class="step-detail" id="sd1">
+      <div class="sd-num">Step 1</div>
+      <div class="sd-title">Scrape event page</div>
+      <div class="sd-body">Fetching page · extracting name, foundation, location, dates, type</div>
     </div>
-    <div class="step-details">
-      <div class="step-detail" id="sd1">
-        <div class="sd-num">Step 1</div>
-        <div class="sd-title">Scrape event page</div>
-        <div class="sd-body">Fetching page · extracting name, foundation, location, dates, type</div>
-      </div>
-      <div class="step-detail" id="sd2">
-        <div class="sd-num">Step 2</div>
-        <div class="sd-title">Prior HubSpot sends</div>
-        <div class="sd-body">Searching prior email sends · checking LF Event Audiences OptIn tracking</div>
-      </div>
-      <div class="step-detail" id="sd3">
-        <div class="sd-num">Step 3</div>
-        <div class="sd-title">Analyse segmentation</div>
-        <div class="sd-body">Reconstructing inclusion, exclusion &amp; opt-in filter logic from history</div>
-      </div>
-      <div class="step-detail" id="sd4">
-        <div class="sd-num">Step 4</div>
-        <div class="sd-title">Write segment plan</div>
-        <div class="sd-body">Master list name · inclusion strategy · exclusions · size estimate · filter sketch</div>
-      </div>
+    <div class="step-detail" id="sd2">
+      <div class="sd-num">Step 2</div>
+      <div class="sd-title">Prior HubSpot sends</div>
+      <div class="sd-body">Searching prior email sends · checking LF Event Audiences OptIn tracking</div>
+    </div>
+    <div class="step-detail" id="sd3">
+      <div class="sd-num">Step 3</div>
+      <div class="sd-title">Analyse segmentation</div>
+      <div class="sd-body">Reconstructing inclusion, exclusion &amp; opt-in filter logic from history</div>
+    </div>
+    <div class="step-detail" id="sd4">
+      <div class="sd-num">Step 4</div>
+      <div class="sd-title">Write segment plan</div>
+      <div class="sd-body">Master list name · inclusion strategy · exclusions · size estimate · filter sketch</div>
     </div>
   </div>
 
-  <div id="activity-wrap">
-    <span id="activity-icon">⏳</span>
-    <span id="activity-text" class="idle dots">Waiting for Claude</span>
+  <!-- Active step detail panel -->
+  <div id="active-panel">
+    <div class="panel-top">
+      <span class="panel-icon" id="panel-icon">⏳</span>
+      <span class="panel-title" id="panel-title">Starting up…</span>
+      <span id="elapsed">0:00</span>
+    </div>
+    <div id="substep-wrap">
+      <span id="substep-icon">▶</span>
+      <span id="substep-text">Initialising Claude…</span>
+    </div>
+    <ul id="substep-list"></ul>
   </div>
 
+  <!-- Latest Claude output line -->
+  <div id="claude-line-wrap">
+    <span id="claude-dot"></span>
+    <span id="claude-line">Waiting…</span>
+  </div>
+
+  <!-- Report output -->
   <div id="report-panel">
     <div id="report-toolbar">
       <span>📋 Segment Plan</span>
@@ -463,220 +320,322 @@ HTML = r"""<!DOCTYPE html>
 <script>
   marked.setOptions({ breaks:true, gfm:true });
 
-  const STEP_RE = [
+  // ── Step metadata ──────────────────────────────────────────────────────────
+  const STEPS = [
     null,
-    /step 1|scraping|fetching|web_fetch|event page|event name|event type|foundation|location|dates|extracting|calling tool/i,
-    /step 2|prior send|previous edition|email send|hubspot|optIn|tracking|historical|found.*email|search.*email/i,
-    /step 3|inclus|exclus|suppress|opt.in|filter logic|reconstruct|analysing|historical segment/i,
-    /step 4|segment plan|recommended|master list|inclusion strategy|exclusion strategy|estimated|ready to proceed|filter group|open question/i,
+    {
+      icon: "🌐",
+      title: "Step 1 — Scraping event page",
+      subs: [
+        "Fetching event page from URL",
+        "Extracting event name & edition",
+        "Identifying foundation / brand",
+        "Pulling location, dates & event type",
+        "Deriving Snowflake search terms",
+      ],
+    },
+    {
+      icon: "📧",
+      title: "Step 2 — Finding prior HubSpot sends",
+      subs: [
+        "Searching HubSpot for previous email campaigns",
+        "Matching prior edition names & subject lines",
+        "Checking LF Event Audiences OptIn tracking report",
+        "Reading prior send counts & list sizes",
+        "Noting opt-in filter changes between editions",
+      ],
+    },
+    {
+      icon: "🧩",
+      title: "Step 3 — Analysing segmentation logic",
+      subs: [
+        "Reconstructing inclusion sources (registrants, web visitors, geo, topic)",
+        "Mapping exclusion / suppression lists",
+        "Reviewing opt-in filter strategy",
+        "Checking regional GDPR / CASL requirements",
+        "Comparing to similar foundation events",
+      ],
+    },
+    {
+      icon: "📋",
+      title: "Step 4 — Writing segment plan report",
+      subs: [
+        "Recommending master list name",
+        "Writing inclusion strategy",
+        "Writing exclusion stack",
+        "Adding opt-in filter recommendation",
+        "Estimating list size",
+        "Sketching HubSpot filter groups",
+        "Flagging open questions",
+      ],
+    },
   ];
 
-  const STEP_ICONS  = ["","🔍","📧","🧩","📋"];
-  const STEP_STATUS = ["","Scraping event page…","Searching prior sends…","Analysing segmentation…","Writing segment plan…"];
+  const STEP_RE = [
+    null,
+    /step 1|scraping|fetching|web_fetch|event page|event name|event type|foundation|location|dates|extracting/i,
+    /step 2|prior send|previous edition|email send|hubspot|optIn|tracking|historical|found.*email|search.*email/i,
+    /step 3|inclus|exclus|suppress|opt.in|filter logic|reconstruct|analysing/i,
+    /step 4|segment plan|recommended|master list|inclusion strategy|exclusion strategy|estimated|ready to proceed|filter group/i,
+  ];
 
-  let cur = 0, rawLog = "", es = null, hbTimer = null;
-  let apiKeySession = "";
+  let cur = 0, rawLog = "", es = null;
+  let tickerInterval = null, timerInterval = null;
+  let subIdx = 0, completedSubs = [];
+  let startTime = null;
 
-  // ── Check if server has API key configured
-  fetch("/status").then(r=>r.json()).then(d=>{
-    if (!d.has_key) {
-      document.getElementById("key-warn").style.display = "block";
-      document.getElementById("key-row").style.display  = "block";
-    }
-  });
-
-  function saveKey() {
-    apiKeySession = document.getElementById("api-key").value.trim();
-    if (apiKeySession) {
-      document.getElementById("key-warn").style.display = "none";
-      document.getElementById("key-row").style.display  = "none";
-    }
+  // ── Timer ──────────────────────────────────────────────────────────────────
+  function startTimer() {
+    startTime = Date.now();
+    timerInterval = setInterval(() => {
+      const s = Math.floor((Date.now() - startTime) / 1000);
+      const m = Math.floor(s / 60);
+      document.getElementById("elapsed").textContent =
+        m + ":" + String(s % 60).padStart(2, "0");
+    }, 1000);
   }
 
-  function setActivityIdle() {
-    const el = document.getElementById("activity-text");
-    el.className = "idle dots"; el.textContent = "Waiting for Claude";
-    document.getElementById("activity-icon").textContent = "⏳";
+  function stopTimer() { clearInterval(timerInterval); }
+
+  // ── Sub-step ticker ────────────────────────────────────────────────────────
+  function startTicker(stepNum) {
+    clearInterval(tickerInterval);
+    subIdx = 0;
+    completedSubs = [];
+    renderSubList(stepNum);
+    tickSubstep(stepNum);        // show first immediately
+    tickerInterval = setInterval(() => tickSubstep(stepNum), 4000);
   }
 
-  function setActivity(text) {
+  function tickSubstep(stepNum) {
+    const step = STEPS[stepNum];
+    if (!step) return;
+    const subs = step.subs;
+    if (subIdx >= subs.length) { clearInterval(tickerInterval); return; }
+
+    // Mark previous as done
+    if (subIdx > 0) completedSubs.push(subIdx - 1);
+
+    setSubstepText(subs[subIdx]);
+    renderSubList(stepNum);
+    subIdx++;
+  }
+
+  function setSubstepText(text) {
+    const el = document.getElementById("substep-text");
+    el.classList.remove("fade");
+    void el.offsetWidth; // reflow
+    el.classList.add("fade");
+    el.textContent = text;
+  }
+
+  function renderSubList(stepNum) {
+    const step = STEPS[stepNum];
+    if (!step) return;
+    const ul = document.getElementById("substep-list");
+    ul.innerHTML = step.subs.map((s, i) => {
+      const cls = completedSubs.includes(i) ? "done"
+                : i === subIdx ? "active" : "";
+      return `<li class="${cls}">${s}</li>`;
+    }).join("");
+  }
+
+  // ── Step advance ──────────────────────────────────────────────────────────
+  function advance(n) {
+    if (n <= cur) return;
+    if (cur > 0) {
+      document.getElementById("s"  + cur).className = "step done";
+      document.getElementById("sd" + cur).className = "step-detail done";
+    }
+    cur = n;
+    document.getElementById("s"  + n).className = "step active";
+    document.getElementById("sd" + n).className = "step-detail active";
+
+    const step = STEPS[n];
+    const panel = document.getElementById("active-panel");
+    panel.className = "";
+    panel.style.display = "block";
+    document.getElementById("panel-icon").textContent  = step.icon;
+    document.getElementById("panel-title").textContent = step.title;
+    document.getElementById("panel-title").className   = "panel-title";
+    document.getElementById("claude-line-wrap").style.display = "flex";
+
+    startTicker(n);
+  }
+
+  function markDone(last) {
+    clearInterval(tickerInterval);
+    stopTimer();
+    for (let i = 1; i <= last; i++) {
+      document.getElementById("s"  + i).className = "step done";
+      document.getElementById("sd" + i).className = "step-detail done";
+    }
+
+    const panel = document.getElementById("active-panel");
+    panel.className = "done-panel";
+    document.getElementById("panel-icon").textContent = "✅";
+    const title = document.getElementById("panel-title");
+    title.textContent = "Plan complete";
+    title.className = "panel-title done-title";
+    document.getElementById("substep-text").textContent = "All 4 steps finished — review the plan below.";
+    document.getElementById("substep-list").innerHTML = "";
+    document.getElementById("claude-line-wrap").style.display = "none";
+    document.getElementById("claude-dot").style.animation = "none";
+  }
+
+  function markErr(n) {
+    clearInterval(tickerInterval);
+    stopTimer();
+    if (n > 0) {
+      document.getElementById("s"  + n).className = "step error";
+      document.getElementById("sd" + n).className = "step-detail error";
+    }
+    const panel = document.getElementById("active-panel");
+    panel.className = "err-panel";
+    document.getElementById("panel-icon").textContent = "❌";
+    const title = document.getElementById("panel-title");
+    title.textContent = "Error encountered";
+    title.className = "panel-title err-title";
+    document.getElementById("claude-line-wrap").style.display = "none";
+  }
+
+  // ── Claude output line ────────────────────────────────────────────────────
+  function setClaudeLine(text) {
     const t = text.trim();
-    if (!t || t.length < 4) return;
-    const el = document.getElementById("activity-text");
-    el.className = ""; el.textContent = t.slice(0,140);
-    document.getElementById("activity-icon").textContent = STEP_ICONS[cur] || "⚙️";
-    clearTimeout(hbTimer);
-    hbTimer = setTimeout(() => {
-      if (cur > 0) { el.className = "dots"; el.textContent = STEP_STATUS[cur] || "Working"; }
-    }, 8000);
+    if (!t || t.length < 5) return;
+    document.getElementById("claude-line").textContent = t.slice(0, 160);
   }
 
+  // ── Main ──────────────────────────────────────────────────────────────────
   async function start() {
     const url = document.getElementById("url").value.trim();
     if (!url) { alert("Please enter an event URL."); return; }
 
     setBtn(true, "Planning…");
-    document.getElementById("input-card").style.display  = "none";
-    document.getElementById("prog-card").style.display   = "block";
+    document.getElementById("input-card").style.display   = "none";
+    document.getElementById("prog-card").style.display    = "block";
     document.getElementById("report-panel").style.display = "none";
     document.getElementById("action-btns").style.display  = "none";
     document.getElementById("report-md").innerHTML = "";
     document.getElementById("report-raw").textContent = "";
     rawLog = ""; cur = 0;
-    for (let i=1;i<=4;i++) {
-      document.getElementById("s"+i).className  = "step";
-      document.getElementById("sd"+i).className = "step-detail";
-    }
-    setActivityIdle();
 
-    const body = { url };
-    if (apiKeySession) body.api_key = apiKeySession;
+    for (let i = 1; i <= 4; i++) {
+      document.getElementById("s"  + i).className = "step";
+      document.getElementById("sd" + i).className = "step-detail";
+    }
+
+    // Show panel immediately so screen isn't blank
+    const panel = document.getElementById("active-panel");
+    panel.style.display = "block";
+    panel.className = "";
+    document.getElementById("panel-icon").textContent  = "⏳";
+    document.getElementById("panel-title").textContent = "Starting Claude…";
+    document.getElementById("substep-text").textContent = "Launching Claude Code, connecting to tools…";
+    document.getElementById("substep-list").innerHTML = "";
+    document.getElementById("elapsed").textContent = "0:00";
+    document.getElementById("claude-line-wrap").style.display = "none";
+
+    startTimer();
 
     const r = await fetch("/build", {
-      method:"POST", headers:{"Content-Type":"application/json"},
-      body: JSON.stringify(body)
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url })
     });
-    if (!r.ok) {
-      const err = await r.json().catch(()=>({error:"Unknown error"}));
-      alert("Error: " + (err.error || r.status));
-      setBtn(false, "Plan Segment");
-      document.getElementById("input-card").style.display = "block";
-      document.getElementById("prog-card").style.display  = "none";
-      return;
-    }
-    const {job_id} = await r.json();
+    const { job_id } = await r.json();
 
     es = new EventSource("/stream/" + job_id);
+
     es.onmessage = (e) => {
       const msg = JSON.parse(e.data);
 
-      if (msg.type === "heartbeat") {
-        if (cur > 0) {
-          const el = document.getElementById("activity-text");
-          if (!el.classList.contains("dots")) { el.className="dots"; el.textContent=STEP_STATUS[cur]||"Working"; }
-        }
-        return;
-      }
+      if (msg.type === "heartbeat") return;
 
       if (msg.type === "output" && msg.text !== undefined) {
-        rawLog += msg.text;
-        checkStep(msg.text);
-        // Update activity with last non-empty line
-        const lines = msg.text.split("\n").filter(l=>l.trim());
-        if (lines.length) setActivity(lines[lines.length-1]);
-        renderReport();
+        rawLog += msg.text + "\n";
+
+        // Detect step from output
+        for (let i = 1; i <= 4; i++) {
+          if (i > cur && STEP_RE[i] && STEP_RE[i].test(msg.text)) {
+            advance(i); break;
+          }
+        }
+
+        // Show latest Claude line
+        if (msg.text.trim()) setClaudeLine(msg.text);
+
+        // Render report live
+        if (rawLog.length > 50) {
+          document.getElementById("report-panel").style.display = "block";
+          document.getElementById("report-md").innerHTML = marked.parse(rawLog);
+          document.getElementById("report-raw").textContent = rawLog;
+          const md = document.getElementById("report-md");
+          md.scrollTop = md.scrollHeight;
+        }
       }
 
       if (msg.done) {
-        es.close(); clearTimeout(hbTimer);
-        if (msg.success) {
-          markDone(cur);
-          document.getElementById("activity-icon").textContent = "✅";
-          document.getElementById("activity-text").className = "";
-          document.getElementById("activity-text").textContent = "Plan complete";
-        } else {
-          markErr(cur);
-          document.getElementById("activity-icon").textContent = "⚠️";
-          document.getElementById("activity-text").className = "";
-          document.getElementById("activity-text").textContent = "Finished with errors";
-        }
+        es.close();
+        if (msg.success) { markDone(cur || 4); }
+        else             { markErr(cur); }
         setBtn(false, "Plan Segment");
         document.getElementById("action-btns").style.display = "flex";
       }
     };
+
     es.onerror = () => {
-      es.close(); clearTimeout(hbTimer);
-      document.getElementById("activity-text").textContent = "Connection lost";
+      es.close();
+      markErr(cur);
       setBtn(false, "Plan Segment");
       document.getElementById("action-btns").style.display = "flex";
     };
   }
 
-  function checkStep(text) {
-    for (let i=1;i<=4;i++) {
-      if (i>cur && STEP_RE[i] && STEP_RE[i].test(text)) { advance(i); break; }
-    }
-  }
-
-  function advance(n) {
-    if (n<=cur) return;
-    if (cur>0) {
-      document.getElementById("s"+cur).className  = "step done";
-      document.getElementById("sd"+cur).className = "step-detail done";
-    }
-    cur = n;
-    document.getElementById("s"+n).className  = "step active";
-    document.getElementById("sd"+n).className = "step-detail active";
-    const el = document.getElementById("activity-text");
-    el.className = "dots"; el.textContent = STEP_STATUS[n]||"Working";
-    document.getElementById("activity-icon").textContent = STEP_ICONS[n]||"⚙️";
-  }
-
-  function markDone(last) {
-    for (let i=1;i<=last;i++) {
-      document.getElementById("s"+i).className  = "step done";
-      document.getElementById("sd"+i).className = "step-detail done";
-    }
-  }
-  function markErr(n) {
-    if (n>0) {
-      document.getElementById("s"+n).className  = "step error";
-      document.getElementById("sd"+n).className = "step-detail error";
-    }
-  }
-
-  function renderReport() {
-    document.getElementById("report-panel").style.display = "block";
-    document.getElementById("report-md").innerHTML = marked.parse(rawLog);
-    document.getElementById("report-raw").textContent = rawLog;
-    const md = document.getElementById("report-md");
-    md.scrollTop = md.scrollHeight;
-  }
-
   function showTab(tab) {
-    document.getElementById("report-md").style.display  = tab==="md"  ? "block":"none";
-    document.getElementById("report-raw").style.display = tab==="raw" ? "block":"none";
-    document.querySelectorAll(".tab").forEach((el,i)=>{
-      el.classList.toggle("active",(i===0&&tab==="md")||(i===1&&tab==="raw"));
+    document.getElementById("report-md").style.display  = tab === "md"  ? "block" : "none";
+    document.getElementById("report-raw").style.display = tab === "raw" ? "block" : "none";
+    document.querySelectorAll(".tab").forEach((el, i) => {
+      el.classList.toggle("active", (i === 0 && tab === "md") || (i === 1 && tab === "raw"));
     });
   }
 
   function copyReport() {
-    navigator.clipboard.writeText(rawLog).then(()=>{
-      const t=document.getElementById("toast");
-      t.classList.add("show"); setTimeout(()=>t.classList.remove("show"),2000);
+    navigator.clipboard.writeText(rawLog).then(() => {
+      const t = document.getElementById("toast");
+      t.classList.add("show");
+      setTimeout(() => t.classList.remove("show"), 2000);
     });
   }
 
   function buildLists() {
-    window.open("http://localhost:8080?url="+encodeURIComponent(document.getElementById("url").value.trim()),"_blank");
+    window.open("http://localhost:8080?url=" + encodeURIComponent(
+      document.getElementById("url").value.trim()), "_blank");
   }
 
-  function setBtn(disabled,label) {
-    const b=document.getElementById("go-btn");
-    b.disabled=disabled;
-    b.innerHTML=disabled?`<span class="spin"></span>${label}`:label;
+  function setBtn(disabled, label) {
+    const b = document.getElementById("go-btn");
+    b.disabled = disabled;
+    b.innerHTML = disabled ? `<span class="spin"></span>${label}` : label;
   }
 
   function reset() {
-    document.getElementById("input-card").style.display="block";
-    document.getElementById("prog-card").style.display="none";
-    document.getElementById("url").value="";
-    rawLog=""; cur=0; clearTimeout(hbTimer);
+    clearInterval(tickerInterval);
+    clearInterval(timerInterval);
+    document.getElementById("input-card").style.display = "block";
+    document.getElementById("prog-card").style.display  = "none";
+    document.getElementById("active-panel").style.display = "none";
+    document.getElementById("url").value = "";
+    rawLog = ""; cur = 0;
   }
 
-  document.getElementById("url").addEventListener("keydown",e=>{if(e.key==="Enter")start();});
-  const qs=new URLSearchParams(location.search);
-  if(qs.get("url")) document.getElementById("url").value=qs.get("url");
+  document.getElementById("url").addEventListener("keydown", e => {
+    if (e.key === "Enter") start();
+  });
+  const qs = new URLSearchParams(location.search);
+  if (qs.get("url")) document.getElementById("url").value = qs.get("url");
 </script>
 </body>
 </html>"""
-
-
-@app.get("/status")
-def status():
-    has_key = bool(os.environ.get("ANTHROPIC_API_KEY", "").strip())
-    return {"has_key": has_key}
 
 
 @app.get("/")
@@ -691,19 +650,13 @@ def build():
     if not url:
         return {"error": "url required"}, 400
 
-    # Allow passing API key from the browser during setup
-    if data.get("api_key"):
-        os.environ["ANTHROPIC_API_KEY"] = data["api_key"]
-
-    if not os.environ.get("ANTHROPIC_API_KEY", "").strip():
-        return {"error": "ANTHROPIC_API_KEY not set. Add it to the .env file."}, 400
-
     import uuid
     job_id = str(uuid.uuid4())
     q: queue.Queue = queue.Queue()
     _jobs[job_id] = q
 
-    t = threading.Thread(target=_run_agent, args=(job_id, url, q), daemon=True)
+    prompt = PROMPT.format(url=url)
+    t = threading.Thread(target=_run_claude, args=(job_id, prompt, q), daemon=True)
     t.start()
     return {"job_id": job_id}
 
@@ -735,12 +688,31 @@ def stream(job_id: str):
     )
 
 
+def _run_claude(job_id: str, prompt: str, q: queue.Queue):
+    claude_cmd = str(CLAUDE_EXE) if CLAUDE_EXE.exists() else "claude"
+    try:
+        proc = subprocess.Popen(
+            [claude_cmd, "-p", prompt, "--dangerously-skip-permissions"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            bufsize=1,
+            cwd=str(Path(__file__).parent),
+        )
+        for line in proc.stdout:
+            q.put({"type": "output", "text": line.rstrip()})
+        proc.wait()
+        q.put({"type": "done", "done": True, "success": proc.returncode == 0})
+    except Exception as exc:
+        q.put({"type": "output", "text": f"Error: {exc}"})
+        q.put({"type": "done", "done": True, "success": False})
+
+
 if __name__ == "__main__":
     port = 8081
-    print(f"\n  Event Segment Planner  →  http://localhost:{port}")
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        print("  ⚠  ANTHROPIC_API_KEY not set — add it to .env or paste in the browser UI\n")
-    else:
-        print("  ✓  API key loaded\n")
+    print(f"\n  Event Segment Planner  ->  http://localhost:{port}\n")
     webbrowser.open(f"http://localhost:{port}")
     app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
