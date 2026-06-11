@@ -130,17 +130,40 @@
     /* ── Segment plan banner ── */
     #plan-banner { border:1.5px solid var(--teal); border-radius:10px; background:#f0faff;
                    padding:1rem 1.25rem; max-width:860px; margin:0 auto 1.25rem; display:none; }
-    .plan-header { display:flex; align-items:center; gap:.65rem; margin-bottom:.5rem; }
+    .plan-header { display:flex; align-items:center; gap:.65rem; margin-bottom:.85rem; }
     .plan-header-icon { font-size:1.2rem; }
     .plan-header-title { font-weight:700; color:var(--blue); font-size:.95rem; flex:1; }
     .plan-toggle { background:transparent; border:1.5px solid var(--teal); color:var(--teal);
                    padding:.25rem .7rem; font-size:.75rem; border-radius:6px;
                    cursor:pointer; font-weight:600; }
     .plan-toggle:hover { background:var(--light); }
+
+    /* plan summary grid */
+    .plan-summary { display:grid; grid-template-columns:1fr 1fr; gap:.65rem; margin-bottom:.65rem; }
+    .ps-box { border-radius:8px; border:1.5px solid var(--border); padding:.65rem .8rem; background:#fff; }
+    .ps-box.warn { border-color:#f97316; background:#fff7ed; }
+    .ps-label { font-size:.65rem; font-weight:700; text-transform:uppercase; letter-spacing:.05em;
+                color:var(--muted); margin-bottom:.4rem; }
+    .ps-box.warn .ps-label { color:#c2410c; }
+    .ps-item { display:flex; align-items:flex-start; gap:.45rem; font-size:.78rem;
+               color:#374151; margin-bottom:.3rem; line-height:1.4; }
+    .ps-item:last-child { margin-bottom:0; }
+    .ps-icon { flex-shrink:0; font-size:.85rem; margin-top:1px; }
+    .ps-item.warn-item { color:#9a3412; font-weight:600; }
+    .cs-tag { display:inline-block; background:#fee2e2; color:#991b1b; border-radius:4px;
+              padding:.05rem .35rem; font-size:.7rem; font-weight:700; margin-left:.3rem;
+              border:1px solid #fca5a5; }
+
     #plan-body { font-size:.78rem; color:#374151; line-height:1.6; max-height:220px;
                  overflow-y:auto; white-space:pre-wrap; word-break:break-word;
                  border:1px solid var(--border); border-radius:6px; padding:.75rem;
                  background:#fff; margin-top:.4rem; display:none; }
+
+    /* communitySeg alert */
+    #cs-alert { display:none; border:2px solid #ef4444; border-radius:8px; background:#fef2f2;
+                padding:.7rem 1rem; margin-bottom:.65rem; font-size:.82rem; }
+    #cs-alert strong { color:#991b1b; }
+    #cs-alert ul { margin:.3rem 0 0 1.1rem; color:#7f1d1d; font-size:.78rem; line-height:1.6; }
   </style>
 </head>
 <body>
@@ -160,8 +183,27 @@
   <div class="plan-header">
     <span class="plan-header-icon">📋</span>
     <span class="plan-header-title">Segment plan received — Claude will use this to guide list building</span>
-    <button class="plan-toggle" onclick="togglePlan()">Show plan</button>
+    <button class="plan-toggle" onclick="togglePlan()">Show full plan</button>
   </div>
+
+  <!-- communitySeg alert (shown if plan references communitySeg lists) -->
+  <div id="cs-alert">
+    <strong>⛔ communitySeg lists detected — do not use these</strong>
+    <ul id="cs-list"></ul>
+  </div>
+
+  <!-- Summary grid: lists to build + lists to reuse -->
+  <div class="plan-summary">
+    <div class="ps-box" id="ps-build">
+      <div class="ps-label">📝 Lists to build</div>
+      <div id="ps-build-items"><span style="color:var(--muted);font-size:.78rem">Parsing plan…</span></div>
+    </div>
+    <div class="ps-box" id="ps-reuse">
+      <div class="ps-label">♻️ Lists to reuse / clone</div>
+      <div id="ps-reuse-items"><span style="color:var(--muted);font-size:.78rem">Parsing plan…</span></div>
+    </div>
+  </div>
+
   <pre id="plan-body"></pre>
 </div>
 
@@ -446,7 +488,96 @@
     const btn  = document.querySelector(".plan-toggle");
     const open = body.style.display === "block";
     body.style.display = open ? "none" : "block";
-    btn.textContent    = open ? "Show plan" : "Hide plan";
+    btn.textContent    = open ? "Show full plan" : "Hide full plan";
+  }
+
+  function parsePlan(plan) {
+    const lines = plan.split("\n");
+
+    // ── communitySeg detection ─────────────────────────────────────────────
+    const CS_RE = /communityseg|community_seg|communitysegment/i;
+    const csLines = lines.filter(l => CS_RE.test(l)).map(l => l.trim()).filter(Boolean);
+    if (csLines.length) {
+      document.getElementById("cs-alert").style.display = "block";
+      document.getElementById("cs-list").innerHTML =
+        csLines.map(l => `<li>${highlightCS(l)}</li>`).join("");
+    }
+
+    // ── Lists to build ─────────────────────────────────────────────────────
+    // Look for lines that describe a named list being created/built
+    const BUILD_RE = /(?:^|\s)(list\s*\d|master list name|recommended.*list|create|build|new list)[:\s–\-](.{5,80})/i;
+    const LIST_NAME_RE = /^[-*•]\s*\*{0,2}(list\s*\d[^\n:]{0,60})/i;
+    const NAMED_LIST_RE = /(?:list name|master list)[:\s–]+([^\n]{5,80})/i;
+
+    const toBuild = [];
+    lines.forEach(line => {
+      const t = line.trim();
+      if (!t) return;
+      // "List 1:", "List 2:", "List Name:", bullet items describing a list
+      const m = t.match(/^(?:[-*•]\s*)?(?:\*{1,2})?(list\s*[12]|list\s*name|master list)[:\s–\-]+(.{5,80})/i)
+             || t.match(/^(?:\d[.)]\s*)?((?:all past registrant|registrant.*web|web visitor)[^\n]{0,60})/i);
+      if (m) {
+        const label = (m[2] || m[1] || t).replace(/\*+/g, "").trim().slice(0, 100);
+        if (label.length > 4 && !CS_RE.test(label)) toBuild.push(label);
+      }
+      // "Recommended master list name: …"
+      const nm = t.match(NAMED_LIST_RE);
+      if (nm) {
+        const label = nm[1].replace(/\*+/g, "").trim().slice(0, 100);
+        if (label.length > 4 && !toBuild.includes(label)) toBuild.push(label);
+      }
+    });
+
+    const buildEl = document.getElementById("ps-build-items");
+    if (toBuild.length) {
+      buildEl.innerHTML = toBuild.slice(0, 6).map(l =>
+        `<div class="ps-item"><span class="ps-icon">📝</span><span>${escHtml(l)}</span></div>`
+      ).join("");
+    } else {
+      buildEl.innerHTML = `<div class="ps-item"><span class="ps-icon">📝</span><span>List 1 — All Past Registrants<br>List 2 — Registrants + Web Visitors</span></div>`;
+    }
+
+    // ── Lists to reuse / clone ─────────────────────────────────────────────
+    const REUSE_RE = /(?:clone|reuse|based on|reference list|copy of|from list|existing list)[:\s]+([^\n]{5,100})/i;
+    const MASTER_RE = /(?:master list|brand master)[:\s–]+([^\n]{5,80})/i;
+    const toReuse = [];
+    lines.forEach(line => {
+      const t = line.trim();
+      const m = t.match(REUSE_RE) || t.match(MASTER_RE);
+      if (m) {
+        const label = m[1].replace(/\*+/g, "").trim().slice(0, 100);
+        if (label.length > 4) {
+          const isCS = CS_RE.test(label);
+          toReuse.push({ label, isCS });
+        }
+      }
+    });
+
+    const reuseEl = document.getElementById("ps-reuse-items");
+    if (toReuse.length) {
+      reuseEl.innerHTML = toReuse.slice(0, 6).map(({ label, isCS }) =>
+        `<div class="ps-item${isCS ? " warn-item" : ""}">
+          <span class="ps-icon">${isCS ? "⛔" : "♻️"}</span>
+          <span>${escHtml(label)}${isCS ? '<span class="cs-tag">communitySeg</span>' : ""}</span>
+        </div>`
+      ).join("");
+      if (toReuse.some(r => r.isCS)) {
+        document.getElementById("ps-reuse").classList.add("warn");
+      }
+    } else {
+      reuseEl.innerHTML = `<div class="ps-item"><span class="ps-icon">🔍</span><span style="color:var(--muted)">No specific reuse candidates found in plan</span></div>`;
+    }
+  }
+
+  function highlightCS(text) {
+    return escHtml(text).replace(
+      /(communityseg|community_seg|communitysegment)/gi,
+      '<mark style="background:#fecaca;color:#7f1d1d;padding:0 2px;border-radius:3px">$1</mark>'
+    );
+  }
+
+  function escHtml(s) {
+    return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
   }
 
   const qs = new URLSearchParams(location.search);
@@ -461,6 +592,7 @@
           storedPlan = d.plan;
           document.getElementById("plan-body").textContent = d.plan;
           document.getElementById("plan-banner").style.display = "block";
+          parsePlan(d.plan);
         }
       })
       .catch(() => {});
