@@ -3,22 +3,25 @@ FastAPI backend — 3 structured endpoints + free-chat.
 Works in Direct Mode (no Anthropic key) or Claude Mode (key in .env).
 """
 import os
+import asyncio
 import logging
 import traceback
 from fastapi import FastAPI, HTTPException
 import hubspot_tools
 import content_tools
 from event_brands import lookup_event_brand, get_brand_events
+from stage_detector import detect_stage
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%H:%M:%S",
-)
 log = logging.getLogger("email-staging")
+log.setLevel(logging.INFO)
+if not log.handlers:
+    _h = logging.StreamHandler()
+    _h.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", "%H:%M:%S"))
+    log.addHandler(_h)
+    log.propagate = False
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
-from models import PlanRequest, CloneRequest, ContentRequest, ChatRequest
+from models import PlanRequest, CloneRequest, ContentRequest, ChatRequest, GenerateContentRequest
 import session_store
 import agent
 from config import ANTHROPIC_API_KEY, HUBSPOT_PORTAL_ID
@@ -53,13 +56,17 @@ async def create_plan(req: PlanRequest):
     session = session_store.create()
     log.info(f"[PLAN] url={req.url!r} session={session.session_id[:8]}")
 
-    # ── Step A: Fetch URL + resolve authoritative brand BEFORE calling Claude ──
+    # ── Step A: Full event scrape (event + registration page + images) ─────────
     try:
-        url_data = content_tools.fetch_url(req.url)
+        url_data = content_tools.scrape_event_full(req.url)
         session.meta["url_data"] = url_data
-        log.info(f"[PLAN] url_data: event={url_data.get('event_name')!r} brand={url_data.get('brand_name')!r} location={url_data.get('location')!r}")
+        log.info(
+            f"[PLAN] scrape: event={url_data.get('event_name')!r} "
+            f"brand={url_data.get('brand_name')!r} location={url_data.get('location')!r} "
+            f"hero={bool(url_data.get('hero_image_url'))} speakers={len(url_data.get('speakers', []))}"
+        )
     except Exception as e:
-        log.warning(f"[PLAN] fetch_url failed: {e}")
+        log.warning(f"[PLAN] scrape_event_full failed: {e}")
         url_data = {}
 
     raw_event = url_data.get("event_name", "")
@@ -158,6 +165,13 @@ async def create_plan(req: PlanRequest):
         except Exception as e:
             log.warning(f"[PLAN] search_emails_for_event failed: {e}")
 
+    # ── Step B: Stage detection ───────────────────────────────────────────────
+    stage_info = detect_stage(url_data.get("event_dates", []))
+    session.meta["stage_info"] = stage_info
+    log.info(f"[PLAN] Stage: {stage_info['name']!r} ({stage_info['funnel']}, days={stage_info['days_to_event']})")
+    # Content generation happens separately via /api/generate-content
+    # (keeps /api/plan fast; frontend calls it automatically after plan loads)
+
     # Build brand hint for Claude so it uses the right short code in the email name
     brand_hint = None
     if short_brand_name:
@@ -200,8 +214,59 @@ async def create_plan(req: PlanRequest):
         if eid:
             source_email = {"id": eid, "name": ename}
 
-    return {"session_id": session.session_id, "message": text, "phase": session.phase, "mode": MODE,
-            "source_email": source_email}
+    return {
+        "session_id":   session.session_id,
+        "message":      text,
+        "phase":        session.phase,
+        "mode":         MODE,
+        "source_email": source_email,
+        "stage":        stage_info,
+    }
+
+
+# ── Step 1b — Generate email content ─────────────────────────────────────────
+
+@app.post("/api/generate-content")
+async def generate_content(req: GenerateContentRequest):
+    """
+    Called automatically by the frontend after the plan loads.
+    Generates subject, preview text, and full HTML email body via Claude.
+    Stores results in session and returns them.
+    """
+    session_id = req.session_id
+    session = session_store.get(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    log.info(f"[GEN-CONTENT] session={session_id[:8]}")
+    try:
+        url_data      = session.meta.get("url_data", {})
+        stage_info    = session.meta.get("stage_info", {})
+        brand_history = session.meta.get("brand_history")
+
+        change_request = req.change_request or ""
+        loop = asyncio.get_running_loop()
+        generated = await loop.run_in_executor(
+            None,
+            lambda: agent.generate_email_content(url_data, stage_info, brand_history,
+                                                  change_request=change_request)
+        )
+
+        session.meta["generated_subject"] = generated["subject"]
+        session.meta["generated_preview"]  = generated["preview_text"]
+        session.meta["generated_html"]     = generated["html"]
+        session_store.update(session)
+
+        log.info(f"[GEN-CONTENT] done: subject={generated['subject']!r} html_len={len(generated['html'])}")
+        return {
+            "session_id":        session_id,
+            "generated_subject": generated["subject"],
+            "generated_preview": generated["preview_text"],
+            "generated_html":    generated["html"],
+        }
+    except Exception as exc:
+        log.error(f"[GEN-CONTENT] failed: {exc}\n{traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 # ── Step 2 — Clone email ─────────────────────────────────────────────────────
@@ -245,18 +310,20 @@ async def clone_email(req: CloneRequest):
             detail="Email was not created in HubSpot — Claude did not call the clone tool. Please try again."
         )
 
-    session.phase = "cloned"
+    content_applied = session.meta.get("content_applied", False)
+    session.phase = "complete" if content_applied else "cloned"
     session.email_id = real_email_id
     session.draft_url = f"https://app.hubspot.com/email/{HUBSPOT_PORTAL_ID}/edit/{real_email_id}/settings"
     session_store.update(session)
-    log.info(f"[CLONE] verified email_id={real_email_id}")
+    log.info(f"[CLONE] verified email_id={real_email_id} content_applied={content_applied}")
 
     return {
-        "session_id": req.session_id,
-        "message": text,
-        "phase": session.phase,
-        "email_id": session.email_id,
-        "draft_url": session.draft_url,
+        "session_id":      req.session_id,
+        "message":         text,
+        "phase":           session.phase,
+        "email_id":        session.email_id,
+        "draft_url":       session.draft_url,
+        "content_applied": content_applied,
     }
 
 

@@ -1,5 +1,6 @@
 const API = "/api";
 let sessionId = null;
+let _generatedHtml = "";
 
 // ── Step navigation ──────────────────────────────────────────────────────────
 
@@ -132,7 +133,8 @@ function _renderTables(html) {
 }
 
 function escapeHtml(str) {
-  return str
+  if (str == null) return "";
+  return String(str)
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
@@ -155,6 +157,20 @@ function showDraftLink(containerId, url) {
 
 // ── Step 1: Generate plan ────────────────────────────────────────────────────
 
+const FUNNEL_COLORS = {
+  "TOFU":      "#16a34a",
+  "MOFU":      "#d97706",
+  "BOFU":      "#dc2626",
+  "FOLLOW-UP": "#7c3aed",
+};
+
+const STAGE_ICONS = {
+  "TOFU":      "📢",
+  "MOFU":      "🎯",
+  "BOFU":      "🔥",
+  "FOLLOW-UP": "💌",
+};
+
 async function generatePlan() {
   const url = document.getElementById("event_url").value.trim();
   const extraContext = document.getElementById("extra_context").value.trim();
@@ -169,8 +185,10 @@ async function generatePlan() {
     return;
   }
 
-  setLoading("step1-status", "Claude is researching the event and building your staging plan…");
+  setLoading("step1-status", "Claude is researching the event, detecting campaign stage, and generating email content…");
   document.getElementById("plan-btn").disabled = true;
+
+  let planSessionId = null;
 
   try {
     const resp = await fetch(`${API}/plan`, {
@@ -181,35 +199,185 @@ async function generatePlan() {
     const data = await resp.json();
     if (!resp.ok) throw new Error(data.detail || "Request failed");
 
-    sessionId = data.session_id;
+    planSessionId = data.session_id;
+    sessionId = planSessionId;
     clearStatus("step1-status");
     showStep(2);
-    renderMessage("plan-message", data.message);
 
-    // Show reference email chip
-    const chip = document.getElementById("source-email-chip");
-    if (data.source_email && data.source_email.name) {
-      document.getElementById("source-email-name").textContent = data.source_email.name;
-      chip.style.display = "flex";
-      chip.classList.remove("hidden");
-    } else {
-      chip.style.display = "none";
-    }
+    // ── Render plan text (isolated so errors don't block content generation)
+    try { renderMessage("plan-message", data.message); } catch (_) {}
+
+    // ── Stage badge (isolated)
+    try {
+      const badge = document.getElementById("stage-badge");
+      if (badge && data.stage && data.stage.name && data.stage.name !== "Unknown") {
+        const s = data.stage;
+        badge.style.background = FUNNEL_COLORS[s.funnel] || "#6b7280";
+        const iconEl = document.getElementById("stage-icon");
+        const nameEl = document.getElementById("stage-name-label");
+        const funnelEl = document.getElementById("stage-funnel-label");
+        const daysEl = document.getElementById("stage-days-label");
+        if (iconEl)   iconEl.textContent   = STAGE_ICONS[s.funnel] || "📅";
+        if (nameEl)   nameEl.textContent   = s.name;
+        if (funnelEl) funnelEl.textContent = `· ${s.funnel}`;
+        if (daysEl && s.days_to_event != null) {
+          const d = s.days_to_event;
+          daysEl.textContent = d > 0 ? `(${d}d to event)` : d === 0 ? "(today!)" : `(${Math.abs(d)}d post-event)`;
+        }
+        badge.classList.remove("hidden");
+      } else if (badge) {
+        badge.classList.add("hidden");
+      }
+    } catch (_) {}
+
+    // ── Source email chip (isolated)
+    try {
+      const chip = document.getElementById("source-email-chip");
+      const nameEl = document.getElementById("source-email-name");
+      if (chip && data.source_email && data.source_email.name) {
+        if (nameEl) nameEl.textContent = data.source_email.name;
+        chip.style.display = "flex";
+        chip.classList.remove("hidden");
+      } else if (chip) {
+        chip.style.display = "none";
+      }
+    } catch (_) {}
+
+    // ── Set loading state (isolated so it never blocks content generation)
+    try { _setContentLoading(true); } catch (_) {}
+
   } catch (err) {
-    showError("step1-status", err.message);
+    if (!planSessionId) {
+      // Plan API call failed — show error on step 1
+      showError("step1-status", err.message);
+    }
+    // If planSessionId is set, plan succeeded but a rendering error occurred —
+    // fall through to finally so content generation still fires
   } finally {
     document.getElementById("plan-btn").disabled = false;
+    // Always fire content generation if the plan API returned a session
+    if (planSessionId) {
+      generateEmailContent(planSessionId);
+    }
   }
+}
+
+// ── Content generation helpers ───────────────────────────────────────────────
+
+function _setContentLoading(loading) {
+  const approveBtn = document.getElementById("approve-btn");
+  const updateBtn  = document.getElementById("update-btn");
+  const badge      = document.getElementById("content-status-badge");
+  const subjEl     = document.getElementById("subject-display");
+  const prevEl     = document.getElementById("preview-display");
+  const frame      = document.getElementById("email-preview-frame");
+
+  if (loading) {
+    approveBtn.disabled    = true;
+    approveBtn.textContent = "⏳ Generating content…";
+    if (updateBtn) updateBtn.disabled = true;
+    if (badge)  badge.textContent  = "⏳ Generating…";
+    if (subjEl) subjEl.textContent = "⏳ Generating…";
+    if (prevEl) prevEl.textContent = "⏳ Generating…";
+    if (frame)  frame.srcdoc = `<html><body style="margin:48px 40px;font-family:Arial,sans-serif;color:#555;text-align:center">
+      <div style="font-size:36px;margin-bottom:14px">⏳</div>
+      <div style="font-size:15px;font-weight:600;margin-bottom:8px">Generating email content…</div>
+      <div style="font-size:13px;color:#888">Claude is using the official LF Events stage template<br>to write a personalised email. Takes ~60 seconds.</div>
+    </body></html>`;
+  }
+}
+
+function _applyGeneratedContent(data) {
+  const approveBtn = document.getElementById("approve-btn");
+  const updateBtn  = document.getElementById("update-btn");
+  const badge      = document.getElementById("content-status-badge");
+  const subjEl     = document.getElementById("subject-display");
+  const prevEl     = document.getElementById("preview-display");
+  const frame      = document.getElementById("email-preview-frame");
+  const sendlistEl = document.getElementById("sendlist-display");
+
+  // Fill display elements
+  if (data.generated_subject) {
+    subjEl.textContent = data.generated_subject;
+    document.getElementById("subject").value = data.generated_subject;
+  }
+  if (data.generated_preview) {
+    prevEl.textContent = data.generated_preview;
+    document.getElementById("preview_text").value = data.generated_preview;
+  }
+
+  _generatedHtml = data.generated_html || "";
+  if (_generatedHtml) frame.srcdoc = _generatedHtml;
+
+  // Update send list display if brand history has one
+  if (data.send_list_name) {
+    sendlistEl.textContent = data.send_list_name;
+  }
+
+  badge.textContent      = "✅ Ready to approve";
+  badge.style.color      = "#16a34a";
+  approveBtn.disabled    = false;
+  approveBtn.textContent = "✓ Approve & Create Email";
+  if (updateBtn) updateBtn.disabled = false;
+}
+
+async function generateEmailContent(sid, changeRequest = "") {
+  try {
+    const body = { session_id: sid };
+    if (changeRequest) body.change_request = changeRequest;
+
+    const resp = await fetch(`${API}/generate-content`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.detail || "Content generation failed");
+
+    _applyGeneratedContent(data);
+    clearStatus("change-status");
+
+  } catch (err) {
+    const frame      = document.getElementById("email-preview-frame");
+    const badge      = document.getElementById("content-status-badge");
+    const approveBtn = document.getElementById("approve-btn");
+    const updateBtn  = document.getElementById("update-btn");
+
+    frame.srcdoc = `<html><body style="margin:48px 40px;font-family:Arial,sans-serif;color:#c00;font-size:13px">
+      <strong>⚠️ Content generation failed:</strong> ${escapeHtml(err.message)}<br><br>
+      Use the "Request Changes" box to try again, or approve without auto-content.</body></html>`;
+    badge.textContent      = "⚠️ Generation failed";
+    badge.style.color      = "#dc2626";
+    approveBtn.disabled    = false;
+    approveBtn.textContent = "✓ Approve & Create Email";
+    if (updateBtn) updateBtn.disabled = false;
+    showError("change-status", err.message);
+  }
+}
+
+// ── Request changes (regenerate content with user instructions) ───────────────
+
+async function requestContentChanges() {
+  const input      = document.getElementById("change-request-input");
+  const changeText = input.value.trim();
+  if (!changeText) return;
+  if (!sessionId)  return;
+
+  setLoading("change-status", "Claude is updating the content…");
+  _setContentLoading(true);
+
+  await generateEmailContent(sessionId, changeText);
+  // Keep the change request text so user can iterate
 }
 
 // ── Step 2: Approve plan ─────────────────────────────────────────────────────
 
 async function approvePlan() {
-  const subject = document.getElementById("subject").value.trim();
+  const subject     = document.getElementById("subject").value.trim();
   const previewText = document.getElementById("preview_text").value.trim();
-  const sendListId = document.getElementById("send_list_id").value.trim();
+  const sendListId  = document.getElementById("send_list_id").value.trim();
 
-  setLoading("step2-status", "Cloning email and applying all settings…");
+  setLoading("step2-status", "Creating email, applying settings and content…");
   document.getElementById("approve-btn").disabled = true;
 
   try {
@@ -228,9 +396,18 @@ async function approvePlan() {
     if (!resp.ok) throw new Error(data.detail || "Request failed");
 
     clearStatus("step2-status");
-    showStep(3);
-    renderMessage("clone-message", data.message);
-    if (data.draft_url) showDraftLink("clone-draft-link", data.draft_url);
+
+    if (data.content_applied) {
+      // Content was auto-applied — go directly to Done
+      showStep(4);
+      renderMessage("done-message", data.message);
+      if (data.draft_url) showDraftLink("done-draft-link", data.draft_url);
+    } else {
+      // No auto-content — show optional override step
+      showStep(3);
+      renderMessage("clone-message", data.message);
+      if (data.draft_url) showDraftLink("clone-draft-link", data.draft_url);
+    }
   } catch (err) {
     showError("step2-status", err.message);
   } finally {
@@ -311,13 +488,29 @@ function onChatKey(event, containerId, inputId) {
 
 function startOver() {
   sessionId = null;
+  _generatedHtml = "";
   document.getElementById("event_url").value = "";
   document.getElementById("extra_context").value = "";
   document.getElementById("subject").value = "";
   document.getElementById("preview_text").value = "";
   clearList();
   document.getElementById("content").value = "";
-  ["step1-status","step2-status","step3-status","plan-message","clone-message","clone-draft-link","done-message","done-draft-link"].forEach(clearStatus);
+
+  // Reset stage badge, content displays
+  document.getElementById("stage-badge").classList.add("hidden");
+  const frame = document.getElementById("email-preview-frame");
+  if (frame) frame.srcdoc = "";
+  const subjEl = document.getElementById("subject-display");
+  const prevEl = document.getElementById("preview-display");
+  if (subjEl) subjEl.textContent = "⏳ Generating…";
+  if (prevEl) prevEl.textContent = "⏳ Generating…";
+  const badge = document.getElementById("content-status-badge");
+  if (badge) { badge.textContent = "⏳ Generating…"; badge.style.color = ""; }
+  const changeInput = document.getElementById("change-request-input");
+  if (changeInput) changeInput.value = "";
+
+  ["step1-status","step2-status","step3-status","plan-message","clone-message",
+   "clone-draft-link","done-message","done-draft-link"].forEach(clearStatus);
   showStep(1);
 }
 

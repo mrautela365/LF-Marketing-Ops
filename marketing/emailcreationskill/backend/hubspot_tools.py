@@ -314,16 +314,22 @@ def update_email_settings(
     if frm:
         payload["from"] = frm
 
-    # HubSpot marketing emails store send/suppression lists in `to.contactIlsLists`,
-    # NOT in sendOptions (which is always null). PATCH merges nested objects so
-    # sending only contactIlsLists leaves contactLists / contactIds intact.
+    # HubSpot stores send/suppression lists in contactIlsLists (v3 ILS) and/or
+    # contactLists (legacy). We write to both so the setting lands regardless of
+    # which format the receiving email expects.
     if send_list_id or suppression_list_ids is not None:
         ils: dict = {}
+        legacy: dict = {}
         if send_list_id:
-            ils["include"] = [str(send_list_id)]
+            ils["include"]    = [str(send_list_id)]
+            legacy["include"] = [int(send_list_id)]
         if suppression_list_ids is not None:
-            ils["exclude"] = [str(s) for s in suppression_list_ids]
-        payload["to"] = {"contactIlsLists": ils}
+            ils["exclude"]    = [str(s) for s in suppression_list_ids]
+            legacy["exclude"] = [int(s) for s in suppression_list_ids if str(s).isdigit()]
+        payload["to"] = {
+            "contactIlsLists": ils,
+            "contactLists":    legacy,
+        }
 
     _patch(f"/marketing/v3/emails/{email_id}", payload)
     return {"success": True, "email_id": email_id, "fields_updated": list(payload.keys())}
@@ -332,50 +338,60 @@ def update_email_settings(
 # ── Tool 4: Update email body content ───────────────────────────────────────
 
 def update_email_content(email_id: str, html_content: str) -> dict:
-    """Replace email body. Auto-detects html_body vs widget-module template."""
+    """Replace email body. Handles classic HTML and drag-and-drop templates."""
+    import logging
+    log = logging.getLogger("email-staging")
+
     email = _get(f"/marketing/v3/emails/{email_id}")
     content = email.get("content") or {}
+    log.info(f"[CONTENT] content keys: {list(content.keys())}")
 
-    if "htmlBody" in content or "html_body" in content:
-        updated_content = {**content, "htmlBody": html_content}
-    elif "widgets" in content or "flexAreas" in content:
-        widgets = dict(content.get("widgets") or {})
-        replaced = False
+    TEXT_TYPES = {"rich_text", "text", "email_body", "simple_text", "module", "rich_text_module"}
+
+    def _inject_into_widgets(widgets: dict, base_content: dict) -> dict | None:
+        """Find first body widget (skip preview_text), inject HTML, return updated content or None."""
         for key, widget in widgets.items():
-            if widget.get("type") in ("rich_text", "text", "email_body", "simple_text"):
-                body = dict(widget.get("body") or {})
+            if key == "preview_text":
+                continue
+            wtype = widget.get("type", "")
+            body = dict(widget.get("body") or {})
+            if wtype in TEXT_TYPES or "html" in body or "value" in body or "text" in body:
                 body["html"] = html_content
-                widgets[key] = {**widget, "body": body}
-                replaced = True
-                break
-        if not replaced:
-            # No matching widget found — fall back to htmlBody
-            updated_content = {**content, "htmlBody": html_content}
-        else:
-            updated_content = {**content, "widgets": widgets}
-    else:
-        updated_content = {**content, "htmlBody": html_content}
+                body["value"] = html_content
+                updated = {**widgets, key: {**widget, "body": body}}
+                log.info(f"[CONTENT] injected into widget '{key}' (type={wtype!r})")
+                return {**base_content, "widgets": updated}
+        return None
 
-    _patch(f"/marketing/v3/emails/{email_id}", {"content": updated_content})
-    return {"success": True, "email_id": email_id}
+    # ── Classic HTML email ──────────────────────────────────────────────────
+    if "htmlBody" in content or "html_body" in content:
+        _patch(f"/marketing/v3/emails/{email_id}", {
+            "content": {**content, "htmlBody": html_content}
+        })
+        return {"success": True, "email_id": email_id, "method": "htmlBody"}
+
+    # ── DnD: try clone's own widgets first ──────────────────────────────────
+    widgets = dict(content.get("widgets") or {})
+    log.info(f"[CONTENT] clone widgets: {list(widgets.keys())}")
+
+    body_widgets = [k for k in widgets if k != "preview_text"]
+    if body_widgets:
+        updated = _inject_into_widgets(widgets, content)
+        if updated:
+            _patch(f"/marketing/v3/emails/{email_id}", {"content": updated})
+            return {"success": True, "email_id": email_id, "method": "clone_widget"}
+
+    # ── DnD clone is empty — replace content entirely with htmlBody.
+    # Send ONLY {"content": {"htmlBody": ...}} without spreading existing DnD
+    # structure so HubSpot replaces rather than deep-merges, clearing the
+    # empty DnD widget scaffold and rendering our HTML instead.
+    log.info("[CONTENT] DnD clone has no body widgets — replacing with htmlBody only")
+    _patch(f"/marketing/v3/emails/{email_id}", {"content": {"htmlBody": html_content}})
+    return {"success": True, "email_id": email_id, "method": "htmlBody_dnd_replace"}
 
 
 # ── Tool 5: Search contact lists ────────────────────────────────────────────
 
 def search_hubspot_lists(search_term: str) -> dict:
     """Search HubSpot contact lists by name."""
-    try:
-        data = _post("/contacts/v1/lists/search", {"query": search_term, "count": 10})
-        lists = data.get("lists") or []
-        return {
-            "lists": [
-                {
-                    "id": str(l.get("listId")),
-                    "name": l.get("name"),
-                    "size": (l.get("metaData") or {}).get("size", 0),
-                }
-                for l in lists
-            ]
-        }
-    except Exception as e:
-        return {"lists": [], "error": str(e)}
+    return search_lists(search_term)

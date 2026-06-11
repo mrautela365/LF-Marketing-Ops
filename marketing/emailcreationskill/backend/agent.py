@@ -194,6 +194,12 @@ TOOLS = [
 
 import logging
 _log = logging.getLogger("email-staging.agent")
+_log.setLevel(logging.INFO)
+if not _log.handlers:
+    _lh = logging.StreamHandler()
+    _lh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", "%H:%M:%S"))
+    _log.addHandler(_lh)
+    _log.propagate = False
 
 # Tracks the email ID cloned in the current session — only this ID may be modified.
 # Set by clone_email tool call, checked before any update operation.
@@ -362,18 +368,37 @@ def _sdk_run_turn_cc(messages: list, user_message: str) -> tuple[str, list]:
 
     def _call_claude(stdin_text: str) -> str:
         """Call claude --print with prompt via stdin. Returns stdout text."""
-        result = subprocess.run(
+        import sys as _sys
+        popen_kw = {}
+        if _sys.platform == "win32":
+            popen_kw["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+
+        proc = subprocess.Popen(
             [CLAUDE_CLI, "--print", "--dangerously-skip-permissions"],
-            input=stdin_text,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=90,
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            **popen_kw,
         )
-        if result.returncode != 0:
-            raise RuntimeError(f"Claude CLI error: {result.stderr.strip()}")
-        return result.stdout.strip()
+        try:
+            stdout_b, stderr_b = proc.communicate(
+                input=stdin_text.encode("utf-8", errors="replace"), timeout=90
+            )
+        except subprocess.TimeoutExpired:
+            if _sys.platform == "win32":
+                subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                    capture_output=True,
+                )
+            else:
+                proc.kill()
+            try:
+                proc.communicate(timeout=5)
+            except Exception:
+                pass
+            raise RuntimeError("Claude CLI timed out after 90s")
+
+        if proc.returncode != 0:
+            raise RuntimeError(f"Claude CLI error: {stderr_b.decode('utf-8', errors='replace').strip()}")
+        return stdout_b.decode("utf-8", errors="replace").strip()
 
     # Pull session email ID from conversation history (set during clone step)
     session_email_id: str | None = _session_email_id
@@ -474,7 +499,7 @@ def _sdk_run_turn_cc(messages: list, user_message: str) -> tuple[str, list]:
 
 # ── Single-turn Claude helper (no tools, plain text) ─────────────────────────
 
-def _claude_text(prompt: str, max_tokens: int = 100) -> str:
+def _claude_text(prompt: str, max_tokens: int = 100, timeout: int = 60) -> str:
     """Ask Claude a simple question and return plain text. No tools, no history."""
     if ANTHROPIC_API_KEY:
         import anthropic
@@ -486,14 +511,173 @@ def _claude_text(prompt: str, max_tokens: int = 100) -> str:
         )
         return "".join(b.text for b in resp.content if hasattr(b, "text")).strip()
     else:
-        result = subprocess.run(
+        import sys as _sys
+        popen_kw = {}
+        if _sys.platform == "win32":
+            popen_kw["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+
+        proc = subprocess.Popen(
             [CLAUDE_CLI, "--print", "--dangerously-skip-permissions"],
-            input=prompt, capture_output=True, text=True,
-            encoding="utf-8", errors="replace", timeout=45,
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            **popen_kw,
         )
-        if result.returncode != 0:
-            raise RuntimeError(f"Claude CLI: {result.stderr.strip()}")
-        return result.stdout.strip()
+        try:
+            stdout_b, stderr_b = proc.communicate(
+                input=prompt.encode("utf-8", errors="replace"), timeout=timeout
+            )
+        except subprocess.TimeoutExpired:
+            if _sys.platform == "win32":
+                subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                    capture_output=True,
+                )
+            else:
+                proc.kill()
+            try:
+                proc.communicate(timeout=5)
+            except Exception:
+                pass
+            raise RuntimeError(f"Claude CLI timed out after {timeout}s generating content")
+
+        if proc.returncode != 0:
+            raise RuntimeError(f"Claude CLI: {stderr_b.decode('utf-8', errors='replace').strip()}")
+        return stdout_b.decode("utf-8", errors="replace").strip()
+
+
+def generate_email_content(
+    event_details: dict,
+    stage_info: dict,
+    brand_history: dict | None,
+    change_request: str = "",
+) -> dict:  # noqa: C901
+    """
+    Generate subject, preview text, and full HTML email body.
+
+    Uses the official LF Events Marketing Journey stage templates as the base,
+    then asks Claude to substitute real event details and render as HTML.
+    Returns: {subject, preview_text, html}
+    """
+    import re as _re
+    from email_templates import get_template
+
+    event_name    = event_details.get("event_name", "")
+    event_dates   = event_details.get("event_dates", [])
+    location      = event_details.get("location", "")
+    description   = (event_details.get("description") or "")[:400]
+    url           = event_details.get("url", "")
+    hero_img      = event_details.get("hero_image_url", "")
+    speakers      = event_details.get("speakers", [])
+    topics        = event_details.get("topics", [])
+    reg           = event_details.get("registration") or {}
+
+    stage_name    = stage_info.get("name", "")
+    funnel        = stage_info.get("funnel", "")
+    cta_label     = stage_info.get("cta_label", "Register Now")
+    event_date    = stage_info.get("event_date_str", "") or (event_dates[0] if event_dates else "")
+    from_name     = (brand_history or {}).get("from_name") or "Linux Foundation Events"
+    dates_display = event_dates[0] if event_dates else event_date
+
+    # Get the official stage template from the Marketing Journey dashboard
+    tmpl = get_template(stage_name) or get_template("Event Announcement")
+    template_subject  = tmpl["subject"]
+    template_preheader = tmpl["preheader"]
+    template_body     = tmpl["body"]
+
+    # Build supplementary context
+    reg_lines = []
+    if reg.get("ticket_types"):
+        reg_lines.append(f"Ticket info: {'; '.join(reg['ticket_types'][:2])}")
+    if reg.get("deadlines"):
+        reg_lines.append(f"Deadline: {reg['deadlines'][0]}")
+    if reg.get("url"):
+        reg_lines.append(f"Register at: {reg['url']}")
+    reg_info = "\n".join(reg_lines)
+
+    speakers_str = ", ".join(speakers[:3]) if speakers else ""
+    topics_str   = ", ".join(topics[:4])   if topics   else "Open Source, Cloud Native, Linux"
+
+    hero_tag = (
+        f'<img src="{hero_img}" width="600" alt="{event_name}" '
+        'style="display:block;width:100%;max-width:600px;height:auto">'
+        if hero_img
+        else '<div style="background:#0099CC;height:10px;width:100%"></div>'
+    )
+
+    prompt = f"""You are a senior email marketer for Linux Foundation open source events.
+
+Your job: take the official stage template below and personalise it for a specific event,
+then render it as a production-ready HTML email.
+
+━━━ EVENT DETAILS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Event Name  : {event_name}
+Date        : {dates_display}
+Location    : {location}
+Event URL   : {url}
+Description : {description}
+Speakers    : {speakers_str or "To be announced"}
+Topics      : {topics_str}
+{reg_info}
+
+━━━ CAMPAIGN STAGE ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Stage  : {stage_name} ({funnel})
+CTA    : {cta_label}
+
+━━━ OFFICIAL TEMPLATE (substitute [Event Name], [City], [Dates], [Date] etc.) ━━━
+Subject   : {template_subject}
+Preheader : {template_preheader}
+
+Body:
+{template_body}
+
+━━━ YOUR TASK ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. Replace every placeholder ([Event Name], [City], [Dates], [Date], [LINK], etc.)
+   with the real event details provided above.
+2. Keep {{{{first_name}}}}, {{{{company_name}}}} and similar HubSpot tokens as-is.
+3. Remove any sections that don't apply (e.g. co-located events if none listed).
+4. Render everything as a complete HTML email with:
+   - DOCTYPE, <html>, <head>, <body>
+   - Table-based layout, max-width 600px, centered, inline CSS only
+   - Header: {hero_tag}
+   - Body text in Arial, #333333, line-height 1.6
+   - CTA button: background #0099CC, white text, border-radius 4px, links to {url}
+   - Footer: "Linux Foundation Events" + <a href="{{{{unsubscribe_url}}}}">Unsubscribe</a>
+   - Colors: headers #003366, accents/buttons #0099CC
+
+Return ONLY a JSON object — no markdown fences, nothing before or after:
+{{"subject": "...", "preview_text": "...", "html": "..."}}
+
+subject: personalised version of the template subject (max 60 chars)
+preview_text: personalised version of the template preheader (max 90 chars)
+html: the complete rendered HTML email
+{("" if not change_request else f"{chr(10)}━━━ CHANGE REQUEST (apply this on top of everything above) ━━━{chr(10)}{change_request}{chr(10)}")}"""
+
+    raw = _claude_text(prompt, max_tokens=4000, timeout=180)
+
+    # Strip markdown fences
+    raw = _re.sub(r'^```(?:json)?\s*', '', raw.strip())
+    raw = _re.sub(r'\s*```\s*$', '', raw)
+
+    # Extract outermost JSON object
+    depth, start = 0, -1
+    for i, ch in enumerate(raw):
+        if ch == '{':
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == '}':
+            depth -= 1
+            if depth == 0 and start != -1:
+                try:
+                    data = json.loads(raw[start:i + 1])
+                    return {
+                        "subject":      str(data.get("subject", "")),
+                        "preview_text": str(data.get("preview_text", "")),
+                        "html":         str(data.get("html", "")),
+                    }
+                except json.JSONDecodeError:
+                    break
+
+    raise ValueError(f"Claude did not return valid JSON. Raw[:400]: {raw[:400]}")
 
 
 def ai_select_source_email(
@@ -658,8 +842,8 @@ def plan_turn(session, url: str, extra_context: str = None) -> tuple[str, list]:
         "| **From Name** | (from brand history) |\n"
         "| **From Address** | (from brand history) |\n"
         "| **Email Type** | (from brand history) |\n"
-        "| **Subject Line** | [REQUIRED — provide below] |\n"
-        "| **Preview Text** | [REQUIRED — provide below] |\n"
+        "| **Subject Line** | *(auto-generated — shown below the plan)* |\n"
+        "| **Preview Text** | *(auto-generated — shown below the plan)* |\n"
         "| **Send Date** | [REQUIRED — provide below] |\n\n"
         "### Audience\n\n"
         "| | |\n"
@@ -667,7 +851,8 @@ def plan_turn(session, url: str, extra_context: str = None) -> tuple[str, list]:
         "| **Send List** | (list name and contact count from brand history) |\n"
         "| **Suppression Lists** | (all suppression list IDs/names from brand history) |\n\n"
         "---\n\n"
-        "Then ask ONLY for the specific [REQUIRED] fields listed above.\n"
+        "Then ask ONLY for Send Date (the only [REQUIRED] field).\n"
+        "Do NOT ask for subject or preview text — those are auto-generated separately.\n"
         "Do NOT mention cloning, source emails, or templates anywhere.\n"
         "Do NOT say 'the plan above' or 'as shown above' — write everything in this single response."
     )
@@ -696,6 +881,24 @@ def clone_turn(session, subject=None, preview_text=None, send_list_id=None) -> t
 
     email_name = session.meta.get("email_name") or f"{brand.get('brand_name', 'Brand')} - Email"
 
+    _log.info(f"[CLONE] brand_history keys: {list((brand or {}).keys())}")
+    _log.info(f"[CLONE] source_id={source_id!r} from_name={from_name!r} from_addr={from_addr!r}")
+    _log.info(f"[CLONE] suppression={suppression!r}")
+    _log.info(f"[CLONE] included_list_ids={brand.get('included_list_ids')!r}")
+
+    # Fall back to auto-generated subject/preview from plan phase if user didn't provide them
+    effective_subject      = subject      or session.meta.get("generated_subject", "")
+    effective_preview_text = preview_text or session.meta.get("generated_preview", "")
+
+    # Auto-detect send list from brand history if user didn't pick one
+    effective_send_list = send_list_id
+    if not effective_send_list:
+        included = (brand or {}).get("included_list_ids", [])
+        if included:
+            effective_send_list = str(included[0])
+
+    _log.info(f"[CLONE] effective_send_list={effective_send_list!r} effective_subject={effective_subject[:40]!r}")
+
     # Step 1: Clone directly — bypass Claude to avoid hallucination in CLI mode
     clone_result = json.loads(
         _execute_tool("clone_email", {"source_email_id": source_id, "clone_name": email_name})
@@ -714,9 +917,9 @@ def clone_turn(session, subject=None, preview_text=None, send_list_id=None) -> t
         "suppression_list_ids": suppression,
         "email_type":           email_type,
     }
-    if subject:      settings["subject"]       = subject
-    if preview_text: settings["preview_text"]  = preview_text
-    if send_list_id: settings["send_list_id"]  = send_list_id
+    if effective_subject:      settings["subject"]       = effective_subject
+    if effective_preview_text: settings["preview_text"]  = effective_preview_text
+    if effective_send_list:    settings["send_list_id"]  = effective_send_list
 
     update_result = json.loads(
         _execute_tool("update_email_settings", settings, session_email_id=new_email_id)
@@ -724,13 +927,43 @@ def clone_turn(session, subject=None, preview_text=None, send_list_id=None) -> t
     if "error" in update_result:
         _log.warning(f"Settings update partial error: {update_result['error']}")
 
-    text = (
-        f"Email staged successfully!\n\n"
-        f"**Email Name:** {email_name}\n"
-        f"**Draft URL:** {draft_url}\n\n"
-        "Please provide the email content (Google Doc URL, raw HTML, or plain text) "
-        "and I'll update the email body."
-    )
+    # Step 3: Auto-apply generated HTML content if available from plan phase
+    content_applied = False
+    generated_html = session.meta.get("generated_html", "")
+    if generated_html:
+        try:
+            content_result = hubspot_tools.update_email_content(
+                new_email_id, generated_html
+            )
+            if "error" not in content_result:
+                content_applied = True
+                _log.info(f"[CLONE] Auto-applied HTML ({len(generated_html):,} chars) method={content_result.get('method')!r}")
+            else:
+                _log.warning(f"[CLONE] Content apply failed: {content_result.get('error')}")
+        except Exception as e:
+            _log.warning(f"[CLONE] Content apply exception: {e}")
+
+    # Store flag so main.py can include it in the response
+    session.meta["content_applied"] = content_applied
+
+    if content_applied:
+        text = (
+            f"Email staged successfully with AI-generated content!\n\n"
+            f"**Email Name:** {email_name}\n"
+            f"**Subject:** {effective_subject}\n"
+            f"**Preview Text:** {effective_preview_text}\n"
+            f"**Draft URL:** {draft_url}\n\n"
+            "The email body has been populated with AI-generated content. "
+            "Review it in HubSpot and make any edits before scheduling."
+        )
+    else:
+        text = (
+            f"Email staged successfully!\n\n"
+            f"**Email Name:** {email_name}\n"
+            f"**Draft URL:** {draft_url}\n\n"
+            "Please provide the email content (Google Doc URL, raw HTML, or plain text) "
+            "and I'll update the email body."
+        )
 
     updated_messages = session.messages + [
         {"role": "user",      "content": "I approve the plan."},

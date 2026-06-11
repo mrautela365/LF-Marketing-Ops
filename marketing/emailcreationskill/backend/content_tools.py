@@ -58,19 +58,30 @@ def fetch_url(url: str) -> dict:
         body_text = soup.get_text(separator=" ", strip=True)
 
         # ── Event dates ──────────────────────────────────────────────────────
+        month_re = (r"(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?"
+                    r"|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)")
+        # Month-first: "June 15, 2026" / "June 15-16, 2026"
         date_patterns = re.findall(
-            r"\b(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|"
-            r"Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)"
-            r"[\s,]+\d{1,2}(?:st|nd|rd|th)?(?:[\s,–\-]+\d{1,2}(?:st|nd|rd|th)?[\s,]+)?20\d{2}\b",
+            month_re + r"[\s,]+\d{1,2}(?:st|nd|rd|th)?"
+            r"(?:[\s,–\-]+\d{1,2}(?:st|nd|rd|th)?[\s,]+)?20\d{2}\b",
             body_text,
         )
-        # Also look for short date ranges like "June 23-25, 2026"
-        short_dates = re.findall(
-            r"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*"
-            r"[\s,]+\d{1,2}(?:[-–]\d{1,2})?,?\s*20\d{2}\b",
+        # Day-first: "15-16 June 2026" / "15 June 2026"
+        day_first = re.findall(
+            r"\b\d{1,2}(?:st|nd|rd|th)?(?:[-–]\d{1,2}(?:st|nd|rd|th)?)?\s+" + month_re + r"\s+20\d{2}\b",
             body_text,
         )
-        all_dates = list(dict.fromkeys(date_patterns + short_dates))[:3]
+        # Normalize day-first → "June 15, 2026" so stage_detector can parse it
+        def _normalize_day_first(s: str) -> str:
+            m = re.match(
+                r"(\d{1,2})(?:st|nd|rd|th)?(?:[-–]\d{1,2}(?:st|nd|rd|th)?)?\s+"
+                r"(" + month_re[4:-1] + r")\s+(20\d{2})",
+                s, re.I,
+            )
+            return f"{m.group(2)} {m.group(1)}, {m.group(3)}" if m else s
+
+        normalized_day_first = [_normalize_day_first(d) for d in day_first]
+        all_dates = list(dict.fromkeys(date_patterns + normalized_day_first))[:3]
 
         # ── Location ─────────────────────────────────────────────────────────
         location = ""
@@ -117,6 +128,119 @@ def fetch_url(url: str) -> dict:
         }
     except Exception as exc:
         return {"url": url, "error": str(exc)}
+
+
+def scrape_event_full(url: str) -> dict:
+    """
+    Enhanced event scraping: extends fetch_url with hero/logo images,
+    speaker names, topic tags, and registration page details.
+    """
+    base = fetch_url(url)
+
+    try:
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        resp = requests.get(url, timeout=15, headers=headers, allow_redirects=True)
+        resp.raise_for_status()
+
+        from bs4 import BeautifulSoup
+        from urllib.parse import urlparse, urljoin
+        soup = BeautifulSoup(resp.text, "html.parser")
+        parsed_url = urlparse(url)
+        base_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
+
+        # ── Hero image (OG image is most reliable) ───────────────────────────
+        og_image = soup.find("meta", property="og:image")
+        hero_image_url = og_image["content"].strip() if og_image and og_image.get("content") else ""
+
+        # ── Logo ─────────────────────────────────────────────────────────────
+        logo_url = ""
+        for img in soup.find_all("img"):
+            src = (img.get("src") or "").strip()
+            alt = (img.get("alt") or "").lower()
+            cls = " ".join(img.get("class") or []).lower()
+            if any(kw in (src.lower() + alt + cls) for kw in ("logo", "brand")):
+                if src.startswith("http"):
+                    logo_url = src
+                elif src.startswith("/"):
+                    logo_url = base_url + src
+                if logo_url:
+                    break
+
+        # ── Speakers ─────────────────────────────────────────────────────────
+        speakers = []
+        for el in soup.find_all(
+            ["div", "article", "li", "section"],
+            class_=re.compile(r"speaker|keynote|presenter", re.I),
+        )[:8]:
+            name_el = el.find(["h2", "h3", "h4", "strong"])
+            if name_el:
+                name = name_el.get_text(strip=True)
+                if name and 3 < len(name) < 60 and name not in speakers:
+                    speakers.append(name)
+
+        # ── Topics / tracks ───────────────────────────────────────────────────
+        topics = []
+        for el in soup.find_all(
+            ["span", "div", "li", "a"],
+            class_=re.compile(r"topic|track|tag|category|label", re.I),
+        )[:10]:
+            text = el.get_text(strip=True)
+            if text and 3 < len(text) < 50 and text not in topics:
+                topics.append(text)
+
+        # ── Registration URL ──────────────────────────────────────────────────
+        reg_url = ""
+        for a in soup.find_all("a", href=True):
+            link_text = a.get_text(strip=True).lower()
+            href = a["href"]
+            if any(kw in link_text for kw in ("register", "get ticket", "buy ticket", "attend")):
+                reg_url = urljoin(url, href)
+                break
+
+        # ── Scrape registration page ─────────────────────────────────────────
+        reg_details: dict = {}
+        if reg_url and reg_url.rstrip("/") != url.rstrip("/"):
+            try:
+                rr = requests.get(reg_url, timeout=10, headers=headers, allow_redirects=True)
+                rr.raise_for_status()
+                rt = BeautifulSoup(rr.text, "html.parser").get_text(separator=" ", strip=True)
+                ticket_types = re.findall(
+                    r"(?:Early[ -]Bird|Regular|Standard|Professional|Academic|Student)"
+                    r"[^$\n]{0,40}\$[\d,]+",
+                    rt,
+                )
+                deadlines = re.findall(
+                    r"(?:deadline|closes?|ends?|last day)[^\n.]{0,60}"
+                    r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*"
+                    r"[\s,]+\d{1,2}[^\n.]{0,20}",
+                    rt, re.IGNORECASE,
+                )
+                reg_details = {
+                    "url": reg_url,
+                    "ticket_types": ticket_types[:3],
+                    "deadlines": deadlines[:2],
+                }
+            except Exception:
+                reg_details = {"url": reg_url}
+
+        return {
+            **base,
+            "hero_image_url": hero_image_url,
+            "logo_url": logo_url,
+            "speakers": speakers[:5],
+            "topics": topics[:6],
+            "registration": reg_details,
+        }
+
+    except Exception:
+        return {
+            **base,
+            "hero_image_url": "",
+            "logo_url": "",
+            "speakers": [],
+            "topics": [],
+            "registration": {},
+        }
 
 
 def prepare_content(content_input: str) -> str:

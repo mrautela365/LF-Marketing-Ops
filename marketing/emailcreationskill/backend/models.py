@@ -22,6 +22,11 @@ class ContentRequest(BaseModel):
     content: str  # Google Doc URL or raw HTML or plain text
 
 
+class GenerateContentRequest(BaseModel):
+    session_id: str
+    change_request: str | None = None  # optional: "make subject shorter", "more urgent tone", etc.
+
+
 class ChatRequest(BaseModel):
     session_id: str
     message: str  # Free-form follow-up message to Claude
