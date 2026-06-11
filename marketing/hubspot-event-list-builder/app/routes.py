@@ -10,10 +10,45 @@ from .claude import get_queue, remove_job, start_job
 
 bp = Blueprint("main", __name__)
 
+# Temporary store: url -> segment plan text (consumed on /build)
+_plans: dict[str, str] = {}
+
 
 @bp.get("/")
 def index():
     return render_template("index.html")
+
+
+@bp.post("/receive-plan")
+def receive_plan():
+    """Accept a segment plan POSTed from the event-segment-planner (port 8081)."""
+    data = request.get_json(force=True)
+    url = (data.get("url") or "").strip()
+    plan = (data.get("plan") or "").strip()
+    if url and plan:
+        _plans[url] = plan
+    resp = Response(json.dumps({"ok": True}), mimetype="application/json")
+    resp.headers["Access-Control-Allow-Origin"] = "*"
+    return resp
+
+
+@bp.route("/receive-plan", methods=["OPTIONS"])
+def receive_plan_preflight():
+    resp = Response("", status=204)
+    resp.headers["Access-Control-Allow-Origin"] = "*"
+    resp.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
+    resp.headers["Access-Control-Allow-Headers"] = "Content-Type"
+    return resp
+
+
+@bp.get("/get-plan")
+def get_plan():
+    """Return (and consume) the stored segment plan for a given URL."""
+    url = request.args.get("url", "").strip()
+    plan = _plans.pop(url, None)
+    resp = Response(json.dumps({"plan": plan}), mimetype="application/json")
+    resp.headers["Access-Control-Allow-Origin"] = "*"
+    return resp
 
 
 @bp.post("/build")
@@ -22,7 +57,11 @@ def build():
     url = (data.get("url") or "").strip()
     if not url:
         return {"error": "url required"}, 400
-    job_id = start_job(url)
+    plan = (data.get("plan") or "").strip()
+    # Fall back to any plan stored via /receive-plan for this URL
+    if not plan:
+        plan = _plans.pop(url, "")
+    job_id = start_job(url, plan)
     return {"job_id": job_id}
 
 

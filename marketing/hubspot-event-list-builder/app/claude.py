@@ -8,7 +8,7 @@ import threading
 import uuid
 from pathlib import Path
 
-from .prompts import LIST_BUILDER_PROMPT
+from .prompts import LIST_BUILDER_PROMPT, LIST_BUILDER_PROMPT_WITH_PLAN
 
 # Path to the Claude Code binary (Windows)
 CLAUDE_EXE = (
@@ -20,13 +20,16 @@ CLAUDE_EXE = (
 _jobs: dict[str, queue.Queue] = {}
 
 
-def start_job(url: str) -> str:
+def start_job(url: str, plan: str = "") -> str:
     """Kick off a Claude run for the given event URL. Returns a job_id."""
     job_id = str(uuid.uuid4())
     q: queue.Queue = queue.Queue()
     _jobs[job_id] = q
 
-    prompt = LIST_BUILDER_PROMPT.format(url=url)
+    if plan:
+        prompt = LIST_BUILDER_PROMPT_WITH_PLAN.format(url=url, plan=plan)
+    else:
+        prompt = LIST_BUILDER_PROMPT.format(url=url)
     thread = threading.Thread(
         target=_run_claude,
         args=(job_id, prompt, q),
