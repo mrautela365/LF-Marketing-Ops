@@ -1,11 +1,12 @@
 """
 Claude agentic loop.
 
-Two modes — same interface, same tools:
-  • Anthropic SDK mode  (ANTHROPIC_API_KEY set)   → structured tool_use via API
-  • Claude Code mode    (no key)                  → tool-use loop via `claude -p` CLI subprocess
+Three modes — same interface, same tools:
+  • LiteLLM proxy mode  (LITELLM_BASE_URL + LITELLM_API_KEY set) → Anthropic SDK → LF LiteLLM cluster
+  • Anthropic SDK mode  (ANTHROPIC_API_KEY set)                  → Anthropic SDK → api.anthropic.com
+  • Claude Code mode    (neither key set)                        → claude CLI subprocess
 
-Claude decides which HubSpot APIs to call in both modes.
+Priority: LiteLLM → Anthropic → Claude Code CLI
 """
 import json
 import os
@@ -14,13 +15,26 @@ import asyncio
 import nest_asyncio
 nest_asyncio.apply()  # allows asyncio.run() inside FastAPI's event loop
 from datetime import datetime
-from config import ANTHROPIC_API_KEY, CLAUDE_MODEL
+from config import ANTHROPIC_API_KEY, CLAUDE_MODEL, LITELLM_BASE_URL, LITELLM_API_KEY
 import hubspot_tools
 import content_tools
 
 import shutil
 
-# Find the claude CLI — explicit Windows path as fallback
+# ── SDK client factory ────────────────────────────────────────────────────────
+
+def _has_sdk_key() -> bool:
+    """True when an API key is available for direct SDK calls."""
+    return bool(LITELLM_API_KEY or ANTHROPIC_API_KEY)
+
+def _make_client():
+    """Return an Anthropic SDK client pointed at the right endpoint."""
+    import anthropic
+    if LITELLM_BASE_URL and LITELLM_API_KEY:
+        return anthropic.Anthropic(api_key=LITELLM_API_KEY, base_url=LITELLM_BASE_URL)
+    return anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+
+# ── Find the claude CLI — explicit Windows path as fallback ───────────────────
 def _find_claude_cli() -> str:
     if found := shutil.which("claude"):
         return found
@@ -258,7 +272,7 @@ def _execute_tool(name: str, inputs: dict, session_email_id: str | None = None) 
         elif name == "search_hubspot_lists":
             result = hubspot_tools.search_hubspot_lists(inputs["search_term"])
         elif name == "fetch_url":
-            result = content_tools.fetch_url(inputs["url"])
+            result = content_tools.scrape_event_full(inputs["url"])
         elif name == "search_emails_for_event":
             result = hubspot_tools.search_emails_for_event(
                 inputs["brand_name"],
@@ -279,8 +293,7 @@ def _execute_tool(name: str, inputs: dict, session_email_id: str | None = None) 
 # ── Mode 1: Anthropic SDK (API key available) ─────────────────────────────────
 
 def _sdk_run_turn(messages: list, user_message: str) -> tuple[str, list]:
-    import anthropic
-    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    client = _make_client()
     system = SYSTEM_PROMPT.format(date=datetime.now().strftime("%Y-%m-%d"))
     messages = messages + [{"role": "user", "content": user_message}]
 
@@ -501,9 +514,8 @@ def _sdk_run_turn_cc(messages: list, user_message: str) -> tuple[str, list]:
 
 def _claude_text(prompt: str, max_tokens: int = 100, timeout: int = 60) -> str:
     """Ask Claude a simple question and return plain text. No tools, no history."""
-    if ANTHROPIC_API_KEY:
-        import anthropic
-        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    if _has_sdk_key():
+        client = _make_client()
         resp = client.messages.create(
             model=CLAUDE_MODEL,
             max_tokens=max_tokens,
@@ -544,6 +556,125 @@ def _claude_text(prompt: str, max_tokens: int = 100, timeout: int = 60) -> str:
         return stdout_b.decode("utf-8", errors="replace").strip()
 
 
+def fetch_asana_task_via_mcp(task_url: str) -> dict:
+    """
+    Fetch Asana task + subtask data via the Asana MCP connector (Claude Code subprocess).
+    Used when ASANA_ACCESS_TOKEN is not set — requires the Asana MCP to be authenticated
+    in the parent Claude Code session.
+    Returns the same shape as asana_tools.extract_brief().
+    """
+    import re as _re
+
+    prompt = f"""Use the Asana MCP tools to fetch task data and return it as a JSON object.
+
+Asana task URL: {task_url}
+
+Steps:
+1. Extract the task GID from the URL (it is the numeric ID after /task/)
+2. Call get_task with that GID requesting fields: name, notes, due_on, projects
+3. Call get_tasks or a subtask lookup to list subtasks of this task (fields: name, notes, gid)
+4. For any subtask named "Content" or "List Pull", read its notes carefully for URLs and instructions
+
+Return ONLY this JSON (no markdown fences, no explanation — raw JSON only):
+{{
+  "task_name": "<full parent task name>",
+  "brand_name": "<brand from task name pattern 'YYQn - BRAND - ...' — or empty string>",
+  "content_doc_url": "<first docs.google.com/document URL found in Content subtask, or empty string>",
+  "event_url": "<first LF event URL (linuxfoundation.org / cncf.io / etc.) found anywhere, or empty string>",
+  "audience_instructions": "<text from List Pull subtask notes, or empty string>",
+  "due_on": "<due date YYYY-MM-DD, or empty string>",
+  "subtask_names": ["subtask name 1", "subtask name 2"]
+}}"""
+
+    # Always use CLI subprocess — MCP tools are only available via Claude Code,
+    # not through the Anthropic SDK even if ANTHROPIC_API_KEY is set.
+    import sys as _sys
+    popen_kw = {}
+    if _sys.platform == "win32":
+        popen_kw["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+
+    proc = subprocess.Popen(
+        [CLAUDE_CLI, "--print", "--dangerously-skip-permissions"],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        **popen_kw,
+    )
+    try:
+        stdout_b, stderr_b = proc.communicate(
+            input=prompt.encode("utf-8", errors="replace"), timeout=180
+        )
+    except subprocess.TimeoutExpired:
+        if _sys.platform == "win32":
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True)
+        else:
+            proc.kill()
+        try:
+            proc.communicate(timeout=5)
+        except Exception:
+            pass
+        raise RuntimeError("Asana MCP fetch timed out after 180s")
+
+    if proc.returncode != 0:
+        raise RuntimeError(f"Claude CLI error: {stderr_b.decode('utf-8', errors='replace').strip()}")
+
+    raw = stdout_b.decode("utf-8", errors="replace").strip()
+
+    # Strip markdown code fences if present
+    if raw.startswith("```"):
+        raw = "\n".join(raw.split("\n")[1:])
+    if raw.endswith("```"):
+        raw = raw.rsplit("```", 1)[0].strip()
+
+    m = _re.search(r'\{[\s\S]+\}', raw)
+    if not m:
+        raise ValueError(f"MCP fetch returned no JSON. Response was: {raw[:300]}")
+
+    data = json.loads(m.group(0))
+    data.setdefault("email_name", data.get("task_name", ""))
+    data.setdefault("subtask_names", [])
+    return data
+
+
+def _build_email_preview(banner_url: str, body_html: str,
+                         event_url: str = "", event_name: str = "") -> str:
+    """Build a standalone preview HTML email for display in the browser iframe."""
+    if banner_url:
+        link_open  = ('<a href="' + event_url + '" target="_blank">') if event_url else ""
+        link_close = "</a>" if event_url else ""
+        banner_row = (
+            '<tr><td style="background-color:#003366;text-align:center;padding:0;">'
+            + link_open
+            + '<img src="' + banner_url + '" width="600" alt="' + event_name + '"'
+            + ' style="display:block;width:100%;max-width:600px;height:auto;">'
+            + link_close
+            + "</td></tr>"
+        )
+    else:
+        banner_row = '<tr><td style="background-color:#003366;height:8px;"></td></tr>'
+
+    return (
+        "<!DOCTYPE html><html><head>"
+        '<meta charset="UTF-8">'
+        '<meta name="viewport" content="width=device-width,initial-scale=1.0">'
+        "</head>"
+        '<body style="margin:0;padding:0;background-color:#F4F4F4;font-family:Arial,sans-serif;">'
+        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"'
+        ' style="background-color:#F4F4F4;">'
+        '<tr><td align="center" style="padding:20px 0;">'
+        '<table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0"'
+        ' style="max-width:600px;width:100%;background-color:#ffffff;'
+        'border-radius:4px;overflow:hidden;">'
+        + banner_row
+        + "<tr><td>" + body_html + "</td></tr>"
+        '<tr><td style="background-color:#F4F4F4;padding:20px 40px;'
+        'text-align:center;font-size:12px;color:#888888;">'
+        "Linux Foundation Events&nbsp;&nbsp;"
+        '<a href="{{ unsubscribe_link }}" style="color:#888888;text-decoration:underline;">'
+        "Unsubscribe</a>"
+        "</td></tr>"
+        "</table></td></tr></table></body></html>"
+    )
+
+
 def generate_email_content(
     event_details: dict,
     stage_info: dict,
@@ -566,6 +697,7 @@ def generate_email_content(
     description   = (event_details.get("description") or "")[:400]
     url           = event_details.get("url", "")
     hero_img      = event_details.get("hero_image_url", "")
+    logo_img      = event_details.get("logo_url", "")
     speakers      = event_details.get("speakers", [])
     topics        = event_details.get("topics", [])
     reg           = event_details.get("registration") or {}
@@ -577,11 +709,25 @@ def generate_email_content(
     from_name     = (brand_history or {}).get("from_name") or "Linux Foundation Events"
     dates_display = event_dates[0] if event_dates else event_date
 
+    # Upload images to HubSpot so they're reliably hosted on HubSpot CDN
+    import logging as _logging
+    _log = _logging.getLogger("email-staging")
+    _log.info(f"[GEN_EMAIL] hero_img={hero_img!r} logo_img={logo_img!r}")
+    from hubspot_tools import upload_image_to_hubspot as _upload_img
+    if hero_img:
+        hero_img = _upload_img(hero_img) or hero_img
+        _log.info(f"[GEN_EMAIL] hero_img after upload={hero_img!r}")
+    if logo_img:
+        logo_img = _upload_img(logo_img) or logo_img
+        _log.info(f"[GEN_EMAIL] logo_img after upload={logo_img!r}")
+    # Uploaded hero image is the email banner (CDN URL or original)
+    banner_url = hero_img
+
     # Get the official stage template from the Marketing Journey dashboard
     tmpl = get_template(stage_name) or get_template("Event Announcement")
-    template_subject  = tmpl["subject"]
+    template_subject   = tmpl["subject"]
     template_preheader = tmpl["preheader"]
-    template_body     = tmpl["body"]
+    template_body      = tmpl["body"]
 
     # Build supplementary context
     reg_lines = []
@@ -597,16 +743,27 @@ def generate_email_content(
     topics_str   = ", ".join(topics[:4])   if topics   else "Open Source, Cloud Native, Linux"
 
     hero_tag = (
-        f'<img src="{hero_img}" width="600" alt="{event_name}" '
-        'style="display:block;width:100%;max-width:600px;height:auto">'
+        f'<img src="{hero_img}" width="600" alt="{event_name} Banner" '
+        'style="display:block;width:100%;max-width:600px;height:auto;">'
         if hero_img
-        else '<div style="background:#0099CC;height:10px;width:100%"></div>'
+        else '<div style="background:#0099CC;height:6px;width:100%;"></div>'
     )
+    logo_tag = (
+        f'<img src="{logo_img}" alt="{event_name} Logo" '
+        'style="max-height:60px;max-width:200px;display:block;margin:0 auto 16px;">'
+        if logo_img
+        else ""
+    )
+
+    # HubSpot personalization token format (avoids f-string brace escaping issues)
+    hs_firstname = "{{ contact.firstname }}"
+    hs_company   = "{{ contact.company }}"
+    hs_unsub     = "{{ unsubscribe_link }}"
 
     prompt = f"""You are a senior email marketer for Linux Foundation open source events.
 
 Your job: take the official stage template below and personalise it for a specific event,
-then render it as a production-ready HTML email.
+then render it as a complete, production-ready HTML email.
 
 ━━━ EVENT DETAILS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Event Name  : {event_name}
@@ -622,7 +779,7 @@ Topics      : {topics_str}
 Stage  : {stage_name} ({funnel})
 CTA    : {cta_label}
 
-━━━ OFFICIAL TEMPLATE (substitute [Event Name], [City], [Dates], [Date] etc.) ━━━
+━━━ OFFICIAL TEMPLATE ━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Subject   : {template_subject}
 Preheader : {template_preheader}
 
@@ -632,24 +789,64 @@ Body:
 ━━━ YOUR TASK ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 1. Replace every placeholder ([Event Name], [City], [Dates], [Date], [LINK], etc.)
    with the real event details provided above.
-2. Keep {{{{first_name}}}}, {{{{company_name}}}} and similar HubSpot tokens as-is.
-3. Remove any sections that don't apply (e.g. co-located events if none listed).
-4. Render everything as a complete HTML email with:
-   - DOCTYPE, <html>, <head>, <body>
-   - Table-based layout, max-width 600px, centered, inline CSS only
-   - Header: {hero_tag}
-   - Body text in Arial, #333333, line-height 1.6
-   - CTA button: background #0099CC, white text, border-radius 4px, links to {url}
-   - Footer: "Linux Foundation Events" + <a href="{{{{unsubscribe_url}}}}">Unsubscribe</a>
-   - Colors: headers #003366, accents/buttons #0099CC
 
-Return ONLY a JSON object — no markdown fences, nothing before or after:
+2. HubSpot personalization tokens — use EXACTLY this syntax (spaces and dots matter):
+   - Recipient first name : {hs_firstname}
+   - Company name         : {hs_company}
+   Do NOT use {{first_name}}, {{ first_name }}, or any other variant.
+
+3. Remove sections that don't apply (e.g. speaker section if no speakers listed).
+
+4. Generate ONLY the email body content — the banner image and footer are added
+   automatically by the system. Do NOT include:
+   - DOCTYPE, html, head, body tags
+   - Outer wrapper tables
+   - Banner/header image section (dark blue header row)
+   - Footer with unsubscribe link
+
+   Structure the output as a single padded <div>:
+
+   <div style="padding:36px 40px;font-family:Arial,sans-serif;color:#333333;">
+
+     <p style="margin:0 0 20px 0;line-height:1.7;font-size:15px;color:#333333;">
+       Hi {hs_firstname},
+     </p>
+
+     [body paragraphs as <p> tags with margin:0 0 20px 0;line-height:1.7;font-size:15px;]
+
+     [bullet lists as proper <ul>/<li> — NEVER use • character]:
+     <ul style="margin:0 0 20px 20px;padding:0;list-style-type:disc;">
+       <li style="margin-bottom:10px;line-height:1.7;font-size:15px;color:#333333;">item</li>
+     </ul>
+
+     [headings as <h2> tags]:
+     <h2 style="margin:0 0 12px 0;font-size:18px;color:#003366;font-weight:bold;">Heading</h2>
+
+     [CTA button — centered, in its own table]:
+     <table role="presentation" cellpadding="0" cellspacing="0" border="0"
+            style="margin:28px auto;">
+       <tr><td style="border-radius:4px;background-color:#0099CC;">
+         <a href="{url}" target="_blank"
+            style="display:inline-block;padding:14px 36px;color:#ffffff;font-weight:bold;
+                   font-size:16px;text-decoration:none;font-family:Arial,sans-serif;">
+           {cta_label}
+         </a>
+       </td></tr>
+     </table>
+
+     [closing paragraph and signature]
+
+   </div>
+
+5. ALL CSS inline — no <style> tags.
+
+Return ONLY a JSON object — no markdown fences, no text before or after:
 {{"subject": "...", "preview_text": "...", "html": "..."}}
 
-subject: personalised version of the template subject (max 60 chars)
-preview_text: personalised version of the template preheader (max 90 chars)
-html: the complete rendered HTML email
-{("" if not change_request else f"{chr(10)}━━━ CHANGE REQUEST (apply this on top of everything above) ━━━{chr(10)}{change_request}{chr(10)}")}"""
+subject: personalised subject line (max 60 chars)
+preview_text: personalised preheader (max 90 chars)
+html: ONLY the <div>...</div> body content as described above — NO outer HTML structure
+{("" if not change_request else f"{chr(10)}━━━ CHANGE REQUEST ━━━{chr(10)}{change_request}{chr(10)}")}"""
 
     raw = _claude_text(prompt, max_tokens=4000, timeout=180)
 
@@ -669,10 +866,16 @@ html: the complete rendered HTML email
             if depth == 0 and start != -1:
                 try:
                     data = json.loads(raw[start:i + 1])
+                    body_html    = str(data.get("html", ""))
+                    preview_html = _build_email_preview(
+                        banner_url, body_html, url, event_name
+                    )
                     return {
                         "subject":      str(data.get("subject", "")),
                         "preview_text": str(data.get("preview_text", "")),
-                        "html":         str(data.get("html", "")),
+                        "html":         preview_html,  # full HTML for UI iframe
+                        "body_html":    body_html,     # body-only for HubSpot injection
+                        "banner_url":   banner_url,    # uploaded HubSpot CDN URL (or "")
                     }
                 except json.JSONDecodeError:
                     break
@@ -814,8 +1017,8 @@ def ai_select_source_email(
 # ── Public interface — called by main.py ──────────────────────────────────────
 
 def run_turn(messages: list, user_message: str) -> tuple[str, list]:
-    """Route: Anthropic SDK if key available, else Claude Code SDK."""
-    if ANTHROPIC_API_KEY:
+    """Route: LiteLLM/Anthropic SDK if any key available, else Claude Code CLI."""
+    if _has_sdk_key():
         return _sdk_run_turn(messages, user_message)
     return _sdk_run_turn_cc(messages, user_message)
 
@@ -890,8 +1093,13 @@ def clone_turn(session, subject=None, preview_text=None, send_list_id=None) -> t
     effective_subject      = subject      or session.meta.get("generated_subject", "")
     effective_preview_text = preview_text or session.meta.get("generated_preview", "")
 
-    # Auto-detect send list from brand history if user didn't pick one
+    # Auto-detect send list — priority: user pick > built audience > brand history
     effective_send_list = send_list_id
+    if not effective_send_list:
+        audience_list_id = session.meta.get("audience_list_id")
+        if audience_list_id:
+            effective_send_list = str(audience_list_id)
+            _log.info(f"[CLONE] using built audience list: {effective_send_list}")
     if not effective_send_list:
         included = (brand or {}).get("included_list_ids", [])
         if included:
@@ -929,15 +1137,22 @@ def clone_turn(session, subject=None, preview_text=None, send_list_id=None) -> t
 
     # Step 3: Auto-apply generated HTML content if available from plan phase
     content_applied = False
-    generated_html = session.meta.get("generated_html", "")
-    if generated_html:
+    # Prefer body_html (body-only, no outer tables) over generated_html (full preview)
+    body_html  = session.meta.get("body_html") or session.meta.get("generated_html", "")
+    banner_url = session.meta.get("banner_url", "")
+    event_url  = (session.meta.get("url_data") or {}).get("url", "")
+    if body_html:
         try:
             content_result = hubspot_tools.update_email_content(
-                new_email_id, generated_html
+                new_email_id, body_html,
+                banner_url=banner_url, event_url=event_url,
             )
             if "error" not in content_result:
                 content_applied = True
-                _log.info(f"[CLONE] Auto-applied HTML ({len(generated_html):,} chars) method={content_result.get('method')!r}")
+                _log.info(
+                    f"[CLONE] Content applied method={content_result.get('method')!r} "
+                    f"body={len(body_html):,} chars banner={'yes' if banner_url else 'no'}"
+                )
             else:
                 _log.warning(f"[CLONE] Content apply failed: {content_result.get('error')}")
         except Exception as e:

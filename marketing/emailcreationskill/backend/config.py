@@ -16,3 +16,13 @@ HUBSPOT_ACCESS_TOKEN = os.getenv("HUBSPOT_ACCESS_TOKEN", "")
 HUBSPOT_PORTAL_ID = os.getenv("HUBSPOT_PORTAL_ID", "8112310")
 
 GOOGLE_SERVICE_ACCOUNT_FILE = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "")
+
+# Shared secret for the /api/stage-from-brief endpoint (skill integration).
+# If left empty, the endpoint warns but still accepts calls (local dev only).
+INTERNAL_API_TOKEN = os.getenv("INTERNAL_API_TOKEN", "")
+
+ASANA_ACCESS_TOKEN = os.getenv("ASANA_ACCESS_TOKEN", "")
+
+# LiteLLM proxy (takes priority over direct Anthropic API key when both are set)
+LITELLM_BASE_URL = os.getenv("LITELLM_BASE_URL", "")
+LITELLM_API_KEY  = os.getenv("LITELLM_API_KEY",  "")

@@ -562,6 +562,91 @@ function clearList() {
   document.getElementById("list-selected").classList.add("hidden");
 }
 
+// ── Build Audience Lists (hubspot-event-list-builder integration) ─────────────
+
+async function buildAudience() {
+  const btn    = document.getElementById("build-audience-btn");
+  const ticker = document.getElementById("audience-ticker");
+  const status = document.getElementById("audience-status");
+
+  btn.disabled = true;
+  btn.textContent = "⏳ Building…";
+  ticker.textContent = "";
+  ticker.classList.remove("hidden");
+  status.classList.add("hidden");
+  status.innerHTML = "";
+
+  let jobId = null;
+  try {
+    const resp = await fetch(`${API}/build-audience`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: sessionId, event_url: "" }),
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({ detail: resp.statusText }));
+      throw new Error(err.detail || "Failed to start audience build");
+    }
+    const data = await resp.json();
+    jobId = data.job_id;
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = "▶ Build Audience Lists";
+    ticker.classList.add("hidden");
+    status.innerHTML = `<span style="color:#dc2626">⚠ ${escapeHtml(e.message)}</span>`;
+    status.classList.remove("hidden");
+    return;
+  }
+
+  // Stream output via SSE
+  const es = new EventSource(`${API}/audience-stream/${jobId}?session_id=${encodeURIComponent(sessionId)}`);
+
+  es.onmessage = (event) => {
+    let msg;
+    try { msg = JSON.parse(event.data); } catch { return; }
+
+    if (msg.type === "heartbeat") return;
+
+    if (msg.type === "output" && msg.text) {
+      ticker.textContent += msg.text + "\n";
+      ticker.scrollTop = ticker.scrollHeight;
+    }
+
+    if (msg.type === "complete") {
+      es.close();
+      btn.disabled = false;
+      btn.textContent = "▶ Build Audience Lists";
+      const mid = msg.master_list_id;
+      if (mid) {
+        selectList(mid, "Master Audience (built)", 0);
+        status.innerHTML = `<span style="color:#166534">✓ Master audience list built — ID ${escapeHtml(mid)} auto-selected as send list</span>`;
+      } else {
+        status.innerHTML = `<span style="color:#92400e">⚠ Build finished but master list ID not extracted — check log above and select manually</span>`;
+      }
+      status.classList.remove("hidden");
+      return;
+    }
+
+    if (msg.type === "error" || msg.done) {
+      es.close();
+      btn.disabled = false;
+      btn.textContent = "▶ Build Audience Lists";
+      if (msg.type === "error") {
+        status.innerHTML = `<span style="color:#dc2626">⚠ ${escapeHtml(msg.text || "Unknown error")}</span>`;
+        status.classList.remove("hidden");
+      }
+    }
+  };
+
+  es.onerror = () => {
+    es.close();
+    btn.disabled = false;
+    btn.textContent = "▶ Build Audience Lists";
+    status.innerHTML = `<span style="color:#dc2626">⚠ Stream connection lost</span>`;
+    status.classList.remove("hidden");
+  };
+}
+
 // Close dropdown when clicking outside
 document.addEventListener("click", (e) => {
   if (!e.target.closest(".list-picker")) {
@@ -590,3 +675,288 @@ async function initMode() {
 }
 
 document.addEventListener("DOMContentLoaded", () => { showStep(1); initMode(); });
+
+// ════════════════════════════════════════════════════════════════════════════
+// FROM ASANA TASK TAB
+// ════════════════════════════════════════════════════════════════════════════
+
+let _asanaBriefData = null;
+
+// ── Tab switching ─────────────────────────────────────────────────────────────
+
+function switchTab(tab) {
+  const flowEvent = document.getElementById("flow-event");
+  const flowAsana = document.getElementById("flow-asana");
+  const tabEvent  = document.getElementById("tab-event");
+  const tabAsana  = document.getElementById("tab-asana");
+  if (tab === "asana") {
+    flowEvent.classList.add("hidden");
+    flowAsana.classList.remove("hidden");
+    tabEvent.classList.remove("active");
+    tabAsana.classList.add("active");
+  } else {
+    flowAsana.classList.add("hidden");
+    flowEvent.classList.remove("hidden");
+    tabAsana.classList.remove("active");
+    tabEvent.classList.add("active");
+  }
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+// ── Asana step indicator ─────────────────────────────────────────────────────
+
+function showAsanaStep(n) {
+  document.querySelectorAll(".asana-panel").forEach(p => p.classList.add("hidden"));
+  const panel = document.getElementById(`asana-step-${n}`);
+  if (panel) panel.classList.remove("hidden");
+
+  document.querySelectorAll(".asana-step").forEach((el, i) => {
+    const num = i + 1;
+    el.classList.remove("active", "done");
+    if (num < n) el.classList.add("done");
+    if (num === n) el.classList.add("active");
+  });
+
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+// ── Step 1: Fetch brief from Asana ───────────────────────────────────────────
+
+async function fetchAsanaBrief() {
+  const url = document.getElementById("asana_task_url").value.trim();
+  if (!url) {
+    showError("asana-step1-status", "Please enter an Asana task URL.");
+    return;
+  }
+  if (!url.includes("asana.com")) {
+    showError("asana-step1-status", "Please enter a valid Asana URL (app.asana.com/...).");
+    return;
+  }
+
+  setLoading("asana-step1-status", "Fetching task, subtasks, and brand history from HubSpot…");
+  document.getElementById("asana-fetch-btn").disabled = true;
+
+  try {
+    const resp = await fetch(`${API}/plan-from-asana`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ asana_url: url }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.detail || "Request failed");
+
+    clearStatus("asana-step1-status");
+    _asanaBriefData = data;
+    _renderAsanaBriefForm(data);
+    showAsanaStep(2);
+  } catch (err) {
+    showError("asana-step1-status", err.message);
+  } finally {
+    document.getElementById("asana-fetch-btn").disabled = false;
+  }
+}
+
+function _renderAsanaBriefForm(data) {
+  // Form fields
+  document.getElementById("ab-email-name").value    = data.email_name    || "";
+  document.getElementById("ab-from-name").value     = data.from_name     || "";
+  document.getElementById("ab-from-address").value  = data.from_address  || "";
+  document.getElementById("ab-subject").value       = data.subject       || "";
+  document.getElementById("ab-preview").value       = data.preview_text  || "";
+  document.getElementById("ab-clone-base-id").value = data.clone_base_id || "";
+
+  const typeEl = document.getElementById("ab-email-type");
+  if (typeEl && data.email_type) typeEl.value = data.email_type;
+
+  // Clone base name hint
+  const nameHint = document.getElementById("ab-clone-base-name");
+  if (nameHint) {
+    nameHint.textContent = data.clone_base_name
+      ? `Matched: ${data.clone_base_name}`
+      : (data.clone_base_id ? "" : "No match found — enter ID manually");
+  }
+
+  // Suppression IDs
+  document.getElementById("ab-suppression-ids").value = (data.suppression_list_ids || []).join(", ");
+
+  // Send list (pre-filled if found)
+  if (data.send_list_id) {
+    document.getElementById("ab-send-list-id").value = data.send_list_id;
+    const sel = document.getElementById("ab-list-selected");
+    sel.innerHTML = `
+      <span>✓ <strong>Auto-detected list</strong></span>
+      <span style="color:var(--gray-600);font-size:12px">ID: ${escapeHtml(data.send_list_id)}</span>
+      <span class="list-clear" onclick="clearAsanaList()" title="Remove">×</span>`;
+    sel.classList.remove("hidden");
+  } else {
+    clearAsanaList();
+  }
+
+  // Content source indicator
+  const ind = document.getElementById("ab-content-indicator");
+  if (ind) {
+    if (data.doc_html && data.doc_html.length > 0) {
+      ind.innerHTML = `<span class="content-pill content-pill-doc">✅ Google Doc content ready (${data.doc_html.length.toLocaleString()} chars)</span>`;
+    } else if (data.event_url) {
+      ind.innerHTML = `<span class="content-pill content-pill-event">⚠ No Google Doc found — AI will generate from event URL</span>`;
+    } else {
+      ind.innerHTML = `<span class="content-pill content-pill-none">⚠ No content found — body will be empty after staging</span>`;
+    }
+  }
+
+  // Audience instructions
+  const audSection = document.getElementById("ab-audience-section");
+  const audText    = document.getElementById("ab-audience-text");
+  if (data.audience_instructions && audSection && audText) {
+    audText.textContent = data.audience_instructions;
+    audSection.classList.remove("hidden");
+  } else if (audSection) {
+    audSection.classList.add("hidden");
+  }
+
+  // Task chip
+  const chip      = document.getElementById("ab-task-chip");
+  const nameLabel = document.getElementById("ab-task-name-label");
+  const dueLabel  = document.getElementById("ab-due-label");
+  if (chip && nameLabel) {
+    nameLabel.textContent = data.task_name || "";
+    if (dueLabel) dueLabel.textContent = data.due_on ? `Due: ${data.due_on}` : "";
+    chip.classList.remove("hidden");
+  }
+
+  // Warnings
+  const warningsCard = document.getElementById("ab-warnings-card");
+  const warningsList = document.getElementById("ab-warnings-list");
+  if (warningsCard && warningsList) {
+    if (data.warnings && data.warnings.length > 0) {
+      warningsList.innerHTML = data.warnings
+        .map(w => `<div style="margin-bottom:4px">• ${escapeHtml(w)}</div>`)
+        .join("");
+      warningsCard.classList.remove("hidden");
+    } else {
+      warningsCard.classList.add("hidden");
+    }
+  }
+}
+
+// ── Step 2: Stage email from brief ───────────────────────────────────────────
+
+async function stageFromBrief() {
+  const emailName   = document.getElementById("ab-email-name").value.trim();
+  const cloneBaseId = document.getElementById("ab-clone-base-id").value.trim();
+
+  if (!emailName)   { showError("asana-step2-status", "Email Name is required."); return; }
+  if (!cloneBaseId) { showError("asana-step2-status", "Clone Base Email ID is required."); return; }
+
+  const suppressRaw = document.getElementById("ab-suppression-ids").value.trim();
+  const payload = {
+    internal_token:       "",
+    clone_base_id:        cloneBaseId,
+    email_name:           emailName,
+    from_name:            document.getElementById("ab-from-name").value.trim(),
+    from_address:         document.getElementById("ab-from-address").value.trim(),
+    subject:              document.getElementById("ab-subject").value.trim(),
+    preview_text:         document.getElementById("ab-preview").value.trim(),
+    email_type:           document.getElementById("ab-email-type").value,
+    send_list_id:         document.getElementById("ab-send-list-id").value.trim(),
+    suppression_list_ids: suppressRaw ? suppressRaw.split(",").map(s => s.trim()).filter(Boolean) : [],
+    raw_html:             (_asanaBriefData && _asanaBriefData.doc_html) || "",
+    event_url:            "",
+  };
+  // Only pass event_url if no doc HTML
+  if (!payload.raw_html && _asanaBriefData && _asanaBriefData.event_url) {
+    payload.event_url = _asanaBriefData.event_url;
+  }
+
+  setLoading("asana-step2-status", "Staging email — cloning, applying settings, injecting content…");
+  document.getElementById("asana-stage-btn").disabled = true;
+
+  try {
+    const resp = await fetch(`${API}/stage-from-brief`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.detail || "Request failed");
+
+    clearStatus("asana-step2-status");
+
+    const sourceMap = { doc: "Google Doc content", ai: "AI-generated content", none: "settings only (no body)" };
+    const srcLabel  = sourceMap[data.content_source] || data.content_source;
+    renderMessage("asana-done-message",
+      `**${escapeHtml(data.email_name)}** staged successfully.\nContent: ${srcLabel}.`);
+    showDraftLink("asana-done-link", data.draft_url);
+    showAsanaStep(3);
+  } catch (err) {
+    showError("asana-step2-status", err.message);
+  } finally {
+    document.getElementById("asana-stage-btn").disabled = false;
+  }
+}
+
+function asanaBack() {
+  showAsanaStep(1);
+}
+
+function asanaStartOver() {
+  _asanaBriefData = null;
+  document.getElementById("asana_task_url").value = "";
+  clearStatus("asana-step1-status");
+  clearStatus("asana-step2-status");
+  clearAsanaList();
+  showAsanaStep(1);
+}
+
+// ── Asana list picker ────────────────────────────────────────────────────────
+
+let _asanaListTimer = null;
+
+async function onAsanaListSearch(query) {
+  const dropdown = document.getElementById("ab-list-dropdown");
+  if (!query || query.length < 2) { dropdown.classList.add("hidden"); return; }
+  clearTimeout(_asanaListTimer);
+  _asanaListTimer = setTimeout(async () => {
+    try {
+      const resp = await fetch(`${API}/lists/search?q=${encodeURIComponent(query)}`);
+      const data = await resp.json();
+      const lists = data.lists || [];
+      dropdown.innerHTML = lists.length
+        ? lists.map(l => `
+            <div class="list-dropdown-item" onclick="selectAsanaList('${l.id}','${escapeHtml(l.name)}',${l.size || 0})">
+              <span>${escapeHtml(l.name)}</span>
+              <span class="list-count">${l.size ? l.size.toLocaleString() + " contacts" : ""}</span>
+            </div>`).join("")
+        : `<div class="list-dropdown-item" style="color:var(--gray-400)">No lists found</div>`;
+      dropdown.classList.remove("hidden");
+    } catch (_) {}
+  }, 300);
+}
+
+function selectAsanaList(id, name, size) {
+  document.getElementById("ab-send-list-id").value = id;
+  document.getElementById("ab-list-search-input").value = "";
+  document.getElementById("ab-list-dropdown").classList.add("hidden");
+  const sel = document.getElementById("ab-list-selected");
+  sel.innerHTML = `
+    <span>✓ <strong>${escapeHtml(name)}</strong></span>
+    <span style="color:var(--gray-600);font-size:12px">${size ? size.toLocaleString() + " contacts" : ""}</span>
+    <span class="list-clear" onclick="clearAsanaList()" title="Remove">×</span>`;
+  sel.classList.remove("hidden");
+}
+
+function clearAsanaList() {
+  document.getElementById("ab-send-list-id").value = "";
+  const input = document.getElementById("ab-list-search-input");
+  if (input) input.value = "";
+  const sel = document.getElementById("ab-list-selected");
+  if (sel) sel.classList.add("hidden");
+}
+
+// Close asana list dropdown on outside click
+document.addEventListener("click", (e) => {
+  if (!e.target.closest("#ab-list-search-input") && !e.target.closest("#ab-list-dropdown")) {
+    const d = document.getElementById("ab-list-dropdown");
+    if (d) d.classList.add("hidden");
+  }
+});

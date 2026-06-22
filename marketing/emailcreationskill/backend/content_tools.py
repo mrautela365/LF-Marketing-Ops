@@ -290,6 +290,7 @@ def _fetch_google_doc(url: str) -> str:
 
 
 def _doc_to_html(doc: dict) -> str:
+    inline_objects = doc.get("inlineObjects", {})
     parts = []
     for elem in doc.get("body", {}).get("content", []):
         para = elem.get("paragraph")
@@ -298,21 +299,40 @@ def _doc_to_html(doc: dict) -> str:
         style = para.get("paragraphStyle", {}).get("namedStyleType", "NORMAL_TEXT")
         runs = []
         for pe in para.get("elements", []):
+
+            # ── Text run ──────────────────────────────────────────────────────
             tr = pe.get("textRun")
-            if not tr:
+            if tr:
+                text = tr.get("content", "").rstrip("\n")
+                if not text:
+                    continue
+                ts = tr.get("textStyle") or {}
+                if ts.get("bold"):
+                    text = f"<strong>{text}</strong>"
+                if ts.get("italic"):
+                    text = f"<em>{text}</em>"
+                link_url = (ts.get("link") or {}).get("url")
+                if link_url:
+                    text = f'<a href="{link_url}">{text}</a>'
+                runs.append(text)
                 continue
-            text = tr.get("content", "").rstrip("\n")
-            if not text:
-                continue
-            ts = tr.get("textStyle") or {}
-            if ts.get("bold"):
-                text = f"<strong>{text}</strong>"
-            if ts.get("italic"):
-                text = f"<em>{text}</em>"
-            link_url = (ts.get("link") or {}).get("url")
-            if link_url:
-                text = f'<a href="{link_url}">{text}</a>'
-            runs.append(text)
+
+            # ── Inline image ──────────────────────────────────────────────────
+            inline = pe.get("inlineObjectElement")
+            if inline:
+                obj_id   = inline.get("inlineObjectId", "")
+                obj      = inline_objects.get(obj_id, {})
+                embedded = obj.get("inlineObjectProperties", {}).get("embeddedObject", {})
+                img_props = embedded.get("imageProperties", {})
+                # sourceUri = original public URL; contentUri = Google-hosted (needs auth)
+                src = img_props.get("sourceUri") or img_props.get("contentUri") or ""
+                alt = embedded.get("title") or embedded.get("description") or ""
+                if src:
+                    runs.append(
+                        f'<img src="{src}" alt="{alt}" '
+                        f'style="max-width:100%;height:auto;display:block;" />'
+                    )
+
         line = "".join(runs).strip()
         if not line:
             continue

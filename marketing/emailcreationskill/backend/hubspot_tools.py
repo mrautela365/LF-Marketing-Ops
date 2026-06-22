@@ -296,15 +296,24 @@ def update_email_settings(
         payload["type"] = email_type
 
     if preview_text:
-        # HubSpot DRAG_AND_DROP templates store preview text in content.widgets.preview_text.
-        # Older HTML templates use content.preheader.
-        # We send both so either template type is covered.
-        payload["content"] = {
-            "preheader": preview_text,
-            "widgets": {
-                "preview_text": {"body": {"value": preview_text}}
-            },
-        }
+        # DnD emails store preview text in content.widgets.preview_text.
+        # Fetch the current content first and merge — sending a partial content
+        # object risks wiping templatePath/flexAreas/body widgets if HubSpot
+        # does a shallow replace of the content field on PATCH.
+        try:
+            current = _get(f"/marketing/v3/emails/{email_id}")
+            current_content = dict(current.get("content") or {})
+            current_widgets = dict(current_content.get("widgets") or {})
+            current_widgets["preview_text"] = {"body": {"value": preview_text}}
+            current_content["widgets"] = current_widgets
+            payload["content"] = current_content
+        except Exception:
+            # Fallback: set only the preview_text widget (may wipe other
+            # content fields if HubSpot shallow-replaces, but update_email_content
+            # will restore them when it runs next).
+            payload["content"] = {
+                "widgets": {"preview_text": {"body": {"value": preview_text}}}
+            }
 
     frm = {}
     if from_name:
@@ -337,57 +346,185 @@ def update_email_settings(
 
 # ── Tool 4: Update email body content ───────────────────────────────────────
 
-def update_email_content(email_id: str, html_content: str) -> dict:
-    """Replace email body. Handles classic HTML and drag-and-drop templates."""
-    import logging
+def update_email_content(
+    email_id: str,
+    html_content: str,
+    banner_url: str = "",
+    event_url: str = "",
+) -> dict:
+    """
+    Replace email body using HubSpot's DnD widget/flexArea structure.
+
+    Layout (when banner_url provided):
+      Section 1 — @hubspot/image widget   ← banner image (proper image module, never stripped)
+      Section 2 — @hubspot/rich_text widget ← body HTML only (no header/footer tables)
+
+    Layout (no banner_url):
+      Section 1 — @hubspot/rich_text widget ← full body HTML
+    """
+    import logging, re
     log = logging.getLogger("email-staging")
 
-    email = _get(f"/marketing/v3/emails/{email_id}")
+    # Fetch current state to preserve templatePath, styleSettings, and the
+    # preview_text widget already applied by update_email_settings.
+    email   = _get(f"/marketing/v3/emails/{email_id}")
     content = email.get("content") or {}
-    log.info(f"[CONTENT] content keys: {list(content.keys())}")
 
-    TEXT_TYPES = {"rich_text", "text", "email_body", "simple_text", "module", "rich_text_module"}
+    # Discover the actual flex area name (do NOT hardcode "main")
+    current_flex   = content.get("flexAreas") or {}
+    flex_area_name = next(iter(current_flex), "main")
+    template_path  = content.get("templatePath") or "@hubspot/email/dnd/Start_from_scratch.html"
+    style_settings = content.get("styleSettings") or {}
 
-    def _inject_into_widgets(widgets: dict, base_content: dict) -> dict | None:
-        """Find first body widget (skip preview_text), inject HTML, return updated content or None."""
-        for key, widget in widgets.items():
-            if key == "preview_text":
-                continue
-            wtype = widget.get("type", "")
-            body = dict(widget.get("body") or {})
-            if wtype in TEXT_TYPES or "html" in body or "value" in body or "text" in body:
-                body["html"] = html_content
-                body["value"] = html_content
-                updated = {**widgets, key: {**widget, "body": body}}
-                log.info(f"[CONTENT] injected into widget '{key}' (type={wtype!r})")
-                return {**base_content, "widgets": updated}
-        return None
+    log.info(f"[CONTENT] email={email_id} flex={flex_area_name!r} "
+             f"banner={'yes' if banner_url else 'no'} event_url={bool(event_url)}")
 
-    # ── Classic HTML email ──────────────────────────────────────────────────
-    if "htmlBody" in content or "html_body" in content:
-        _patch(f"/marketing/v3/emails/{email_id}", {
-            "content": {**content, "htmlBody": html_content}
+    # Strip outer DOCTYPE/html/head/body — HubSpot wraps content itself
+    body_match = re.search(r"<body[^>]*>([\s\S]*?)</body\s*>", html_content, re.IGNORECASE)
+    inner_html  = body_match.group(1).strip() if body_match else html_content.strip()
+    log.info(f"[CONTENT] inner_html={len(inner_html):,} chars")
+
+    # ── Carry over preview_text widget ─────────────────────────────────────
+    preview_text_widget = (content.get("widgets") or {}).get("preview_text")
+
+    # ── Build widgets dict ──────────────────────────────────────────────────
+    widgets: dict  = {}
+    sections: list = []
+
+    _section_style = {
+        "backgroundType": "CONTENT",
+        "breakpointStyles": {"default": {"backgroundType": "CONTENT"}},
+    }
+
+    # Banner image — uses HubSpot's dedicated image module so it is NEVER stripped
+    if banner_url:
+        BANNER = "staging_banner"
+        widgets[BANNER] = {
+            "type": "module",
+            "body": {
+                "path": "@hubspot/image",
+                "schema_version": 2,
+                "img": {
+                    "src": banner_url,
+                    "alt": "Email Banner",
+                    "width": 600,
+                    "loading": "lazy",
+                },
+                "href": event_url or "",
+                "align": "center",
+                "target": "_blank",
+                "max_width": 600,
+            },
+        }
+        sections.append({
+            "id":      "section-staging-banner",
+            "columns": [{"id": "col-banner-0", "widgets": [BANNER], "width": 12}],
+            "path":    None,
+            "style":   _section_style,
         })
-        return {"success": True, "email_id": email_id, "method": "htmlBody"}
+        log.info(f"[CONTENT] banner widget added: {banner_url!r}")
 
-    # ── DnD: try clone's own widgets first ──────────────────────────────────
-    widgets = dict(content.get("widgets") or {})
-    log.info(f"[CONTENT] clone widgets: {list(widgets.keys())}")
+    # Body rich-text
+    BODY = "staging_body"
+    widgets[BODY] = {
+        "type": "module",
+        "body": {
+            "path":           "@hubspot/rich_text",
+            "schema_version": 2,
+            "html":           inner_html,
+        },
+    }
+    sections.append({
+        "id":      "section-staging-body",
+        "columns": [{"id": "col-body-0", "widgets": [BODY], "width": 12}],
+        "path":    None,
+        "style":   _section_style,
+    })
 
-    body_widgets = [k for k in widgets if k != "preview_text"]
-    if body_widgets:
-        updated = _inject_into_widgets(widgets, content)
-        if updated:
-            _patch(f"/marketing/v3/emails/{email_id}", {"content": updated})
-            return {"success": True, "email_id": email_id, "method": "clone_widget"}
+    if preview_text_widget:
+        widgets["preview_text"] = preview_text_widget
 
-    # ── DnD clone is empty — replace content entirely with htmlBody.
-    # Send ONLY {"content": {"htmlBody": ...}} without spreading existing DnD
-    # structure so HubSpot replaces rather than deep-merges, clearing the
-    # empty DnD widget scaffold and rendering our HTML instead.
-    log.info("[CONTENT] DnD clone has no body widgets — replacing with htmlBody only")
-    _patch(f"/marketing/v3/emails/{email_id}", {"content": {"htmlBody": html_content}})
-    return {"success": True, "email_id": email_id, "method": "htmlBody_dnd_replace"}
+    flex_areas: dict = {
+        flex_area_name: {
+            "boxFirstElementIndex": None,
+            "boxLastElementIndex":  None,
+            "boxed":                False,
+            "isSingleColumnFullWidth": False,
+            "sections": sections,
+        }
+    }
+
+    new_content: dict = {
+        "templatePath": template_path,
+        "widgets":      widgets,
+        "flexAreas":    flex_areas,
+    }
+    if style_settings:
+        new_content["styleSettings"] = style_settings
+
+    _patch(f"/marketing/v3/emails/{email_id}", {"content": new_content})
+    method = "image+rich_text" if banner_url else "rich_text_only"
+    log.info(f"[CONTENT] patched OK method={method!r} sections={len(sections)}")
+    return {"success": True, "email_id": email_id, "method": method}
+
+
+# ── Image upload helper ──────────────────────────────────────────────────────
+
+def upload_image_to_hubspot(image_url: str, filename: str = "") -> str:
+    """
+    Download an image from `image_url` and re-host it in HubSpot file manager.
+    Returns the HubSpot CDN URL, or empty string if the upload fails.
+    Using HubSpot-hosted URLs ensures images load reliably in email clients.
+    """
+    import io
+    import logging
+    from urllib.parse import urlparse
+
+    log = logging.getLogger("email-staging")
+    if not image_url or not HUBSPOT_ACCESS_TOKEN:
+        return ""
+
+    try:
+        # Download the source image
+        dl = requests.get(
+            image_url, timeout=15,
+            headers={"User-Agent": "Mozilla/5.0"},
+            allow_redirects=True,
+        )
+        dl.raise_for_status()
+
+        content_type = dl.headers.get("Content-Type", "image/jpeg").split(";")[0].strip()
+        if not content_type.startswith("image/"):
+            log.warning(f"[IMAGE] not an image ({content_type!r}): {image_url}")
+            return ""
+
+        # Derive a safe filename
+        if not filename:
+            raw = urlparse(image_url).path.rsplit("/", 1)[-1].split("?")[0]
+            if not raw or "." not in raw:
+                ext = content_type.split("/")[-1].replace("jpeg", "jpg") or "jpg"
+                raw = f"email_img.{ext}"
+            filename = raw[:80]
+
+        # Upload to HubSpot Files API v3 (multipart — NOT JSON)
+        up = requests.post(
+            "https://api.hubapi.com/files/v3/files",
+            headers={"Authorization": f"Bearer {HUBSPOT_ACCESS_TOKEN}"},
+            files={"file": (filename, io.BytesIO(dl.content), content_type)},
+            data={
+                "options": '{"access":"PUBLIC_INDEXABLE","overwrite":true}',
+                "folderPath": "/email-staging",
+            },
+            timeout=30,
+        )
+        up.raise_for_status()
+        cdn_url = up.json().get("url", "")
+        log.info(f"[IMAGE] uploaded {filename!r} → {cdn_url!r}")
+        return cdn_url
+
+    except Exception as exc:
+        log.warning(f"[IMAGE] upload failed ({image_url!r}): {exc}")
+        return ""
 
 
 # ── Tool 5: Search contact lists ────────────────────────────────────────────

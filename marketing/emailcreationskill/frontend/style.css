@@ -318,3 +318,76 @@ header .subtitle { font-size: 13px; color: var(--gray-600); }
   font-size: 14px;
 }
 .chat-row input:focus { outline: none; border-color: var(--blue); }
+
+/* ── Tab switcher ── */
+.tab-switcher {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 28px;
+  background: white;
+  border: 1px solid var(--gray-200);
+  border-radius: var(--radius);
+  padding: 4px;
+  box-shadow: var(--shadow);
+}
+.tab-btn {
+  flex: 1;
+  padding: 9px 16px;
+  border: none;
+  border-radius: calc(var(--radius) - 2px);
+  background: transparent;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--gray-600);
+  cursor: pointer;
+  transition: background .15s, color .15s;
+}
+.tab-btn.active {
+  background: var(--blue);
+  color: white;
+}
+.tab-btn:hover:not(.active) {
+  background: var(--gray-100);
+  color: var(--gray-900);
+}
+
+/* ── Asana step indicator (mirrors .step but isolated) ── */
+.asana-step {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex: 1;
+  position: relative;
+  gap: 6px;
+}
+.asana-step:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  top: 16px;
+  left: calc(50% + 18px);
+  right: calc(-50% + 18px);
+  height: 2px;
+  background: var(--gray-200);
+  z-index: 0;
+}
+.asana-step.done:not(:last-child)::after { background: var(--blue); }
+.asana-step.active .step-circle { border-color: var(--blue); color: var(--blue); background: var(--blue-light); }
+.asana-step.done .step-circle   { border-color: var(--blue); background: var(--blue); color: white; }
+.asana-step.active .step-label  { color: var(--blue); font-weight: 600; }
+.asana-step.done .step-label    { color: var(--gray-600); }
+
+/* ── Content source indicator ── */
+.content-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 500;
+  margin-top: 4px;
+  margin-bottom: 8px;
+}
+.content-pill-doc    { background: var(--green-light);  color: var(--green); border: 1px solid #86efac; }
+.content-pill-event  { background: var(--yellow-light); color: var(--yellow); border: 1px solid #fcd34d; }
+.content-pill-none   { background: var(--red-light);    color: var(--red);   border: 1px solid #fca5a5; }
