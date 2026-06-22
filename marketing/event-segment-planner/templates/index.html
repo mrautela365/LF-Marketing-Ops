@@ -557,12 +557,14 @@
     const url = document.getElementById("url").value.trim();
     // Ship the segment plan to the list builder before opening it
     try {
-      await fetch("http://localhost:8080/receive-plan", {
+      const r = await fetch("http://localhost:8080/receive-plan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ url, plan: rawLog }),
       });
+      console.log("[segment-planner] plan posted, status:", r.status);
     } catch (e) {
+      console.warn("[segment-planner] could not post plan to list builder:", e);
       // List builder may not be running yet — open it anyway
     }
     window.open("http://localhost:8080?url=" + encodeURIComponent(url), "_blank");

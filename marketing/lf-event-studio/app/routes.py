@@ -1,17 +1,21 @@
 """
-Flask Blueprint — all routes for the HubSpot Event List Builder.
+Flask Blueprint — routes for the LF Event Audience Studio.
 """
 
 import json
+from pathlib import Path
 
 from flask import Blueprint, Response, render_template, request
 
 from .claude import get_queue, remove_job, start_job
+from .prompts import BUILDING_PROMPT, PLANNING_PROMPT
+
+# Each phase runs from the sibling app that owns the skill + references/
+_MARKETING = Path(__file__).parent.parent.parent
+PLANNER_CWD  = str(_MARKETING / "event-segment-planner")
+BUILDER_CWD  = str(_MARKETING / "hubspot-event-list-builder")
 
 bp = Blueprint("main", __name__)
-
-# Temporary store: url -> segment plan text (consumed on /build)
-_plans: dict[str, str] = {}
 
 
 @bp.get("/")
@@ -19,36 +23,33 @@ def index():
     return render_template("index.html")
 
 
-@bp.post("/receive-plan")
-def receive_plan():
-    """Accept a segment plan POSTed from the event-segment-planner (port 8081)."""
-    data = request.get_json(force=True)
-    url = (data.get("url") or "").strip()
-    plan = (data.get("plan") or "").strip()
-    if url and plan:
-        _plans[url] = plan
-    return {"ok": True}
-
-
-@bp.get("/get-plan")
-def get_plan():
-    """Return (and consume) the stored segment plan for a given URL."""
-    url = request.args.get("url", "").strip()
-    plan = _plans.pop(url, None)
-    return {"plan": plan}
-
-
-@bp.post("/build")
-def build():
+@bp.post("/plan")
+def plan():
+    """Phase 1 — start segment planning job."""
     data = request.get_json(force=True)
     url = (data.get("url") or "").strip()
     if not url:
         return {"error": "url required"}, 400
+    prompt = PLANNING_PROMPT.format(url=url)
+    return {"job_id": start_job(prompt, cwd=PLANNER_CWD)}
+
+
+@bp.post("/build")
+def build():
+    """Phase 2 — start list building job (no re-scraping)."""
+    data = request.get_json(force=True)
+    url  = (data.get("url")  or "").strip()
     plan = (data.get("plan") or "").strip()
-    if not plan:
-        plan = _plans.pop(url, "")
-    job_id = start_job(url, plan)
-    return {"job_id": job_id}
+    qa   = (data.get("qa")   or "").strip()
+    if not url:
+        return {"error": "url required"}, 400
+
+    qa_section = ""
+    if qa:
+        qa_section = f"\nUser answers to clarifying questions:\n{qa}\n"
+
+    prompt = BUILDING_PROMPT.format(url=url, plan=plan, qa_section=qa_section)
+    return {"job_id": start_job(prompt, cwd=BUILDER_CWD)}
 
 
 @bp.get("/stream/<job_id>")

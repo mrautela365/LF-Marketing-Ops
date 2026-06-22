@@ -4,17 +4,19 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Event List Builder</title>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <style>
     *, *::before, *::after { box-sizing:border-box; margin:0; padding:0; }
     :root {
       --blue:#003366; --teal:#009cde; --light:#e8f4fb;
       --idle:#d1d5db; --active:#f59e0b; --done:#10b981; --err:#ef4444;
+      --orange:#f97316;
       --bg:#f9fafb; --card:#fff; --border:#e5e7eb; --muted:#6b7280;
     }
     body { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
            background:var(--bg); min-height:100vh; padding:2rem 1rem; }
 
-    header { max-width:860px; margin:0 auto 1.75rem; display:flex; align-items:center; gap:1rem; }
+    header { max-width:900px; margin:0 auto 1.75rem; display:flex; align-items:center; gap:1rem; }
     .logo { width:48px; height:48px; background:var(--blue); border-radius:10px;
             display:flex; align-items:center; justify-content:center; flex-shrink:0; }
     .logo svg { width:26px; height:26px; fill:none; stroke:#fff; stroke-width:2;
@@ -23,7 +25,7 @@
     header p  { font-size:.83rem; color:var(--muted); margin-top:3px; }
 
     .card { background:var(--card); border:1px solid var(--border); border-radius:12px;
-            padding:1.5rem; max-width:860px; margin:0 auto 1.25rem;
+            padding:1.5rem; max-width:900px; margin:0 auto 1.25rem;
             box-shadow:0 1px 4px rgba(0,0,0,.06); }
 
     .row { display:flex; gap:.75rem; }
@@ -39,21 +41,77 @@
     button:disabled { opacity:.5; cursor:not-allowed; }
     .btn-outline { background:transparent; color:var(--blue); border:1.5px solid var(--blue); }
     .btn-outline:hover:not(:disabled) { background:var(--light); }
+    .btn-green  { background:var(--done); }
+    .btn-green:hover:not(:disabled) { background:#059669; }
+    .btn-sm { padding:.35rem .9rem; font-size:.8rem; }
 
-    /* ── Steps ── */
+    /* ══════════════════════════════════════════════════════
+       PLAN REVIEW CARD
+    ══════════════════════════════════════════════════════ */
+    #plan-review { display:none; border:2px solid var(--teal); border-radius:12px;
+                   padding:1.25rem 1.5rem; max-width:900px; margin:0 auto 1.25rem;
+                   background:#f0faff; }
+
+    .pr-header { display:flex; align-items:center; gap:.65rem; margin-bottom:1rem; }
+    .pr-title   { font-weight:700; color:var(--blue); font-size:1rem; flex:1; }
+    .pr-toggle  { background:transparent; border:1.5px solid var(--teal); color:var(--teal);
+                  padding:.25rem .7rem; font-size:.75rem; border-radius:6px;
+                  cursor:pointer; font-weight:600; }
+    .pr-toggle:hover { background:var(--light); }
+
+    /* communitySeg alert */
+    .cs-alert { border:2px solid #ef4444; border-radius:8px; background:#fef2f2;
+                padding:.75rem 1rem; margin-bottom:.85rem; }
+    .cs-alert-title { font-weight:700; color:#991b1b; font-size:.88rem; margin-bottom:.4rem; }
+    .cs-alert ul { margin:.2rem 0 0 1.1rem; }
+    .cs-alert li { font-size:.78rem; color:#7f1d1d; line-height:1.6; }
+    mark.cs { background:#fecaca; color:#7f1d1d; padding:0 3px; border-radius:3px; }
+    .cs-tag { display:inline-block; background:#fee2e2; color:#991b1b; border-radius:4px;
+              padding:.05rem .35rem; font-size:.7rem; font-weight:700; margin-left:.3rem;
+              border:1px solid #fca5a5; }
+    .rebuild-tag { display:inline-block; background:#dcfce7; color:#166534; border-radius:4px;
+                   padding:.05rem .35rem; font-size:.7rem; font-weight:700; margin-left:.3rem;
+                   border:1px solid #86efac; }
+
+    /* 3-col plan summary grid */
+    .plan-grid { display:grid; grid-template-columns:1fr 1fr 1fr; gap:.65rem; margin-bottom:.9rem; }
+    .pg-box { border-radius:8px; border:1.5px solid var(--border); padding:.7rem .85rem; background:#fff; }
+    .pg-box.warn { border-color:var(--orange); background:#fff7ed; }
+    .pg-label { font-size:.63rem; font-weight:700; text-transform:uppercase; letter-spacing:.05em;
+                color:var(--muted); margin-bottom:.4rem; }
+    .pg-box.warn .pg-label { color:#c2410c; }
+    .pg-item { display:flex; align-items:flex-start; gap:.4rem; font-size:.78rem;
+               color:#374151; margin-bottom:.3rem; line-height:1.45; }
+    .pg-item:last-child { margin-bottom:0; }
+    .pg-icon { flex-shrink:0; font-size:.82rem; margin-top:1px; }
+    .pg-item.cs-item { color:#9a3412; font-weight:600; }
+
+    /* Confirm CTA */
+    .pr-cta { display:flex; align-items:center; justify-content:space-between;
+              gap:1rem; padding-top:.85rem; border-top:1px solid var(--border); margin-top:.65rem; }
+    .pr-note { font-size:.78rem; color:var(--muted); }
+    .pr-note strong { color:#374151; }
+
+    /* Full plan text */
+    #plan-text { font-size:.77rem; color:#374151; line-height:1.6; max-height:200px;
+                 overflow-y:auto; white-space:pre-wrap; word-break:break-word;
+                 border:1px solid var(--border); border-radius:6px; padding:.75rem;
+                 background:#fff; margin-top:.7rem; display:none; }
+
+    /* ══════════════════════════════════════════════════════
+       STEP BUBBLES
+    ══════════════════════════════════════════════════════ */
     .steps-wrap { margin-bottom:1.5rem; }
     .steps { display:flex; position:relative; margin-bottom:1rem; }
-    .steps::before { content:""; position:absolute; top:18px; left:32px; right:32px;
+    .steps::before { content:""; position:absolute; top:18px; left:16px; right:16px;
                      height:2px; background:var(--idle); z-index:0; }
     .step { flex:1; display:flex; flex-direction:column; align-items:center;
-            gap:.35rem; position:relative; z-index:1; }
-    .bubble { width:36px; height:36px; border-radius:50%; background:var(--idle); color:#fff;
-              font-weight:700; font-size:.85rem; display:flex; align-items:center;
+            gap:.3rem; position:relative; z-index:1; }
+    .bubble { width:34px; height:34px; border-radius:50%; background:var(--idle); color:#fff;
+              font-weight:700; font-size:.8rem; display:flex; align-items:center;
               justify-content:center; transition:background .3s, transform .25s, box-shadow .3s; }
-    .step.active .bubble {
-      background:var(--active); transform:scale(1.18);
-      animation:pulse-ring 1.5s ease-out infinite;
-    }
+    .step.active .bubble { background:var(--active); transform:scale(1.18);
+                            animation:pulse-ring 1.5s ease-out infinite; }
     @keyframes pulse-ring {
       0%   { box-shadow:0 0 0 0   rgba(245,158,11,.45); }
       70%  { box-shadow:0 0 0 10px rgba(245,158,11,0);  }
@@ -63,19 +121,20 @@
     .step.done  .bubble::after { content:"✓"; }
     .step.done  .bubble span { display:none; }
     .step.error .bubble { background:var(--err); animation:none; }
-    .step-label { font-size:.65rem; color:var(--muted); text-align:center;
-                  line-height:1.3; max-width:80px; }
+    .step-label { font-size:.6rem; color:var(--muted); text-align:center;
+                  line-height:1.3; max-width:70px; }
     .step.active .step-label { color:var(--active); font-weight:700; }
     .step.done   .step-label { color:var(--done);   font-weight:600; }
 
-    /* ── Detail cards (3-col grid for 6 steps) ── */
-    .step-details { display:grid; grid-template-columns:repeat(3, 1fr); gap:.6rem; }
-    .step-detail { border:1.5px solid var(--border); border-radius:8px; padding:.65rem .75rem;
-                   font-size:.77rem; transition:border-color .3s, background .3s; }
-    .step-detail .sd-num   { font-size:.65rem; font-weight:700; color:var(--muted);
-                              text-transform:uppercase; letter-spacing:.04em; margin-bottom:.2rem; }
-    .step-detail .sd-title { font-weight:700; color:#374151; margin-bottom:.25rem; font-size:.8rem; }
-    .step-detail .sd-body  { color:var(--muted); line-height:1.45; }
+    /* step detail cards — 4-col when 8 steps */
+    .step-details { display:grid; grid-template-columns:repeat(4,1fr); gap:.55rem; }
+    .step-details.six { grid-template-columns:repeat(3,1fr); }
+    .step-detail { border:1.5px solid var(--border); border-radius:8px; padding:.6rem .7rem;
+                   font-size:.75rem; transition:border-color .3s, background .3s; }
+    .step-detail .sd-num   { font-size:.62rem; font-weight:700; color:var(--muted);
+                              text-transform:uppercase; letter-spacing:.04em; margin-bottom:.15rem; }
+    .step-detail .sd-title { font-weight:700; color:#374151; margin-bottom:.2rem; font-size:.78rem; }
+    .step-detail .sd-body  { color:var(--muted); line-height:1.4; }
     .step-detail.active { border-color:var(--active); background:#fffbeb; }
     .step-detail.active .sd-num   { color:var(--active); }
     .step-detail.active .sd-title { color:#92400e; }
@@ -84,30 +143,33 @@
     .step-detail.done   .sd-num   { color:var(--done); }
     .step-detail.done   .sd-title { color:#065f46; }
     .step-detail.error  { border-color:var(--err); }
+    .step-detail.cs-step { border-color:var(--orange); }
+    .step-detail.cs-step .sd-num { color:var(--orange); }
 
-    /* ── Activity line ── */
-    #activity-wrap { display:flex; align-items:center; gap:.6rem; margin:.75rem 0;
-                     min-height:26px; }
+    /* Activity line */
+    #activity-wrap { display:flex; align-items:center; gap:.6rem; margin:.75rem 0; min-height:26px; }
     #activity-icon { font-size:1rem; flex-shrink:0; }
     #activity-text { font-size:.82rem; color:#374151; flex:1; line-height:1.4;
-                     font-style:italic; overflow:hidden; white-space:nowrap;
-                     text-overflow:ellipsis; }
+                     font-style:italic; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
     #activity-text.idle { color:var(--muted); }
-
     .dots::after { content:""; animation:dots 1.4s steps(4,end) infinite; }
     @keyframes dots {
       0%  { content:""; }   25% { content:"."; }
       50% { content:".."; } 75% { content:"..."; }
     }
 
-    /* ── Log ── */
+    /* Claude log */
     #log-wrap { margin-top:.5rem; }
     #log { background:#0f172a; color:#cbd5e1; border-radius:8px; padding:1rem;
            font-family:"Cascadia Code","Fira Code","Consolas",monospace;
-           font-size:.76rem; line-height:1.65; max-height:380px; overflow-y:auto;
+           font-size:.75rem; line-height:1.65; max-height:380px; overflow-y:auto;
            white-space:pre-wrap; word-break:break-word; }
 
-    /* ── Result ── */
+    #action-btns { display:none; gap:.75rem; flex-wrap:wrap; margin-top:1rem; }
+
+    /* ══════════════════════════════════════════════════════
+       FINAL RESULT CARD
+    ══════════════════════════════════════════════════════ */
     #result { display:none; }
     #result.success { border-left:4px solid var(--done); }
     #result.error   { border-left:4px solid var(--err);  }
@@ -116,54 +178,37 @@
     .badge.success { background:#d1fae5; color:#065f46; }
     .badge.error   { background:#fee2e2; color:#991b1b; }
     #result h3 { display:inline; font-size:1rem; }
-    .summary { margin-top:.75rem; display:flex; flex-direction:column; gap:.4rem; }
-    .summary li { font-size:.84rem; list-style:none; display:flex; gap:.5rem; }
-    .summary li::before { content:"▸"; color:var(--teal); }
-    #action-btns { display:none; gap:.75rem; flex-wrap:wrap; margin-top:1rem; }
+
+    /* Result sections */
+    .result-section { margin-top:1rem; }
+    .result-section-title { font-size:.75rem; font-weight:700; text-transform:uppercase;
+                             letter-spacing:.05em; color:var(--muted); margin-bottom:.5rem; }
+    .list-items { display:flex; flex-direction:column; gap:.35rem; }
+    .list-item { display:flex; align-items:flex-start; gap:.6rem; font-size:.83rem;
+                 background:#f8fafc; border-radius:7px; padding:.5rem .75rem;
+                 border:1px solid var(--border); }
+    .list-item.master { background:#f0fdf4; border-color:var(--done); }
+    .list-item.flagged { background:#fffbeb; border-color:var(--active); }
+    .list-item.cs-warn { background:#fef2f2; border-color:#fca5a5; }
+    .li-icon { font-size:1rem; flex-shrink:0; margin-top:1px; }
+    .li-body { flex:1; }
+    .li-name { font-weight:600; color:#1e293b; margin-bottom:.15rem; }
+    .li-detail { font-size:.75rem; color:var(--muted); line-height:1.4; }
+    .li-id { font-family:monospace; font-size:.72rem; background:#e2e8f0;
+             padding:.05rem .35rem; border-radius:3px; color:#475569; }
+
+    /* Flagged section */
+    #flagged-section { display:none; border:2px solid var(--active); border-radius:10px;
+                       background:#fffbeb; padding:1rem 1.25rem; max-width:900px;
+                       margin:0 auto 1.25rem; }
+    #flagged-section h4 { font-size:.9rem; font-weight:700; color:#92400e; margin-bottom:.6rem; }
+    #flagged-items { font-size:.8rem; color:#374151; white-space:pre-wrap; line-height:1.65; }
 
     @keyframes spin { to { transform:rotate(360deg); } }
     .spin { display:inline-block; width:13px; height:13px;
             border:2px solid rgba(255,255,255,.3); border-top-color:#fff;
             border-radius:50%; animation:spin .7s linear infinite;
             vertical-align:middle; margin-right:5px; }
-
-    /* ── Segment plan banner ── */
-    #plan-banner { border:1.5px solid var(--teal); border-radius:10px; background:#f0faff;
-                   padding:1rem 1.25rem; max-width:860px; margin:0 auto 1.25rem; display:none; }
-    .plan-header { display:flex; align-items:center; gap:.65rem; margin-bottom:.85rem; }
-    .plan-header-icon { font-size:1.2rem; }
-    .plan-header-title { font-weight:700; color:var(--blue); font-size:.95rem; flex:1; }
-    .plan-toggle { background:transparent; border:1.5px solid var(--teal); color:var(--teal);
-                   padding:.25rem .7rem; font-size:.75rem; border-radius:6px;
-                   cursor:pointer; font-weight:600; }
-    .plan-toggle:hover { background:var(--light); }
-
-    /* plan summary grid */
-    .plan-summary { display:grid; grid-template-columns:1fr 1fr; gap:.65rem; margin-bottom:.65rem; }
-    .ps-box { border-radius:8px; border:1.5px solid var(--border); padding:.65rem .8rem; background:#fff; }
-    .ps-box.warn { border-color:#f97316; background:#fff7ed; }
-    .ps-label { font-size:.65rem; font-weight:700; text-transform:uppercase; letter-spacing:.05em;
-                color:var(--muted); margin-bottom:.4rem; }
-    .ps-box.warn .ps-label { color:#c2410c; }
-    .ps-item { display:flex; align-items:flex-start; gap:.45rem; font-size:.78rem;
-               color:#374151; margin-bottom:.3rem; line-height:1.4; }
-    .ps-item:last-child { margin-bottom:0; }
-    .ps-icon { flex-shrink:0; font-size:.85rem; margin-top:1px; }
-    .ps-item.warn-item { color:#9a3412; font-weight:600; }
-    .cs-tag { display:inline-block; background:#fee2e2; color:#991b1b; border-radius:4px;
-              padding:.05rem .35rem; font-size:.7rem; font-weight:700; margin-left:.3rem;
-              border:1px solid #fca5a5; }
-
-    #plan-body { font-size:.78rem; color:#374151; line-height:1.6; max-height:220px;
-                 overflow-y:auto; white-space:pre-wrap; word-break:break-word;
-                 border:1px solid var(--border); border-radius:6px; padding:.75rem;
-                 background:#fff; margin-top:.4rem; display:none; }
-
-    /* communitySeg alert */
-    #cs-alert { display:none; border:2px solid #ef4444; border-radius:8px; background:#fef2f2;
-                padding:.7rem 1rem; margin-bottom:.65rem; font-size:.82rem; }
-    #cs-alert strong { color:#991b1b; }
-    #cs-alert ul { margin:.3rem 0 0 1.1rem; color:#7f1d1d; font-size:.78rem; line-height:1.6; }
   </style>
 </head>
 <body>
@@ -174,130 +219,197 @@
   </div>
   <div>
     <h1>HubSpot Event List Builder</h1>
-    <p>Generate All Past Registrants + Registrants &amp; Web Visitors lists from any LF event URL</p>
+    <p>Build audience lists from any LF event URL — communitySeg lists are automatically replaced with custom event equivalents</p>
   </div>
 </header>
 
-<!-- Segment plan banner (shown when plan passed from event-segment-planner) -->
-<div id="plan-banner">
-  <div class="plan-header">
-    <span class="plan-header-icon">📋</span>
-    <span class="plan-header-title">Segment plan received — Claude will use this to guide list building</span>
-    <button class="plan-toggle" onclick="togglePlan()">Show full plan</button>
+<!-- ── PHASE 1: Plan review (shown when plan arrives from segment planner) ── -->
+<div id="plan-review">
+  <div class="pr-header">
+    <span style="font-size:1.3rem">📋</span>
+    <span class="pr-title">Build Plan — review before starting</span>
+    <button class="pr-toggle" onclick="togglePlanText()">Show full plan</button>
   </div>
 
-  <!-- communitySeg alert (shown if plan references communitySeg lists) -->
-  <div id="cs-alert">
-    <strong>⛔ communitySeg lists detected — do not use these</strong>
+  <!-- communitySeg alert -->
+  <div id="cs-alert" style="display:none" class="cs-alert">
+    <div class="cs-alert-title">⛔ communitySeg lists detected — will be rebuilt as custom event lists</div>
     <ul id="cs-list"></ul>
   </div>
 
-  <!-- Summary grid: lists to build + lists to reuse -->
-  <div class="plan-summary">
-    <div class="ps-box" id="ps-build">
-      <div class="ps-label">📝 Lists to build</div>
-      <div id="ps-build-items"><span style="color:var(--muted);font-size:.78rem">Parsing plan…</span></div>
+  <!-- 3-column summary grid -->
+  <div class="plan-grid">
+    <div class="pg-box" id="pg-build">
+      <div class="pg-label">📝 Lists to build</div>
+      <div id="pg-build-items"><span style="color:var(--muted);font-size:.78rem">Parsing…</span></div>
     </div>
-    <div class="ps-box" id="ps-reuse">
-      <div class="ps-label">♻️ Lists to reuse / clone</div>
-      <div id="ps-reuse-items"><span style="color:var(--muted);font-size:.78rem">Parsing plan…</span></div>
+    <div class="pg-box" id="pg-rebuild">
+      <div class="pg-label">🔄 communitySeg → rebuild</div>
+      <div id="pg-rebuild-items"><span style="color:var(--muted);font-size:.78rem">Parsing…</span></div>
+    </div>
+    <div class="pg-box" id="pg-reuse">
+      <div class="pg-label">♻️ Reuse / clone</div>
+      <div id="pg-reuse-items"><span style="color:var(--muted);font-size:.78rem">Parsing…</span></div>
     </div>
   </div>
 
-  <pre id="plan-body"></pre>
+  <!-- Always-last: master list note -->
+  <div style="font-size:.78rem;color:#374151;background:#f0fdf4;border:1.5px solid var(--done);
+              border-radius:7px;padding:.55rem .8rem;margin-bottom:.85rem;">
+    <strong style="color:#065f46">🏆 Master Audience List</strong> will be built last —
+    combining all successfully built lists. communitySeg sources will never be included.
+    Uncertain items will be skipped and flagged for review.
+  </div>
+
+  <pre id="plan-text"></pre>
+
+  <div class="pr-cta">
+    <span class="pr-note"><strong>Ready?</strong> Claude will follow the plan above. Skipped items appear in the final flagged report.</span>
+    <button id="start-btn" class="btn-green" onclick="start()">▶ Start Building</button>
+  </div>
 </div>
 
-<!-- Input -->
+<!-- ── Input card (shown when no plan / manual entry) ── -->
 <div class="card" id="input-card">
   <div class="row">
     <input type="url" id="url"
       placeholder="https://events.linuxfoundation.org/kubecon-cloudnativecon-india/" />
     <button id="go-btn" onclick="start()">Build Lists</button>
   </div>
-  <p class="hint">Paste any events.linuxfoundation.org URL above and click Build Lists.</p>
+  <p class="hint">Paste any events.linuxfoundation.org URL · or arrive here via the Segment Planner to get the full guided build.</p>
 </div>
 
-<!-- Progress -->
+<!-- ── PHASE 2: Progress ── -->
 <div class="card" id="prog-card" style="display:none">
   <div class="steps-wrap">
-    <div class="steps">
+    <!-- 8-step bubbles (shown when plan with communitySeg present) -->
+    <div class="steps" id="steps-8" style="display:none">
       <div class="step" id="s1"><div class="bubble"><span>1</span></div><div class="step-label">Scrape<br>event</div></div>
       <div class="step" id="s2"><div class="bubble"><span>2</span></div><div class="step-label">Snowflake<br>query</div></div>
-      <div class="step" id="s3"><div class="bubble"><span>3</span></div><div class="step-label">Brand<br>master list</div></div>
-      <div class="step" id="s4"><div class="bubble"><span>4</span></div><div class="step-label">List 1<br>Registrants</div></div>
-      <div class="step" id="s5"><div class="bubble"><span>5</span></div><div class="step-label">List 2<br>Web visitors</div></div>
-      <div class="step" id="s6"><div class="bubble"><span>6</span></div><div class="step-label">Confirm<br>&amp; report</div></div>
+      <div class="step" id="s3"><div class="bubble"><span>3</span></div><div class="step-label">Brand<br>master</div></div>
+      <div class="step" id="s4"><div class="bubble"><span>4</span></div><div class="step-label">Build<br>plan</div></div>
+      <div class="step" id="s5"><div class="bubble"><span>5</span></div><div class="step-label">List 1<br>Registrants</div></div>
+      <div class="step" id="s6"><div class="bubble"><span>6</span></div><div class="step-label">List 2<br>Web vis.</div></div>
+      <div class="step" id="s7"><div class="bubble"><span>7</span></div><div class="step-label">Rebuild<br>commSeg</div></div>
+      <div class="step" id="s8"><div class="bubble"><span>8</span></div><div class="step-label">Master<br>list</div></div>
+    </div>
+    <!-- 6-step bubbles (no plan) -->
+    <div class="steps" id="steps-6">
+      <div class="step" id="t1"><div class="bubble"><span>1</span></div><div class="step-label">Scrape<br>event</div></div>
+      <div class="step" id="t2"><div class="bubble"><span>2</span></div><div class="step-label">Snowflake<br>query</div></div>
+      <div class="step" id="t3"><div class="bubble"><span>3</span></div><div class="step-label">Brand<br>master</div></div>
+      <div class="step" id="t4"><div class="bubble"><span>4</span></div><div class="step-label">List 1<br>Registrants</div></div>
+      <div class="step" id="t5"><div class="bubble"><span>5</span></div><div class="step-label">List 2<br>Web vis.</div></div>
+      <div class="step" id="t6"><div class="bubble"><span>6</span></div><div class="step-label">Confirm<br>&amp; report</div></div>
     </div>
 
-    <div class="step-details">
-      <div class="step-detail" id="sd1">
-        <div class="sd-num">Step 1</div>
-        <div class="sd-title">Scrape event page</div>
-        <div class="sd-body">Extract name, edition, brand key &amp; Snowflake search terms from the event URL</div>
-      </div>
-      <div class="step-detail" id="sd2">
-        <div class="sd-num">Step 2</div>
-        <div class="sd-title">Snowflake query</div>
-        <div class="sd-body">Query EVENT_REGISTRATIONS for all past editions, excluding current year</div>
-      </div>
-      <div class="step-detail" id="sd3">
-        <div class="sd-num">Step 3</div>
-        <div class="sd-title">Brand master list</div>
-        <div class="sd-body">Look up the brand's HubSpot master list ID from the reference file</div>
-      </div>
-      <div class="step-detail" id="sd4">
-        <div class="sd-num">Step 4</div>
-        <div class="sd-title">Build List 1</div>
-        <div class="sd-body">Clone reference list · rename · replace filters with one OR per past edition</div>
-      </div>
-      <div class="step-detail" id="sd5">
-        <div class="sd-num">Step 5</div>
-        <div class="sd-title">Build List 2</div>
-        <div class="sd-body">Create Registrants + Web Visitors: List 1 OR (page visit AND brand master list)</div>
-      </div>
-      <div class="step-detail" id="sd6">
-        <div class="sd-num">Step 6</div>
-        <div class="sd-title">Confirm &amp; report</div>
-        <div class="sd-body">Report both list IDs, names, filter counts &amp; any flags for review</div>
-      </div>
+    <!-- Step detail cards (8-step) -->
+    <div class="step-details" id="details-8" style="display:none">
+      <div class="step-detail" id="sd1"><div class="sd-num">Step 1</div><div class="sd-title">Scrape event page</div><div class="sd-body">Extract name, edition, brand key &amp; Snowflake search terms</div></div>
+      <div class="step-detail" id="sd2"><div class="sd-num">Step 2</div><div class="sd-title">Snowflake query</div><div class="sd-body">Past editions + resolve any communitySeg event name ambiguity</div></div>
+      <div class="step-detail" id="sd3"><div class="sd-num">Step 3</div><div class="sd-title">Brand master list</div><div class="sd-body">Look up brand's HubSpot master list ID</div></div>
+      <div class="step-detail" id="sd4"><div class="sd-num">Step 4</div><div class="sd-title">Print build plan</div><div class="sd-body">Claude prints what it will build before touching HubSpot</div></div>
+      <div class="step-detail" id="sd5"><div class="sd-num">Step 5</div><div class="sd-title">List 1 — Registrants</div><div class="sd-body">Clone reference list · one custom-event filter per past edition</div></div>
+      <div class="step-detail" id="sd6"><div class="sd-num">Step 6</div><div class="sd-title">List 2 — Web Visitors</div><div class="sd-body">List 1 OR (page visit AND brand master list)</div></div>
+      <div class="step-detail cs-step" id="sd7"><div class="sd-num">Step 7</div><div class="sd-title">Rebuild communitySeg</div><div class="sd-body">Replace each communitySeg past-reg list with custom event equivalent</div></div>
+      <div class="step-detail" id="sd8"><div class="sd-num">Step 8</div><div class="sd-title">Master Audience List</div><div class="sd-body">OR of all built lists — no communitySeg sources · flag anything uncertain</div></div>
+    </div>
+    <!-- Step detail cards (6-step) -->
+    <div class="step-details six" id="details-6">
+      <div class="step-detail" id="td1"><div class="sd-num">Step 1</div><div class="sd-title">Scrape event page</div><div class="sd-body">Extract name, edition, brand key &amp; search terms</div></div>
+      <div class="step-detail" id="td2"><div class="sd-num">Step 2</div><div class="sd-title">Snowflake query</div><div class="sd-body">All past editions, excluding current year</div></div>
+      <div class="step-detail" id="td3"><div class="sd-num">Step 3</div><div class="sd-title">Brand master list</div><div class="sd-body">Look up brand's HubSpot master list ID</div></div>
+      <div class="step-detail" id="td4"><div class="sd-num">Step 4</div><div class="sd-title">Build List 1</div><div class="sd-body">Clone reference · one filter per past edition</div></div>
+      <div class="step-detail" id="td5"><div class="sd-num">Step 5</div><div class="sd-title">Build List 2</div><div class="sd-body">Registrants + Web Visitors combined</div></div>
+      <div class="step-detail" id="td6"><div class="sd-num">Step 6</div><div class="sd-title">Confirm &amp; report</div><div class="sd-body">List IDs, names, filter counts</div></div>
     </div>
   </div>
 
-  <!-- Activity line -->
   <div id="activity-wrap">
     <span id="activity-icon">⏳</span>
     <span id="activity-text" class="idle dots">Waiting for Claude</span>
   </div>
 
-  <!-- Log -->
-  <div id="log-wrap" style="display:none">
-    <div id="log"></div>
-  </div>
+  <div id="log-wrap" style="display:none"><div id="log"></div></div>
 
   <div id="action-btns">
     <button class="btn-outline" onclick="reset()">Build another event</button>
   </div>
 </div>
 
-<!-- Result -->
+<!-- ── Flagged items (shown after build if Claude flagged anything) ── -->
+<div id="flagged-section">
+  <h4>⚠️ Flagged for Review</h4>
+  <div id="flagged-items"></div>
+</div>
+
+<!-- ── PHASE 3: Result ── -->
 <div class="card" id="result">
-  <div><span class="badge" id="rbadge"></span><h3 id="rtitle"></h3></div>
-  <ul class="summary" id="rbody"></ul>
+  <div style="display:flex;align-items:center;gap:.6rem;margin-bottom:.25rem;">
+    <span class="badge" id="rbadge"></span>
+    <h3 id="rtitle"></h3>
+  </div>
+
+  <!-- Built lists -->
+  <div class="result-section" id="rs-lists" style="display:none">
+    <div class="result-section-title">Lists built</div>
+    <div class="list-items" id="rs-list-items"></div>
+  </div>
+
+  <!-- Master list -->
+  <div class="result-section" id="rs-master" style="display:none">
+    <div class="result-section-title">Master audience list</div>
+    <div class="list-items" id="rs-master-item"></div>
+  </div>
+
+  <!-- communitySeg rebuilt -->
+  <div class="result-section" id="rs-rebuilt" style="display:none">
+    <div class="result-section-title">communitySeg lists rebuilt</div>
+    <div class="list-items" id="rs-rebuilt-items"></div>
+  </div>
 </div>
 
 <script>
-  const STEP_RE = [
+  marked.setOptions({ breaks:true, gfm:true });
+
+  // ── Step metadata ─────────────────────────────────────────────────────────
+  const STEP_RE_8 = [
     null,
-    /step 1|scraping|fetching|fetch.*url|event page|event name|edition|brand key|extracting|event url/i,
+    /step 1|scraping|fetching|event page|event name|edition|brand key|extracting/i,
     /step 2|snowflake|sql|event_registrations|past edition|distinct.*event|query.*registr/i,
     /step 3|master list|brand master|list id|looking up|brand.*list/i,
-    /step 4|clone|all past registrant|list 1|filter condition|rebuild.*filter|replace.*filter/i,
-    /step 5|list 2|web visitor|registrant.*web|filter group|page.*visit|visited.*url/i,
-    /step 6|confirm|report|created|both list|list id.*\d{3}|complete|done/i,
+    /step 4|build plan|## build plan|printing.*plan|plan.*before/i,
+    /step 5|clone|all past registrant|list 1[^0-9]|filter condition|replace.*filter/i,
+    /step 6|list 2[^0-9]|web visitor|registrant.*web|page.*visit|visited.*url/i,
+    /step 7|communit|rebuild.*communit|custom event|has completed event/i,
+    /step 8|master audience|master.*list.*created|## master|final.*master/i,
   ];
 
-  const STEP_ICONS  = ["","🌐","❄️","📋","📝","👁️","✅"];
-  const STEP_STATUS = [
+  const STEP_RE_6 = [
+    null,
+    /step 1|scraping|fetching|event page|event name|edition|brand key|extracting/i,
+    /step 2|snowflake|sql|event_registrations|past edition|query.*registr/i,
+    /step 3|master list|brand master|list id|looking up/i,
+    /step 4|clone|all past registrant|list 1[^0-9]|filter condition/i,
+    /step 5|list 2[^0-9]|web visitor|registrant.*web|page.*visit/i,
+    /step 6|confirm|report|created|both list|complete|done/i,
+  ];
+
+  const ICONS_8  = ["","🌐","❄️","📋","🗒️","📝","👁️","🔄","🏆"];
+  const STATUS_8 = [
+    "",
+    "Scraping event page…",
+    "Querying Snowflake for past editions…",
+    "Looking up brand master list…",
+    "Printing build plan…",
+    "Building List 1 — All Past Registrants…",
+    "Building List 2 — Registrants + Web Visitors…",
+    "Rebuilding communitySeg lists as custom event lists…",
+    "Building Master Audience List…",
+  ];
+
+  const ICONS_6  = ["","🌐","❄️","📋","📝","👁️","✅"];
+  const STATUS_6 = [
     "",
     "Scraping event page…",
     "Querying Snowflake for past editions…",
@@ -307,10 +419,14 @@
     "Confirming and reporting…",
   ];
 
+  // ── State ─────────────────────────────────────────────────────────────────
   let cur = 0, es = null, logText = "";
   let heartbeatTimer = null;
   let storedPlan = "";
+  let useEightSteps = false;
+  const CS_RE = /communityseg|community_seg|communitysegment/i;
 
+  // ── Activity ──────────────────────────────────────────────────────────────
   function setActivityIdle() {
     const el = document.getElementById("activity-text");
     el.className = "idle dots";
@@ -323,43 +439,106 @@
     if (!t || t.length < 5) return;
     const el = document.getElementById("activity-text");
     el.className = "";
-    el.textContent = t.slice(0, 140);
-    document.getElementById("activity-icon").textContent = STEP_ICONS[cur] || "⚙️";
+    el.textContent = t.slice(0, 150);
+    const icons  = useEightSteps ? ICONS_8  : ICONS_6;
+    const status = useEightSteps ? STATUS_8 : STATUS_6;
+    document.getElementById("activity-icon").textContent = icons[cur] || "⚙️";
     clearTimeout(heartbeatTimer);
     heartbeatTimer = setTimeout(() => {
-      if (cur > 0) {
-        el.className = "dots";
-        el.textContent = STEP_STATUS[cur] || "Working";
-      }
+      if (cur > 0) { el.className = "dots"; el.textContent = status[cur] || "Working"; }
     }, 6000);
   }
 
+  // ── Step advance ──────────────────────────────────────────────────────────
+  function checkStep(text) {
+    const re   = useEightSteps ? STEP_RE_8 : STEP_RE_6;
+    const max  = useEightSteps ? 8 : 6;
+    const pfx  = useEightSteps ? "s" : "t";
+    const dpfx = useEightSteps ? "sd" : "td";
+    for (let i = 1; i <= max; i++) {
+      if (i > cur && re[i] && re[i].test(text)) { advance(i, pfx, dpfx); break; }
+    }
+  }
+
+  function advance(n, pfx, dpfx) {
+    if (n <= cur) return;
+    if (cur > 0) {
+      document.getElementById(pfx + cur).className  = "step done";
+      document.getElementById(dpfx + cur).className = "step-detail done";
+    }
+    cur = n;
+    document.getElementById(pfx + n).className  = "step active";
+    document.getElementById(dpfx + n).className = "step-detail active";
+    const status = useEightSteps ? STATUS_8 : STATUS_6;
+    const icons  = useEightSteps ? ICONS_8  : ICONS_6;
+    const el = document.getElementById("activity-text");
+    el.className = "dots";
+    el.textContent = status[n] || "Working";
+    document.getElementById("activity-icon").textContent = icons[n] || "⚙️";
+  }
+
+  function markDone(last) {
+    const pfx  = useEightSteps ? "s" : "t";
+    const dpfx = useEightSteps ? "sd" : "td";
+    for (let i = 1; i <= last; i++) {
+      document.getElementById(pfx + i).className  = "step done";
+      document.getElementById(dpfx + i).className = "step-detail done";
+    }
+  }
+
+  function markErr(n) {
+    const pfx  = useEightSteps ? "s" : "t";
+    const dpfx = useEightSteps ? "sd" : "td";
+    if (n > 0) {
+      document.getElementById(pfx + n).className  = "step error";
+      document.getElementById(dpfx + n).className = "step-detail error";
+    }
+  }
+
+  // ── Start building ────────────────────────────────────────────────────────
   async function start() {
     const url = document.getElementById("url").value.trim();
     if (!url) { alert("Please enter an event URL."); return; }
 
-    setBtn(true, "Running…");
-    document.getElementById("input-card").style.display = "none";
-    document.getElementById("prog-card").style.display  = "block";
-    document.getElementById("result").style.display     = "none";
-    document.getElementById("log-wrap").style.display   = "block";
-    document.getElementById("action-btns").style.display = "none";
+    // Decide step count
+    useEightSteps = storedPlan.length > 0;
+
+    // Switch step display
+    document.getElementById("steps-8").style.display   = useEightSteps ? "flex"  : "none";
+    document.getElementById("steps-6").style.display   = useEightSteps ? "none"  : "flex";
+    document.getElementById("details-8").style.display = useEightSteps ? "grid"  : "none";
+    document.getElementById("details-6").style.display = useEightSteps ? "none"  : "grid";
+
+    // Reset step states
+    for (let i = 1; i <= 8; i++) {
+      const s = document.getElementById("s"+i); if (s) s.className = "step";
+      const d = document.getElementById("sd"+i); if (d) d.className = d.className.includes("cs-step") ? "step-detail cs-step" : "step-detail";
+    }
+    for (let i = 1; i <= 6; i++) {
+      const t = document.getElementById("t"+i); if (t) t.className = "step";
+      const td = document.getElementById("td"+i); if (td) td.className = "step-detail";
+    }
+
+    document.getElementById("plan-review").style.display  = "none";
+    document.getElementById("input-card").style.display   = "none";
+    document.getElementById("prog-card").style.display    = "block";
+    document.getElementById("result").style.display       = "none";
+    document.getElementById("flagged-section").style.display = "none";
+    document.getElementById("action-btns").style.display  = "none";
+    document.getElementById("log-wrap").style.display     = "block";
     document.getElementById("log").textContent = "";
     logText = ""; cur = 0;
-
-    for (let i = 1; i <= 6; i++) {
-      document.getElementById("s"+i).className  = "step";
-      document.getElementById("sd"+i).className = "step-detail";
-    }
     setActivityIdle();
 
     const r = await fetch("/build", {
-      method:"POST", headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({url, plan: storedPlan})
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url, plan: storedPlan })
     });
-    const {job_id} = await r.json();
-
+    const { job_id } = await r.json();
     es = new EventSource("/stream/" + job_id);
+
+    const pfx  = useEightSteps ? "s" : "t";
+    const dpfx = useEightSteps ? "sd" : "td";
 
     es.onmessage = (e) => {
       const msg = JSON.parse(e.data);
@@ -368,14 +547,13 @@
         if (cur > 0) {
           const el = document.getElementById("activity-text");
           if (!el.classList.contains("dots")) {
+            const status = useEightSteps ? STATUS_8 : STATUS_6;
             el.className = "dots";
-            el.textContent = STEP_STATUS[cur] || "Working";
+            el.textContent = status[cur] || "Working";
           }
         }
         return;
       }
-
-      if (msg.type === "step") advance(msg.step);
 
       if (msg.type === "output" && msg.text !== undefined) {
         logText += msg.text + "\n";
@@ -389,20 +567,19 @@
       if (msg.done) {
         es.close();
         clearTimeout(heartbeatTimer);
-        if (msg.success) {
+        const ok = msg.success;
+        if (ok) {
           markDone(cur);
           document.getElementById("activity-icon").textContent = "✅";
           document.getElementById("activity-text").className = "";
-          document.getElementById("activity-text").textContent = "Lists created successfully";
-          showResult(true);
+          document.getElementById("activity-text").textContent = "Build complete";
         } else {
           markErr(cur);
           document.getElementById("activity-icon").textContent = "⚠️";
           document.getElementById("activity-text").className = "";
           document.getElementById("activity-text").textContent = "Finished with errors — check log";
-          showResult(false);
         }
-        setBtn(false, "Build Lists");
+        showResult(ok);
         document.getElementById("action-btns").style.display = "flex";
       }
     };
@@ -411,71 +588,185 @@
       es.close();
       clearTimeout(heartbeatTimer);
       document.getElementById("activity-text").textContent = "Connection lost";
-      setBtn(false, "Build Lists");
     };
   }
 
-  function checkStep(text) {
-    for (let i = 1; i <= 6; i++) {
-      if (i > cur && STEP_RE[i] && STEP_RE[i].test(text)) { advance(i); break; }
-    }
-  }
-
-  function advance(n) {
-    if (n <= cur) return;
-    if (cur > 0) {
-      document.getElementById("s"+cur).className  = "step done";
-      document.getElementById("sd"+cur).className = "step-detail done";
-    }
-    cur = n;
-    document.getElementById("s"+n).className  = "step active";
-    document.getElementById("sd"+n).className = "step-detail active";
-
-    const el = document.getElementById("activity-text");
-    el.className = "dots";
-    el.textContent = STEP_STATUS[n] || "Working";
-    document.getElementById("activity-icon").textContent = STEP_ICONS[n] || "⚙️";
-  }
-
-  function markDone(last) {
-    for (let i=1; i<=last; i++) {
-      document.getElementById("s"+i).className  = "step done";
-      document.getElementById("sd"+i).className = "step-detail done";
-    }
-  }
-
-  function markErr(n) {
-    if (n > 0) {
-      document.getElementById("s"+n).className  = "step error";
-      document.getElementById("sd"+n).className = "step-detail error";
-    }
-  }
-
+  // ── Result rendering ──────────────────────────────────────────────────────
   function showResult(ok) {
     const el = document.getElementById("result");
     el.className = "card " + (ok ? "success" : "error");
     el.style.display = "block";
     document.getElementById("rbadge").className   = "badge " + (ok ? "success" : "error");
     document.getElementById("rbadge").textContent = ok ? "Done" : "Error";
-    document.getElementById("rtitle").textContent = ok ? "Lists created successfully" : "Build failed";
-    const matches = logText.match(/list[^:\n]{0,60}:\s*[^\n]{3,80}/gi) || [];
-    const bullets = matches.length ? matches.slice(0,6) : ["Check the log above for list IDs."];
-    document.getElementById("rbody").innerHTML = bullets.map(b => `<li>${b.trim()}</li>`).join("");
+    document.getElementById("rtitle").textContent = ok
+      ? "Lists created successfully"
+      : "Build finished with errors";
+
+    // Extract built lists (lines mentioning list IDs)
+    const listLines = logText.match(/(?:list|audience)[^\n]{0,80}(?:id|#|:)\s*\d{4,}/gi) || [];
+    const masterLines = logText.match(/master.*(?:id|#|:)\s*\d{4,}[^\n]*/gi) || [];
+    const rebuiltLines = logText.match(/rebuilt?.*communit[^\n]*/gi) || [];
+    const flaggedMatch = logText.match(/##\s*flagged for review([\s\S]*?)(?:##|$)/i);
+
+    if (listLines.length) {
+      document.getElementById("rs-lists").style.display = "block";
+      document.getElementById("rs-list-items").innerHTML = listLines.slice(0,8).map(l =>
+        `<div class="list-item">
+          <span class="li-icon">📝</span>
+          <div class="li-body"><div class="li-detail">${escHtml(l.trim())}</div></div>
+        </div>`).join("");
+    }
+
+    if (masterLines.length) {
+      document.getElementById("rs-master").style.display = "block";
+      document.getElementById("rs-master-item").innerHTML = masterLines.slice(0,2).map(l =>
+        `<div class="list-item master">
+          <span class="li-icon">🏆</span>
+          <div class="li-body"><div class="li-detail">${escHtml(l.trim())}</div></div>
+        </div>`).join("");
+    }
+
+    if (rebuiltLines.length) {
+      document.getElementById("rs-rebuilt").style.display = "block";
+      document.getElementById("rs-rebuilt-items").innerHTML = rebuiltLines.slice(0,4).map(l =>
+        `<div class="list-item">
+          <span class="li-icon">🔄</span>
+          <div class="li-body"><div class="li-detail">${escHtml(l.trim())}</div></div>
+        </div>`).join("");
+    }
+
+    // Flagged items
+    if (flaggedMatch && flaggedMatch[1].trim()) {
+      document.getElementById("flagged-section").style.display = "block";
+      document.getElementById("flagged-items").textContent = flaggedMatch[1].trim();
+    }
+
+    if (!listLines.length && !masterLines.length) {
+      document.getElementById("rs-lists").style.display = "block";
+      document.getElementById("rs-list-items").innerHTML =
+        `<div class="list-item"><span class="li-icon">🔍</span><div class="li-body"><div class="li-detail">Check the log above for list IDs and details.</div></div></div>`;
+    }
   }
 
-  function setBtn(disabled, label) {
-    const b = document.getElementById("go-btn");
-    b.disabled = disabled;
-    b.innerHTML = disabled ? `<span class="spin"></span>${label}` : label;
+  // ── Plan parsing ──────────────────────────────────────────────────────────
+  function parsePlan(plan) {
+    const lines = plan.split("\n");
+    let hasCS = false;
+
+    // ── communitySeg lines ─────────────────────────────────────────────────
+    const csLines = lines.filter(l => CS_RE.test(l)).map(l => l.trim()).filter(Boolean);
+    if (csLines.length) {
+      hasCS = true;
+      document.getElementById("cs-alert").style.display = "block";
+      document.getElementById("cs-list").innerHTML =
+        csLines.slice(0,8).map(l => `<li>${highlightCS(escHtml(l))}</li>`).join("");
+    }
+
+    // ── communitySeg → rebuild column ──────────────────────────────────────
+    const toRebuild = csLines.filter(l =>
+      /registrant|registration|past.*event|event.*past|attendee/i.test(l)
+    );
+    const toSkip = csLines.filter(l =>
+      !/registrant|registration|past.*event|event.*past|attendee/i.test(l)
+    );
+
+    const rebuildEl = document.getElementById("pg-rebuild-items");
+    if (toRebuild.length) {
+      rebuildEl.innerHTML = toRebuild.slice(0,4).map(l => {
+        const name = l.replace(/^[-*•\d.]\s*/,"").slice(0,80);
+        return `<div class="pg-item cs-item"><span class="pg-icon">🔄</span>
+          <span>${escHtml(name)}<span class="cs-tag">commSeg</span><span class="rebuild-tag">→ custom event</span></span></div>`;
+      }).join("");
+      if (toSkip.length) {
+        rebuildEl.innerHTML += `<div class="pg-item" style="color:var(--muted)"><span class="pg-icon">⏭️</span><span>${toSkip.length} other commSeg list(s) will be skipped &amp; flagged</span></div>`;
+      }
+    } else if (csLines.length) {
+      rebuildEl.innerHTML = `<div class="pg-item" style="color:var(--muted)"><span class="pg-icon">⏭️</span><span>${csLines.length} commSeg list(s) — not past registrations, will be skipped &amp; flagged</span></div>`;
+    } else {
+      rebuildEl.innerHTML = `<div class="pg-item" style="color:var(--muted)"><span class="pg-icon">✅</span><span>None detected</span></div>`;
+    }
+
+    // ── Lists to build ─────────────────────────────────────────────────────
+    const toBuild = [];
+    lines.forEach(l => {
+      const t = l.trim();
+      const m = t.match(/^(?:[-*•]\s*)?(?:\*{1,2})?(list\s*[12]|master list)[:\s–\-]+(.{5,80})/i)
+             || t.match(/(?:list name|recommended.*list)[:\s–]+([^\n]{5,80})/i)
+             || t.match(/^(?:\d[.)]\s*)?((?:all past registrant|registrant.*web|web visitor)[^\n]{0,60})/i);
+      if (m && !CS_RE.test(t)) {
+        const label = (m[2] || m[1] || t).replace(/\*+/g,"").trim().slice(0,90);
+        if (label.length > 4 && !toBuild.includes(label)) toBuild.push(label);
+      }
+    });
+
+    // Always add the master and default lists
+    const defaults = [
+      "List 1 — All Past Registrants (custom event)",
+      "List 2 — Registrants + Web Visitors",
+      ...toRebuild.slice(0,3).map(l => l.replace(/^[-*•\d.]\s*/,"").slice(0,60) + " (rebuilt)"),
+      "Master Audience List (combines all above)",
+    ];
+    const buildEl = document.getElementById("pg-build-items");
+    const shown = toBuild.length ? toBuild.slice(0,4) : defaults;
+    buildEl.innerHTML = shown.map(l =>
+      `<div class="pg-item"><span class="pg-icon">📝</span><span>${escHtml(l)}</span></div>`
+    ).join("");
+
+    // ── Reuse / clone ──────────────────────────────────────────────────────
+    const REUSE_RE = /(?:clone|reuse|based on|reference list|copy of|existing list)[:\s]+([^\n]{5,100})/i;
+    const MASTER_RE = /(?:master list|brand master)[:\s–]+([^\n]{5,80})/i;
+    const toReuse = [];
+    lines.forEach(l => {
+      const t = l.trim();
+      const m = t.match(REUSE_RE) || t.match(MASTER_RE);
+      if (m) {
+        const label = m[1].replace(/\*+/g,"").trim().slice(0,90);
+        if (label.length > 4) toReuse.push({ label, isCS: CS_RE.test(label) });
+      }
+    });
+
+    const reuseEl = document.getElementById("pg-reuse-items");
+    if (toReuse.length) {
+      reuseEl.innerHTML = toReuse.slice(0,4).map(({ label, isCS }) =>
+        `<div class="pg-item${isCS ? " cs-item" : ""}">
+          <span class="pg-icon">${isCS ? "⛔" : "♻️"}</span>
+          <span>${escHtml(label)}${isCS ? '<span class="cs-tag">commSeg — NOT used</span>' : ""}</span>
+        </div>`
+      ).join("");
+      if (toReuse.some(r => r.isCS)) document.getElementById("pg-reuse").classList.add("warn");
+    } else {
+      reuseEl.innerHTML = `<div class="pg-item"><span class="pg-icon">🔍</span><span style="color:var(--muted)">Reference list from HubSpot (#28908 pattern)</span></div>`;
+    }
+
+    // Use 8-step mode if plan has communitySeg
+    if (hasCS) useEightSteps = true;
+  }
+
+  // ── Helpers ───────────────────────────────────────────────────────────────
+  function highlightCS(html) {
+    return html.replace(/(communityseg|community_seg|communitysegment)/gi,
+      '<mark class="cs">$1</mark>');
+  }
+  function escHtml(s) {
+    return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+  }
+
+  function togglePlanText() {
+    const el  = document.getElementById("plan-text");
+    const btn = document.querySelector(".pr-toggle");
+    const open = el.style.display === "block";
+    el.style.display = open ? "none" : "block";
+    btn.textContent  = open ? "Show full plan" : "Hide full plan";
   }
 
   function reset() {
-    document.getElementById("input-card").style.display  = "block";
-    document.getElementById("prog-card").style.display   = "none";
-    document.getElementById("result").style.display      = "none";
-    document.getElementById("plan-banner").style.display = "none";
+    document.getElementById("input-card").style.display      = "block";
+    document.getElementById("plan-review").style.display     = "none";
+    document.getElementById("prog-card").style.display       = "none";
+    document.getElementById("result").style.display          = "none";
+    document.getElementById("flagged-section").style.display = "none";
     document.getElementById("url").value = "";
-    logText = ""; cur = 0; storedPlan = "";
+    logText = ""; cur = 0; storedPlan = ""; useEightSteps = false;
     clearTimeout(heartbeatTimer);
   }
 
@@ -483,115 +774,20 @@
     if (e.key === "Enter") start();
   });
 
-  function togglePlan() {
-    const body = document.getElementById("plan-body");
-    const btn  = document.querySelector(".plan-toggle");
-    const open = body.style.display === "block";
-    body.style.display = open ? "none" : "block";
-    btn.textContent    = open ? "Show full plan" : "Hide full plan";
-  }
-
-  function parsePlan(plan) {
-    const lines = plan.split("\n");
-
-    // ── communitySeg detection ─────────────────────────────────────────────
-    const CS_RE = /communityseg|community_seg|communitysegment/i;
-    const csLines = lines.filter(l => CS_RE.test(l)).map(l => l.trim()).filter(Boolean);
-    if (csLines.length) {
-      document.getElementById("cs-alert").style.display = "block";
-      document.getElementById("cs-list").innerHTML =
-        csLines.map(l => `<li>${highlightCS(l)}</li>`).join("");
-    }
-
-    // ── Lists to build ─────────────────────────────────────────────────────
-    // Look for lines that describe a named list being created/built
-    const BUILD_RE = /(?:^|\s)(list\s*\d|master list name|recommended.*list|create|build|new list)[:\s–\-](.{5,80})/i;
-    const LIST_NAME_RE = /^[-*•]\s*\*{0,2}(list\s*\d[^\n:]{0,60})/i;
-    const NAMED_LIST_RE = /(?:list name|master list)[:\s–]+([^\n]{5,80})/i;
-
-    const toBuild = [];
-    lines.forEach(line => {
-      const t = line.trim();
-      if (!t) return;
-      // "List 1:", "List 2:", "List Name:", bullet items describing a list
-      const m = t.match(/^(?:[-*•]\s*)?(?:\*{1,2})?(list\s*[12]|list\s*name|master list)[:\s–\-]+(.{5,80})/i)
-             || t.match(/^(?:\d[.)]\s*)?((?:all past registrant|registrant.*web|web visitor)[^\n]{0,60})/i);
-      if (m) {
-        const label = (m[2] || m[1] || t).replace(/\*+/g, "").trim().slice(0, 100);
-        if (label.length > 4 && !CS_RE.test(label)) toBuild.push(label);
-      }
-      // "Recommended master list name: …"
-      const nm = t.match(NAMED_LIST_RE);
-      if (nm) {
-        const label = nm[1].replace(/\*+/g, "").trim().slice(0, 100);
-        if (label.length > 4 && !toBuild.includes(label)) toBuild.push(label);
-      }
-    });
-
-    const buildEl = document.getElementById("ps-build-items");
-    if (toBuild.length) {
-      buildEl.innerHTML = toBuild.slice(0, 6).map(l =>
-        `<div class="ps-item"><span class="ps-icon">📝</span><span>${escHtml(l)}</span></div>`
-      ).join("");
-    } else {
-      buildEl.innerHTML = `<div class="ps-item"><span class="ps-icon">📝</span><span>List 1 — All Past Registrants<br>List 2 — Registrants + Web Visitors</span></div>`;
-    }
-
-    // ── Lists to reuse / clone ─────────────────────────────────────────────
-    const REUSE_RE = /(?:clone|reuse|based on|reference list|copy of|from list|existing list)[:\s]+([^\n]{5,100})/i;
-    const MASTER_RE = /(?:master list|brand master)[:\s–]+([^\n]{5,80})/i;
-    const toReuse = [];
-    lines.forEach(line => {
-      const t = line.trim();
-      const m = t.match(REUSE_RE) || t.match(MASTER_RE);
-      if (m) {
-        const label = m[1].replace(/\*+/g, "").trim().slice(0, 100);
-        if (label.length > 4) {
-          const isCS = CS_RE.test(label);
-          toReuse.push({ label, isCS });
-        }
-      }
-    });
-
-    const reuseEl = document.getElementById("ps-reuse-items");
-    if (toReuse.length) {
-      reuseEl.innerHTML = toReuse.slice(0, 6).map(({ label, isCS }) =>
-        `<div class="ps-item${isCS ? " warn-item" : ""}">
-          <span class="ps-icon">${isCS ? "⛔" : "♻️"}</span>
-          <span>${escHtml(label)}${isCS ? '<span class="cs-tag">communitySeg</span>' : ""}</span>
-        </div>`
-      ).join("");
-      if (toReuse.some(r => r.isCS)) {
-        document.getElementById("ps-reuse").classList.add("warn");
-      }
-    } else {
-      reuseEl.innerHTML = `<div class="ps-item"><span class="ps-icon">🔍</span><span style="color:var(--muted)">No specific reuse candidates found in plan</span></div>`;
-    }
-  }
-
-  function highlightCS(text) {
-    return escHtml(text).replace(
-      /(communityseg|community_seg|communitysegment)/gi,
-      '<mark style="background:#fecaca;color:#7f1d1d;padding:0 2px;border-radius:3px">$1</mark>'
-    );
-  }
-
-  function escHtml(s) {
-    return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
-  }
-
+  // ── On load: check for plan from segment planner ──────────────────────────
   const qs = new URLSearchParams(location.search);
   if (qs.get("url")) {
     const eventUrl = qs.get("url");
     document.getElementById("url").value = eventUrl;
-    // Fetch any segment plan passed from event-segment-planner
+
     fetch("/get-plan?url=" + encodeURIComponent(eventUrl))
       .then(r => r.json())
       .then(d => {
         if (d.plan) {
           storedPlan = d.plan;
-          document.getElementById("plan-body").textContent = d.plan;
-          document.getElementById("plan-banner").style.display = "block";
+          document.getElementById("plan-text").textContent = d.plan;
+          document.getElementById("plan-review").style.display = "block";
+          document.getElementById("input-card").style.display  = "none";
           parsePlan(d.plan);
         }
       })
