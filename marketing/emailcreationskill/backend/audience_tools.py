@@ -99,8 +99,10 @@ def extract_master_list_id(text: str) -> str:
     m = re.search(r"MASTER_LIST_ID:\s*(\d+)", text)
     if m:
         return m.group(1)
-    # Fallback patterns in case Claude rephrases
+    # HubSpot URL patterns near "master" keyword
     for pat in [
+        r"(?i)master[^\n]{0,300}objectLists/(\d+)",
+        r"(?i)objectLists/(\d+)[^\n]{0,300}master",
         r"[Mm]aster [Aa]udience[^\n]*?[Ii][Dd][:\s]+(\d{4,7})",
         r"[Mm]aster[^\n]*?[Ll]ist[^\n]*?[Ii][Dd][:\s]+(\d{4,7})",
         r"(?:master audience|Master Audience)[^\n]{0,80}\b(\d{5,7})\b",
@@ -108,6 +110,11 @@ def extract_master_list_id(text: str) -> str:
         m = re.search(pat, text)
         if m:
             return m.group(1)
+    # Last resort: master list is always the LAST list Claude creates —
+    # take the final objectLists/ID in the entire output
+    all_ids = re.findall(r"objectLists/(\d+)", text)
+    if all_ids:
+        return all_ids[-1]
     return ""
 
 

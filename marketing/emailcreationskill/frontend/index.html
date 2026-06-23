@@ -163,15 +163,13 @@
             <span style="font-size:12px;color:var(--gray-400)">or search to override:</span>
           </div>
 
-          <!-- Build Audience panel -->
-          <div style="margin-top:10px;padding:12px;background:#fafafa;border:1px solid #e2e8f0;border-radius:8px">
-            <div style="font-size:13px;color:var(--gray-700);margin-bottom:8px">
-              <strong>Build Audience Lists</strong>
-              <span style="font-size:12px;color:var(--gray-400);margin-left:6px">— runs hubspot-event-list-builder to create Past Registrants + Web Visitors lists</span>
+          <!-- Audience build status (auto-starts with plan) -->
+          <div id="audience-build-panel" style="margin-top:10px;padding:12px;background:#fafafa;border:1px solid #e2e8f0;border-radius:8px">
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+              <strong style="font-size:13px;color:var(--gray-700)">Audience Lists</strong>
+              <span id="audience-status-badge" style="font-size:12px;color:var(--gray-400)">— building automatically…</span>
+              <button id="build-audience-retry-btn" class="btn btn-outline" onclick="buildAudience()" style="font-size:12px;display:none">↺ Retry</button>
             </div>
-            <button class="btn btn-outline" id="build-audience-btn" onclick="buildAudience()" style="font-size:13px">
-              ▶ Build Audience Lists
-            </button>
             <!-- Streaming ticker (visible while running) -->
             <div id="audience-ticker" class="hidden" style="margin-top:8px;padding:8px;background:#1e1e2e;border-radius:6px;font-family:monospace;font-size:11px;color:#a6e3a1;max-height:140px;overflow-y:auto;white-space:pre-wrap;word-break:break-all"></div>
             <div id="audience-status" class="hidden" style="margin-top:6px;font-size:13px"></div>

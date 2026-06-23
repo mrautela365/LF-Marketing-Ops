@@ -255,9 +255,10 @@ async function generatePlan() {
     // fall through to finally so content generation still fires
   } finally {
     document.getElementById("plan-btn").disabled = false;
-    // Always fire content generation if the plan API returned a session
+    // Always fire content generation + audience build if the plan API returned a session
     if (planSessionId) {
       generateEmailContent(planSessionId);
+      buildAudience(planSessionId);  // auto-start audience build in background
     }
   }
 }
@@ -562,26 +563,31 @@ function clearList() {
   document.getElementById("list-selected").classList.add("hidden");
 }
 
-// ── Build Audience Lists (hubspot-event-list-builder integration) ─────────────
+// ── Build Audience Lists (auto-starts with plan; retry button shown on failure) ─
 
-async function buildAudience() {
-  const btn    = document.getElementById("build-audience-btn");
-  const ticker = document.getElementById("audience-ticker");
-  const status = document.getElementById("audience-status");
+async function buildAudience(sid) {
+  const effectiveSid = sid || sessionId;
+  if (!effectiveSid) return;
 
-  btn.disabled = true;
-  btn.textContent = "⏳ Building…";
+  const badge      = document.getElementById("audience-status-badge");
+  const retryBtn   = document.getElementById("build-audience-retry-btn");
+  const ticker     = document.getElementById("audience-ticker");
+  const statusEl   = document.getElementById("audience-status");
+  const sendlistEl = document.getElementById("sendlist-display");
+
+  if (badge)    { badge.textContent = "⏳ Building audience lists…"; badge.style.color = "var(--gray-500)"; }
+  if (retryBtn) retryBtn.style.display = "none";
   ticker.textContent = "";
   ticker.classList.remove("hidden");
-  status.classList.add("hidden");
-  status.innerHTML = "";
+  statusEl.classList.add("hidden");
+  statusEl.innerHTML = "";
 
   let jobId = null;
   try {
     const resp = await fetch(`${API}/build-audience`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ session_id: sessionId, event_url: "" }),
+      body: JSON.stringify({ session_id: effectiveSid, event_url: "" }),
     });
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({ detail: resp.statusText }));
@@ -590,16 +596,14 @@ async function buildAudience() {
     const data = await resp.json();
     jobId = data.job_id;
   } catch (e) {
-    btn.disabled = false;
-    btn.textContent = "▶ Build Audience Lists";
     ticker.classList.add("hidden");
-    status.innerHTML = `<span style="color:#dc2626">⚠ ${escapeHtml(e.message)}</span>`;
-    status.classList.remove("hidden");
+    if (badge)    { badge.textContent = "⚠ Build failed — " + escapeHtml(e.message); badge.style.color = "#dc2626"; }
+    if (retryBtn) retryBtn.style.display = "";
     return;
   }
 
   // Stream output via SSE
-  const es = new EventSource(`${API}/audience-stream/${jobId}?session_id=${encodeURIComponent(sessionId)}`);
+  const es = new EventSource(`${API}/audience-stream/${jobId}?session_id=${encodeURIComponent(effectiveSid)}`);
 
   es.onmessage = (event) => {
     let msg;
@@ -614,36 +618,34 @@ async function buildAudience() {
 
     if (msg.type === "complete") {
       es.close();
-      btn.disabled = false;
-      btn.textContent = "▶ Build Audience Lists";
+      ticker.classList.add("hidden");  // collapse log when done
       const mid = msg.master_list_id;
       if (mid) {
+        // Auto-select as send list
         selectList(mid, "Master Audience (built)", 0);
-        status.innerHTML = `<span style="color:#166534">✓ Master audience list built — ID ${escapeHtml(mid)} auto-selected as send list</span>`;
+        // Update sendlist display chip
+        if (sendlistEl) sendlistEl.textContent = `Master Audience — List ID ${mid}`;
+        if (badge) { badge.textContent = `✓ Master audience ready (ID ${escapeHtml(mid)}) — auto-selected as send list`; badge.style.color = "#166534"; }
       } else {
-        status.innerHTML = `<span style="color:#92400e">⚠ Build finished but master list ID not extracted — check log above and select manually</span>`;
+        if (badge) { badge.textContent = "⚠ Build finished but list ID not found — select manually"; badge.style.color = "#92400e"; }
+        if (retryBtn) retryBtn.style.display = "";
       }
-      status.classList.remove("hidden");
       return;
     }
 
-    if (msg.type === "error" || msg.done) {
+    if (msg.type === "error") {
       es.close();
-      btn.disabled = false;
-      btn.textContent = "▶ Build Audience Lists";
-      if (msg.type === "error") {
-        status.innerHTML = `<span style="color:#dc2626">⚠ ${escapeHtml(msg.text || "Unknown error")}</span>`;
-        status.classList.remove("hidden");
-      }
+      ticker.classList.add("hidden");
+      if (badge) { badge.textContent = `⚠ Build error: ${escapeHtml(msg.text || "unknown")} — click Retry`; badge.style.color = "#dc2626"; }
+      if (retryBtn) retryBtn.style.display = "";
     }
   };
 
   es.onerror = () => {
     es.close();
-    btn.disabled = false;
-    btn.textContent = "▶ Build Audience Lists";
-    status.innerHTML = `<span style="color:#dc2626">⚠ Stream connection lost</span>`;
-    status.classList.remove("hidden");
+    ticker.classList.add("hidden");
+    if (badge) { badge.textContent = "⚠ Stream disconnected — click Retry"; badge.style.color = "#dc2626"; }
+    if (retryBtn) retryBtn.style.display = "";
   };
 }
 
