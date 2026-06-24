@@ -20,11 +20,11 @@ def health():
         "status": "ok",
         "litellm_base_url": os.environ.get("LITELLM_BASE_URL", ""),
         "litellm_key_set": bool(os.environ.get("LITELLM_API_KEY")),
-        "hubspot": bool(os.environ.get("HUBSPOT_API_KEY")),
+        "hubspot": bool(os.environ.get("HUBSPOT_ACCESS_TOKEN")),
         "snowflake": bool(
             os.environ.get("SNOWFLAKE_ACCOUNT")
             and os.environ.get("SNOWFLAKE_USER")
-            and os.environ.get("SNOWFLAKE_PASSWORD")
+            and os.environ.get("SNOWFLAKE_PRIVATE_KEY")
         ),
     }
 

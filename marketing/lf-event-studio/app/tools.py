@@ -4,26 +4,35 @@ HubSpot (REST API), Snowflake (Python connector), web fetch (requests).
 All credentials are read from environment variables.
 """
 
-import json
 import os
 from pathlib import Path
 
 import requests
 import snowflake.connector
 from bs4 import BeautifulSoup
+from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives.serialization import (
+    Encoding,
+    NoEncryption,
+    PrivateFormat,
+    load_pem_private_key,
+)
 
 # ── HubSpot ──────────────────────────────────────────────────────────────────
 
 HUBSPOT_BASE = "https://api.hubapi.com"
-HS_PORTAL_ID = "8112310"
+
+
+def _hs_portal_id() -> str:
+    return os.environ.get("HUBSPOT_PORTAL_ID", "8112310")
 
 
 def _hs_headers() -> dict:
-    key = os.environ.get("HUBSPOT_API_KEY", "")
-    if not key:
-        raise RuntimeError("HUBSPOT_API_KEY not set")
+    token = os.environ.get("HUBSPOT_ACCESS_TOKEN", "")
+    if not token:
+        raise RuntimeError("HUBSPOT_ACCESS_TOKEN not set")
     return {
-        "Authorization": f"Bearer {key}",
+        "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
     }
 
@@ -124,15 +133,30 @@ def hubspot_get_event_types() -> dict:
 # ── Snowflake ─────────────────────────────────────────────────────────────────
 
 
+def _sf_private_key_bytes() -> bytes:
+    """Load Snowflake private key from SNOWFLAKE_PRIVATE_KEY env var (PEM string)."""
+    pem = os.environ.get("SNOWFLAKE_PRIVATE_KEY", "").strip()
+    if not pem:
+        raise RuntimeError("SNOWFLAKE_PRIVATE_KEY not set")
+    # python-dotenv may escape newlines — normalise
+    pem = pem.replace("\\n", "\n")
+    key = load_pem_private_key(pem.encode(), password=None, backend=default_backend())
+    return key.private_bytes(
+        encoding=Encoding.DER,
+        format=PrivateFormat.PKCS8,
+        encryption_algorithm=NoEncryption(),
+    )
+
+
 def _sf_connect():
-    required = ["SNOWFLAKE_ACCOUNT", "SNOWFLAKE_USER", "SNOWFLAKE_PASSWORD"]
+    required = ["SNOWFLAKE_ACCOUNT", "SNOWFLAKE_USER", "SNOWFLAKE_PRIVATE_KEY"]
     missing = [k for k in required if not os.environ.get(k)]
     if missing:
         raise RuntimeError(f"Snowflake env vars not set: {', '.join(missing)}")
     return snowflake.connector.connect(
         account=os.environ["SNOWFLAKE_ACCOUNT"],
         user=os.environ["SNOWFLAKE_USER"],
-        password=os.environ["SNOWFLAKE_PASSWORD"],
+        private_key=_sf_private_key_bytes(),
         database=os.environ.get("SNOWFLAKE_DATABASE", "ANALYTICS"),
         schema=os.environ.get("SNOWFLAKE_SCHEMA", "Silver_Segment"),
         warehouse=os.environ.get("SNOWFLAKE_WAREHOUSE") or None,
