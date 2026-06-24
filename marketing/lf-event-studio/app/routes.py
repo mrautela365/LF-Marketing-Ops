@@ -15,6 +15,17 @@ _MARKETING = Path(__file__).parent.parent.parent
 PLANNER_CWD  = str(_MARKETING / "event-segment-planner")
 BUILDER_CWD  = str(_MARKETING / "hubspot-event-list-builder")
 
+# Read SKILL.md files at startup so they're embedded directly in the prompt
+# (claude -p does not invoke slash commands the same way as interactive mode)
+def _read_skill(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8")
+    except Exception:
+        return ""
+
+PLANNER_SKILL = _read_skill(_MARKETING / "event-segment-planner" / "SKILL.md")
+BUILDER_SKILL = _read_skill(_MARKETING / "hubspot-event-list-builder" / "SKILL.md")
+
 bp = Blueprint("main", __name__)
 
 
@@ -30,7 +41,7 @@ def plan():
     url = (data.get("url") or "").strip()
     if not url:
         return {"error": "url required"}, 400
-    prompt = PLANNING_PROMPT.format(url=url)
+    prompt = PLANNING_PROMPT.format(url=url, skill=PLANNER_SKILL)
     return {"job_id": start_job(prompt, cwd=PLANNER_CWD)}
 
 
@@ -48,7 +59,7 @@ def build():
     if qa:
         qa_section = f"\nUser answers to clarifying questions:\n{qa}\n"
 
-    prompt = BUILDING_PROMPT.format(url=url, plan=plan, qa_section=qa_section)
+    prompt = BUILDING_PROMPT.format(url=url, plan=plan, qa_section=qa_section, skill=BUILDER_SKILL)
     return {"job_id": start_job(prompt, cwd=BUILDER_CWD)}
 
 
