@@ -197,117 +197,80 @@ def read_reference_file(filename: str) -> dict:
         return {"error": str(exc)}
 
 
-# ── Tool definitions (Anthropic tool_use schema) ──────────────────────────────
+# ── Tool definitions (OpenAI / LiteLLM format) ───────────────────────────────
+# Each entry: {"type": "function", "function": {"name", "description", "parameters"}}
 
-TOOL_DEFS = [
-    {
-        "name": "web_fetch",
-        "description": "Fetch the text content of any URL. Use to scrape event pages.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "url": {"type": "string", "description": "The URL to fetch"}
+def _fn(name: str, description: str, properties: dict, required: list) -> dict:
+    return {
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": description,
+            "parameters": {
+                "type": "object",
+                "properties": properties,
+                "required": required,
             },
-            "required": ["url"],
         },
-    },
-    {
-        "name": "hubspot_search_campaigns",
-        "description": "Search HubSpot marketing emails by keyword (name or subject). Use to find prior sends for an event.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "query": {"type": "string", "description": "Search keyword, e.g. 'KubeCon North America 2025'"}
-            },
-            "required": ["query"],
+    }
+
+
+TOOL_DEFS_OPENAI = [
+    _fn("web_fetch",
+        "Fetch the text content of any URL. Use to scrape event pages.",
+        {"url": {"type": "string", "description": "The URL to fetch"}},
+        ["url"]),
+
+    _fn("hubspot_search_campaigns",
+        "Search HubSpot marketing emails by keyword (name or subject). Use to find prior sends for an event.",
+        {"query": {"type": "string", "description": "Search keyword, e.g. 'KubeCon North America 2025'"}},
+        ["query"]),
+
+    _fn("hubspot_search_lists",
+        "Search HubSpot contact lists by name keyword.",
+        {"query": {"type": "string", "description": "List name keyword to search"}},
+        ["query"]),
+
+    _fn("hubspot_get_list",
+        "Get details of a HubSpot contact list by ID, including its filter branch.",
+        {"list_id": {"type": "string", "description": "The numeric HubSpot list ID"}},
+        ["list_id"]),
+
+    _fn("hubspot_create_list",
+        ("Create a new dynamic HubSpot contact list. "
+         "filter_branch must follow the HubSpot filterBranch schema. "
+         "For custom-event filters use filterType='BEHAVIORAL_EVENT'. "
+         "For list-membership filters use filterType='LIST_MEMBERSHIP'. "
+         "For page-view filters use filterType='PAGE_VIEW'."),
+        {
+            "name":          {"type": "string", "description": "List name"},
+            "filter_branch": {"type": "object", "description": "HubSpot filterBranch object"},
         },
-    },
-    {
-        "name": "hubspot_search_lists",
-        "description": "Search HubSpot contact lists by name keyword.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "query": {"type": "string", "description": "List name keyword to search"}
-            },
-            "required": ["query"],
+        ["name", "filter_branch"]),
+
+    _fn("hubspot_update_list_filters",
+        "Replace the filter branch of an existing HubSpot contact list.",
+        {
+            "list_id":       {"type": "string"},
+            "filter_branch": {"type": "object"},
         },
-    },
-    {
-        "name": "hubspot_get_list",
-        "description": "Get details of a HubSpot contact list by ID, including its filter branch.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "list_id": {"type": "string", "description": "The numeric HubSpot list ID"}
-            },
-            "required": ["list_id"],
-        },
-    },
-    {
-        "name": "hubspot_create_list",
-        "description": (
-            "Create a new dynamic HubSpot contact list. "
-            "filter_branch must follow the HubSpot filterBranch schema. "
-            "For custom-event filters use filterType='BEHAVIORAL_EVENT' with the event fullyQualifiedName. "
-            "For list-membership filters use filterType='LIST_MEMBERSHIP'. "
-            "For page-view filters use filterType='PAGE_VIEW'."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "name": {"type": "string", "description": "List name"},
-                "filter_branch": {
-                    "type": "object",
-                    "description": "HubSpot filterBranch object with filterBranchType, filterBranches, and filters arrays",
-                },
-            },
-            "required": ["name", "filter_branch"],
-        },
-    },
-    {
-        "name": "hubspot_update_list_filters",
-        "description": "Replace the filter branch of an existing HubSpot contact list.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "list_id": {"type": "string"},
-                "filter_branch": {"type": "object"},
-            },
-            "required": ["list_id", "filter_branch"],
-        },
-    },
-    {
-        "name": "hubspot_get_event_types",
-        "description": "List all HubSpot custom event type definitions. Use to find the fullyQualifiedName needed for behavioral event filters.",
-        "input_schema": {"type": "object", "properties": {}, "required": []},
-    },
-    {
-        "name": "snowflake_query",
-        "description": (
-            "Run a SQL query against Snowflake. "
-            "The default database is ANALYTICS, schema is Silver_Segment. "
-            "Use to find past event editions in EVENT_REGISTRATIONS."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "sql": {"type": "string", "description": "SQL query to execute"}
-            },
-            "required": ["sql"],
-        },
-    },
-    {
-        "name": "read_reference_file",
-        "description": "Read a file from the references/ directory. Use 'brand-master-lists.md' to look up brand master list IDs.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "filename": {"type": "string", "description": "Filename only, e.g. 'brand-master-lists.md'"}
-            },
-            "required": ["filename"],
-        },
-    },
+        ["list_id", "filter_branch"]),
+
+    _fn("hubspot_get_event_types",
+        "List all HubSpot custom event type definitions. Use to find the fullyQualifiedName for behavioral event filters.",
+        {}, []),
+
+    _fn("snowflake_query",
+        ("Run a SQL query against Snowflake. "
+         "Default database: ANALYTICS, schema: Silver_Segment. "
+         "Use to find past event editions in EVENT_REGISTRATIONS."),
+        {"sql": {"type": "string", "description": "SQL query to execute"}},
+        ["sql"]),
+
+    _fn("read_reference_file",
+        "Read a file from the references/ directory. Use 'brand-master-lists.md' to look up brand master list IDs.",
+        {"filename": {"type": "string", "description": "Filename only, e.g. 'brand-master-lists.md'"}},
+        ["filename"]),
 ]
 
 TOOL_HANDLERS: dict = {

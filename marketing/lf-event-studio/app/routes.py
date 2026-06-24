@@ -18,7 +18,8 @@ def health():
     import os
     return {
         "status": "ok",
-        "anthropic": bool(os.environ.get("ANTHROPIC_API_KEY")),
+        "litellm_base_url": os.environ.get("LITELLM_BASE_URL", ""),
+        "litellm_key_set": bool(os.environ.get("LITELLM_API_KEY")),
         "hubspot": bool(os.environ.get("HUBSPOT_API_KEY")),
         "snowflake": bool(
             os.environ.get("SNOWFLAKE_ACCOUNT")

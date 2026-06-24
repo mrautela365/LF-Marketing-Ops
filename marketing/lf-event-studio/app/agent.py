@@ -1,6 +1,6 @@
 """
-Anthropic SDK agentic loop with streaming.
-Replaces the claude.exe subprocess runner.
+Agentic loop using the OpenAI-compatible LiteLLM proxy.
+Streams text in real time and handles tool_calls stop_reason.
 """
 
 import json
@@ -9,31 +9,32 @@ import queue
 import threading
 import uuid
 
-import anthropic
+from openai import OpenAI
 
-from .tools import TOOL_DEFS, TOOL_HANDLERS
-
-MODEL = "claude-sonnet-4-6"
-MAX_TOKENS = 16000
+from .tools import TOOL_DEFS_OPENAI, TOOL_HANDLERS
 
 _jobs: dict[str, queue.Queue] = {}
-_client: anthropic.Anthropic | None = None
+_client: OpenAI | None = None
 
 
-def _get_client() -> anthropic.Anthropic:
+def _get_client() -> OpenAI:
     global _client
     if _client is None:
-        key = os.environ.get("ANTHROPIC_API_KEY", "")
-        if not key:
-            raise RuntimeError("ANTHROPIC_API_KEY not set in environment / .env")
-        _client = anthropic.Anthropic(api_key=key)
+        base_url = os.environ.get("LITELLM_BASE_URL", "").rstrip("/")
+        api_key  = os.environ.get("LITELLM_API_KEY", "")
+        if not base_url or not api_key:
+            raise RuntimeError("LITELLM_BASE_URL and LITELLM_API_KEY must be set in .env")
+        _client = OpenAI(base_url=base_url, api_key=api_key)
     return _client
+
+
+def _model() -> str:
+    return os.environ.get("LITELLM_MODEL", "claude-sonnet-4-6")
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def start_job(prompt: str) -> str:
-    """Start an agentic Claude run. Returns job_id."""
     job_id = str(uuid.uuid4())
     q: queue.Queue = queue.Queue()
     _jobs[job_id] = q
@@ -57,72 +58,103 @@ def _run_agent(prompt: str, q: queue.Queue) -> None:
         messages = [{"role": "user", "content": prompt}]
 
         while True:
-            # Stream text chunks, collect full message for tool-use handling
-            pending_text = ""
-            content_blocks = []
+            collected_text   = ""
+            pending_text     = ""           # buffer for line-by-line emission
+            collected_calls  = {}           # index → partial tool_call dict
+            finish_reason    = None
 
-            with client.messages.stream(
-                model=MODEL,
-                max_tokens=MAX_TOKENS,
-                tools=TOOL_DEFS,
+            stream = client.chat.completions.create(
+                model=_model(),
                 messages=messages,
-            ) as stream:
-                for event in stream:
-                    # Stream text deltas line by line so the UI sees output immediately
-                    if event.type == "content_block_delta" and hasattr(event.delta, "text"):
-                        pending_text += event.delta.text
-                        # Emit complete lines as they form
-                        while "\n" in pending_text:
-                            line, pending_text = pending_text.split("\n", 1)
-                            if line.strip():
-                                q.put({"type": "output", "text": line})
+                tools=TOOL_DEFS_OPENAI,
+                tool_choice="auto",
+                stream=True,
+                max_tokens=16000,
+            )
 
-                final_msg = stream.get_final_message()
+            for chunk in stream:
+                if not chunk.choices:
+                    continue
+                choice = chunk.choices[0]
+                finish_reason = choice.finish_reason or finish_reason
+                delta = choice.delta
 
-            # Flush any remaining text (no trailing newline)
+                # ── Stream text content ──────────────────────────────────────
+                if delta.content:
+                    collected_text += delta.content
+                    pending_text   += delta.content
+                    # Emit complete lines immediately so the UI updates in real time
+                    while "\n" in pending_text:
+                        line, pending_text = pending_text.split("\n", 1)
+                        if line.strip():
+                            q.put({"type": "output", "text": line})
+
+                # ── Accumulate tool call chunks ──────────────────────────────
+                if delta.tool_calls:
+                    for tc in delta.tool_calls:
+                        idx = tc.index
+                        if idx not in collected_calls:
+                            collected_calls[idx] = {
+                                "id": "",
+                                "type": "function",
+                                "function": {"name": "", "arguments": ""},
+                            }
+                        if tc.id:
+                            collected_calls[idx]["id"] = tc.id
+                        if tc.function:
+                            if tc.function.name:
+                                collected_calls[idx]["function"]["name"] += tc.function.name
+                            if tc.function.arguments:
+                                collected_calls[idx]["function"]["arguments"] += tc.function.arguments
+
+            # Flush any remaining buffered text
             if pending_text.strip():
                 q.put({"type": "output", "text": pending_text})
 
-            stop_reason = final_msg.stop_reason
-
-            if stop_reason == "end_turn":
+            # ── Handle finish reason ──────────────────────────────────────────
+            if finish_reason == "stop":
                 q.put({"type": "done", "done": True, "success": True})
                 break
 
-            if stop_reason == "tool_use":
-                tool_results = []
-                for block in final_msg.content:
-                    if block.type == "tool_use":
-                        tool_name = block.name
-                        tool_input = block.input
-                        # Show tool call in the stream
-                        input_preview = json.dumps(tool_input)[:120]
-                        q.put({"type": "output", "text": f"🔧 {tool_name}({input_preview})"})
+            if finish_reason == "tool_calls":
+                tool_call_list = [collected_calls[i] for i in sorted(collected_calls)]
 
-                        handler = TOOL_HANDLERS.get(tool_name)
-                        if handler:
-                            try:
-                                result = handler(tool_input)
-                            except Exception as exc:
-                                result = {"error": str(exc)}
-                        else:
-                            result = {"error": f"Unknown tool: {tool_name}"}
+                # Add assistant message (may have text + tool calls)
+                messages.append({
+                    "role": "assistant",
+                    "content": collected_text or None,
+                    "tool_calls": tool_call_list,
+                })
 
-                        # Show result preview
-                        result_preview = json.dumps(result)[:200]
-                        q.put({"type": "output", "text": f"   ↳ {result_preview}"})
+                # Execute each tool and append result
+                for tc in tool_call_list:
+                    name = tc["function"]["name"]
+                    try:
+                        args = json.loads(tc["function"]["arguments"] or "{}")
+                    except json.JSONDecodeError:
+                        args = {}
 
-                        tool_results.append({
-                            "type": "tool_result",
-                            "tool_use_id": block.id,
-                            "content": json.dumps(result),
-                        })
+                    q.put({"type": "output", "text": f"🔧 {name}({json.dumps(args)[:100]})"})
 
-                messages.append({"role": "assistant", "content": final_msg.content})
-                messages.append({"role": "user", "content": tool_results})
+                    handler = TOOL_HANDLERS.get(name)
+                    if handler:
+                        try:
+                            result = handler(args)
+                        except Exception as exc:
+                            result = {"error": str(exc)}
+                    else:
+                        result = {"error": f"Unknown tool: {name}"}
+
+                    q.put({"type": "output", "text": f"   ↳ {json.dumps(result)[:200]}"})
+
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc["id"],
+                        "content": json.dumps(result),
+                    })
 
             else:
-                # Unexpected stop reason — treat as done
+                # length, content_filter, or unknown — treat as done
                 q.put({"type": "done", "done": True, "success": True})
                 break
 
