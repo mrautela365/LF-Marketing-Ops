@@ -1,4 +1,10 @@
+from pathlib import Path
+
+from dotenv import load_dotenv
 from flask import Flask
+
+# Load .env from the project root (one level above app/)
+load_dotenv(Path(__file__).parent.parent / ".env")
 
 
 def create_app() -> Flask:

@@ -3,30 +3,29 @@ Flask Blueprint — routes for the LF Event Audience Studio.
 """
 
 import json
-from pathlib import Path
 
 from flask import Blueprint, Response, render_template, request
 
-from .claude import get_queue, remove_job, start_job
+from .agent import get_queue, remove_job, start_job
 from .prompts import BUILDING_PROMPT, PLANNING_PROMPT
 
-# Each phase runs from the sibling app that owns the skill + references/
-_MARKETING = Path(__file__).parent.parent.parent
-PLANNER_CWD  = str(_MARKETING / "event-segment-planner")
-BUILDER_CWD  = str(_MARKETING / "hubspot-event-list-builder")
-
-# Read SKILL.md files at startup so they're embedded directly in the prompt
-# (claude -p does not invoke slash commands the same way as interactive mode)
-def _read_skill(path: Path) -> str:
-    try:
-        return path.read_text(encoding="utf-8")
-    except Exception:
-        return ""
-
-PLANNER_SKILL = _read_skill(_MARKETING / "event-segment-planner" / "SKILL.md")
-BUILDER_SKILL = _read_skill(_MARKETING / "hubspot-event-list-builder" / "SKILL.md")
-
 bp = Blueprint("main", __name__)
+
+
+@bp.get("/health")
+def health():
+    """Config status — shows which credentials are present."""
+    import os
+    return {
+        "status": "ok",
+        "anthropic": bool(os.environ.get("ANTHROPIC_API_KEY")),
+        "hubspot": bool(os.environ.get("HUBSPOT_API_KEY")),
+        "snowflake": bool(
+            os.environ.get("SNOWFLAKE_ACCOUNT")
+            and os.environ.get("SNOWFLAKE_USER")
+            and os.environ.get("SNOWFLAKE_PASSWORD")
+        ),
+    }
 
 
 @bp.get("/")
@@ -41,8 +40,8 @@ def plan():
     url = (data.get("url") or "").strip()
     if not url:
         return {"error": "url required"}, 400
-    prompt = PLANNING_PROMPT.format(url=url, skill=PLANNER_SKILL)
-    return {"job_id": start_job(prompt, cwd=PLANNER_CWD)}
+    prompt = PLANNING_PROMPT.format(url=url)
+    return {"job_id": start_job(prompt)}
 
 
 @bp.post("/build")
@@ -59,8 +58,8 @@ def build():
     if qa:
         qa_section = f"\nUser answers to clarifying questions:\n{qa}\n"
 
-    prompt = BUILDING_PROMPT.format(url=url, plan=plan, qa_section=qa_section, skill=BUILDER_SKILL)
-    return {"job_id": start_job(prompt, cwd=BUILDER_CWD)}
+    prompt = BUILDING_PROMPT.format(url=url, plan=plan, qa_section=qa_section)
+    return {"job_id": start_job(prompt)}
 
 
 @bp.get("/stream/<job_id>")
