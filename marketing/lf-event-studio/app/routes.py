@@ -16,16 +16,18 @@ bp = Blueprint("main", __name__)
 def health():
     """Config status — shows which credentials are present."""
     import os
+    pk = os.environ.get("SNOWFLAKE_PRIVATE_KEY", "")
     return {
         "status": "ok",
         "litellm_base_url": os.environ.get("LITELLM_BASE_URL", ""),
         "litellm_key_set": bool(os.environ.get("LITELLM_API_KEY")),
         "hubspot": bool(os.environ.get("HUBSPOT_ACCESS_TOKEN")),
-        "snowflake": bool(
-            os.environ.get("SNOWFLAKE_ACCOUNT")
-            and os.environ.get("SNOWFLAKE_USER")
-            and os.environ.get("SNOWFLAKE_PRIVATE_KEY")
-        ),
+        "snowflake": {
+            "account":      bool(os.environ.get("SNOWFLAKE_ACCOUNT")),
+            "user":         bool(os.environ.get("SNOWFLAKE_USER")),
+            "private_key":  bool(pk),
+            "key_preview":  pk[:40].replace("\n", "\\n") if pk else "(empty)",
+        },
     }
 
 

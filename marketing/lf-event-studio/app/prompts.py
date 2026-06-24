@@ -33,6 +33,10 @@ For each email found, note: name, subject, send date, list used, metrics.
 Then use hubspot_search_lists to find the master list used for prior sends.
 Note the list name, ID, and any opt-in filter pattern in the name.
 
+Also search for each of the inclusion lists referenced in prior sends:
+past-registrant lists, geographic lists, topic/persona lists, newsletter lists, etc.
+Use hubspot_get_list on any list IDs found to inspect their filter logic.
+
 ═══════════════════════════════════════════════════
 STEP 3 — Analyse historical segmentation logic
 ═══════════════════════════════════════════════════
@@ -67,7 +71,18 @@ Follow foundation naming convention, e.g.:
 `Q3 2026 - CNCF Foundation - KubeCon + CloudNativeCon North America Master (With Opt-In and Filters)`
 
 **Inclusion strategy** — per source list: name, why it belongs, dynamic vs snapshot.
-Group by: (1) Past registrants (2) Web visitors (3) Geographic (4) Topic/persona (5) Foundation subscribers.
+Group by and number each list:
+  1. Past registrants (BEHAVIORAL_EVENT filter)
+  2. Web visitors (PAGE_VIEW + brand master)
+  3. Geographic segments (if applicable)
+  4. Topic / persona lists (if applicable)
+  5. Foundation / newsletter subscribers (if applicable)
+  6. Any other inclusion lists from prior sends
+
+For each inclusion list, state:
+  - Proposed HubSpot list name
+  - Filter type (BEHAVIORAL_EVENT / PAGE_VIEW / LIST_MEMBERSHIP / property)
+  - Why it belongs
 
 **Exclusion strategy** — per suppression list: name and reason.
 Always include: LF Events Global Opt Outs, LF Global Opt-Outs, GDPR Suppression (if EU in scope),
@@ -87,7 +102,7 @@ End with: "Ready to proceed? Say yes and I'll build the segment in HubSpot."
 """
 
 
-BUILDING_PROMPT = """Build the HubSpot audience lists for this Linux Foundation event.
+BUILDING_PROMPT = """Build ALL the HubSpot audience lists for this Linux Foundation event.
 
 Event URL: {url}
 
@@ -102,18 +117,26 @@ All event details (name, brand, location, year, page URL) are in the Segment Pla
 ═══════════════════════════════════════════════════
 CRITICAL RULES (enforce throughout all steps)
 ═══════════════════════════════════════════════════
-RULE 1 — communitySeg lists MUST NEVER be used:
+RULE 1 — Build EVERY inclusion list from the plan, not just 2.
+  Read the "Inclusion strategy" section carefully. Create one HubSpot list per
+  numbered inclusion source. Do not skip any.
+
+RULE 2 — communitySeg lists MUST NEVER be used as sources:
   Any list labelled communitySeg / community_seg must NOT be referenced or included.
-  Past-registrant communitySeg → rebuild using HubSpot behavioral event filters
-    (filterType: BEHAVIORAL_EVENT). Name: "[Event Name] Past Registrants (custom event)".
-  Non-registrant communitySeg → skip it and add to ## FLAGGED FOR REVIEW.
+  Past-registrant communitySeg → rebuild using BEHAVIORAL_EVENT filters.
+  Non-registrant communitySeg → skip and add to ## FLAGGED FOR REVIEW.
 
-RULE 2 — Print ## BUILD PLAN before creating anything in HubSpot.
-  List every list to create, each communitySeg replacement, and anything being skipped.
+RULE 3 — Print ## BUILD PLAN before creating anything in HubSpot.
+  Number each list to create. State its filter type and logic.
 
-RULE 3 — Master list is last. OR of all built list IDs. Zero communitySeg sources.
+RULE 4 — MASTER LIST IS MANDATORY. You MUST always build the master list as the final step.
+  Even if some inclusion lists failed, build the master from whatever IDs you DO have.
+  Never end without creating the master list. It is the primary deliverable.
 
-RULE 4 — If unsure about anything → skip and add to ## FLAGGED FOR REVIEW.
+RULE 5 — After EVERY successful hubspot_create_list call print:
+  ✅ [List name] created — ID: [listId] — [hubspot_url]
+
+RULE 6 — If unsure about anything → skip and add to ## FLAGGED FOR REVIEW.
 
 ═══════════════════════════════════════════════════
 STEP 1 — Query Snowflake for past editions
@@ -129,7 +152,6 @@ Segment Plan above — do NOT re-scrape the URL.
   ORDER BY EV.EVENT_NAME;
 
 Copy the exact EVENT_NAME strings — they are used verbatim as HubSpot filter values.
-Also resolve any communitySeg event-name ambiguity here.
 
 ═══════════════════════════════════════════════════
 STEP 2 — Look up brand master list ID
@@ -137,27 +159,27 @@ STEP 2 — Look up brand master list ID
 Use read_reference_file("brand-master-lists.md") to look up the brand key from the plan.
 If not found → use hubspot_search_lists("[brand] master") to find it, note the ID.
 
+Call hubspot_get_event_types() now so the fullyQualifiedName is ready for Step 4.
+Look for a name containing "event_registration". The value looks like "pe8112310_event_registration".
+
 ═══════════════════════════════════════════════════
 STEP 3 — Print ## BUILD PLAN
 ═══════════════════════════════════════════════════
-Before creating anything, print a section headed "## BUILD PLAN" listing:
-- List 1 name + filter logic
-- List 2 name + filter logic
-- Each communitySeg list being replaced and its replacement name
-- Anything being skipped and why
+Print a numbered plan of EVERY list you will create, derived from the
+Inclusion strategy in the Segment Plan. Include:
+- List number and name
+- Filter type(s)
+- Why it's needed
+- Any communitySeg list it replaces (→ BEHAVIORAL_EVENT rebuild)
+- Anything being SKIPPED and why
 
 ═══════════════════════════════════════════════════
-STEP 4 — Build List 1: All Past Registrants
+STEP 4 — Build ALL inclusion lists (one per inclusion source)
 ═══════════════════════════════════════════════════
-First call hubspot_get_event_types() to find the fullyQualifiedName of the
-custom event object (e.g. "pe8112310_event_registration").
+Create every list from your BUILD PLAN in order. Use the correct filter type for each:
 
-Use hubspot_create_list with a filter branch containing one BEHAVIORAL_EVENT
-filter per Snowflake past edition, all OR'd together in a single filter group.
-
-Name: [Brand] - [Event Name] - All Past Registrants
-Example: CNCF - KubeCon + CloudNativeCon India - All Past Registrants
-
+── BEHAVIORAL_EVENT (past registrants) ──────────────────────
+Use for: past-registrant lists, communitySeg rebuilds.
 filterBranch structure:
 {{
   "filterBranchType": "OR",
@@ -168,7 +190,7 @@ filterBranch structure:
       "filters": [
         {{
           "filterType": "BEHAVIORAL_EVENT",
-          "eventTypeId": "[fullyQualifiedName from event types]",
+          "eventTypeId": "[exact fullyQualifiedName e.g. pe8112310_event_registration]",
           "operator": "HAS_EVENT",
           "filterGroups": [
             {{
@@ -184,50 +206,143 @@ filterBranch structure:
         }}
       ]
     }}
-  ]
-  ... (one AND branch per Snowflake past edition)
+  ],
+  "filters": []
+}}
+Add one AND branch per past edition. All inside the top OR.
+
+── PAGE_VIEW + LIST_MEMBERSHIP (web visitors) ───────────────
+Use for: web-visitor + brand-master combination.
+filterBranch structure:
+{{
+  "filterBranchType": "OR",
+  "filterBranches": [
+    {{
+      "filterBranchType": "AND",
+      "filterBranches": [],
+      "filters": [
+        {{
+          "filterType": "PAGE_VIEW",
+          "value": "[event URL]",
+          "operator": "HAS_VIEWED_URL"
+        }},
+        {{
+          "filterType": "LIST_MEMBERSHIP",
+          "listId": "[brand master list ID as string]",
+          "operator": "IN_LIST"
+        }}
+      ]
+    }}
+  ],
+  "filters": []
 }}
 
-Save List 1 ID.
+── LIST_MEMBERSHIP (reference existing HubSpot lists) ───────
+Use for: geographic lists, topic/persona lists, newsletter lists already in HubSpot.
+Use hubspot_search_lists to find the existing list ID first.
+filterBranch structure:
+{{
+  "filterBranchType": "OR",
+  "filterBranches": [
+    {{
+      "filterBranchType": "AND",
+      "filterBranches": [],
+      "filters": [
+        {{
+          "filterType": "LIST_MEMBERSHIP",
+          "listId": "[existing HubSpot list ID as string]",
+          "operator": "IN_LIST"
+        }}
+      ]
+    }}
+  ],
+  "filters": []
+}}
+
+After EACH successful hubspot_create_list call, print:
+✅ [List name] created — ID: [listId] — [hubspot_url]
+
+Save all created list IDs.
 
 ═══════════════════════════════════════════════════
-STEP 5 — Build List 2: Registrants + Web Visitors
+STEP 5 — Look up standard suppression list IDs
 ═══════════════════════════════════════════════════
-Use hubspot_create_list with two OR filter groups:
+Suppressions are NOT added to the master list filter — they are applied separately
+at HubSpot email send time as suppression lists. Your job here is to find their IDs
+and report them so they can be added when scheduling the email.
 
-Group 1 — past registrants:
-  filterType: LIST_MEMBERSHIP, listId: [List 1 ID], operator: IN_LIST
+Use hubspot_search_lists to find the current list ID for each standard suppression.
+Search by the key term shown — take the most recently updated match.
 
-Group 2 — web visitors (AND):
-  filterType: PAGE_VIEW, value: [event URL from plan], operator: HAS_VIEWED_URL
-  filterType: LIST_MEMBERSHIP, listId: [brand master list ID], operator: IN_LIST
+Standard suppressions to look up:
+  "LF Global Opt-Outs"           → LF Global Opt-Outs
+  "LF Europe Global Opt-Outs"    → LF Europe Global Opt-Outs
+  "LF Events GDPR Suppression"   → most recent quarterly (e.g. 25Q2 - LF Events - GDPR Suppression)
+  "LF Europe GDPR Suppression"   → most recent (e.g. 25Q2 - LF Europe - GDPR Suppression)
+  "LF Master Exclusion"          → 23Q1 - LF - Master Exclusion List or similar
+  "LF Events Suppression List"   → most recent (e.g. 23Q3 - LF Events - Suppression List)
 
-Name: [Brand] - [Event Name] - Registrants + Web Visitors
+Also look up any event-specific suppressions from the Segment Plan
+(current registrants of this event, internal LF contacts, foundation opt-outs, etc.).
 
-═══════════════════════════════════════════════════
-STEP 6 — Rebuild communitySeg past-registrant lists
-═══════════════════════════════════════════════════
-For each communitySeg past-registrant list in the plan, use hubspot_create_list
-with BEHAVIORAL_EVENT filters (same pattern as Step 4, appropriate event names).
-Name: [Event Name] Past Registrants (custom event)
-Save each new list ID.
-
-═══════════════════════════════════════════════════
-STEP 7 — Build Master Audience List
-═══════════════════════════════════════════════════
-Use hubspot_create_list. OR together ALL successfully built list IDs
-(List 1 ID, List 2 ID, any rebuilt communitySeg IDs).
-
-Name: [Event Name] [Year] — Master Audience
-Use LIST_MEMBERSHIP filters, one per list. NEVER reference any communitySeg list.
+Print the found suppression list IDs — they will be added to the ## SUPPRESSION LISTS section.
+If a search returns no match, note it in ## FLAGGED FOR REVIEW.
 
 ═══════════════════════════════════════════════════
-STEP 8 — Final summary
+STEP 6 — Build Master Audience List (MANDATORY — never skip)
 ═══════════════════════════════════════════════════
-Print a table of all created lists:
-| List name | HubSpot ID | Notes |
+THIS STEP IS REQUIRED. You must always execute it, even if only some inclusion lists succeeded.
+
+The master list is a PURE OR of all successfully built inclusion list IDs.
+Do NOT add any AND NOT or suppression conditions to the filterBranch.
+Suppressions are handled at email send time, not inside the list.
+
+filterBranch structure:
+{{
+  "filterBranchType": "OR",
+  "filterBranches": [
+    {{
+      "filterBranchType": "AND",
+      "filterBranches": [],
+      "filters": [{{ "filterType": "LIST_MEMBERSHIP", "listId": "[inclusion_id_1]", "operator": "IN_LIST" }}]
+    }},
+    {{
+      "filterBranchType": "AND",
+      "filterBranches": [],
+      "filters": [{{ "filterType": "LIST_MEMBERSHIP", "listId": "[inclusion_id_2]", "operator": "IN_LIST" }}]
+    }}
+    ... (one AND branch per successfully built inclusion list)
+  ],
+  "filters": []
+}}
+
+Name: follow the recommended master list name from the Segment Plan.
+If none given: [Quarter] [Year] - [Brand] - [Event Name] Master (With Opt-In and Filters)
+
+After success print:
+🏆 Master list created — ID: [listId] — [hubspot_url]
+
+If this step fails for any reason, print the exact HubSpot error and add it to ## FLAGGED FOR REVIEW.
+DO NOT end without attempting to create the master list.
+
+═══════════════════════════════════════════════════
+STEP 7 — Final summary
+═══════════════════════════════════════════════════
+Print a markdown table of ALL created lists:
+
+| # | List name | HubSpot ID | Link | Notes |
+|---|-----------|------------|------|-------|
+
+Then print a clearly separated section:
+
+## SUPPRESSION LISTS
+Add ALL of the following as suppression lists when scheduling the email send in HubSpot:
+
+| List name | HubSpot ID | Link |
+|-----------|------------|------|
+(one row per suppression found in Step 5)
 
 Then print:
 ## FLAGGED FOR REVIEW
-(skipped communitySeg lists, ambiguous event names, missing IDs, etc.)
+(skipped communitySeg lists, ambiguous event names, missing IDs, unresolvable filters, etc.)
 """

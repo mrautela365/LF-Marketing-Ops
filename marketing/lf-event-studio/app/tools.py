@@ -98,13 +98,17 @@ def hubspot_create_list(name: str, filter_branch: dict) -> dict:
         "filterBranch": filter_branch,
     }
     r = requests.post(url, headers=_hs_headers(), json=payload, timeout=15)
-    r.raise_for_status()
+    if not r.ok:
+        raise RuntimeError(f"HubSpot {r.status_code}: {r.text[:500]}")
     data = r.json()
+    list_id = data.get("listId") or data.get("list", {}).get("listId")
+    portal_id = _hs_portal_id()
+    hs_url = f"https://app.hubspot.com/contacts/{portal_id}/lists/{list_id}" if list_id else None
     return {
-        "listId": data.get("listId"),
+        "listId": list_id,
         "name": data.get("name"),
         "size": data.get("size"),
-        "raw": data,
+        "hubspot_url": hs_url,
     }
 
 
@@ -112,19 +116,28 @@ def hubspot_update_list_filters(list_id: str, filter_branch: dict) -> dict:
     """Replace the filter branch on an existing HubSpot list."""
     url = f"{HUBSPOT_BASE}/crm/v3/lists/{list_id}/filter-branch"
     r = requests.put(url, headers=_hs_headers(), json={"filterBranch": filter_branch}, timeout=15)
-    r.raise_for_status()
-    return {"listId": list_id, "updated": True}
+    if not r.ok:
+        raise RuntimeError(f"HubSpot {r.status_code}: {r.text[:500]}")
+    portal_id = _hs_portal_id()
+    hs_url = f"https://app.hubspot.com/contacts/{portal_id}/lists/{list_id}"
+    return {"listId": list_id, "updated": True, "hubspot_url": hs_url}
 
 
 def hubspot_get_event_types() -> dict:
     """List HubSpot custom event type definitions (needed for Has-completed-event filters)."""
     url = f"{HUBSPOT_BASE}/events/v3/event-definitions"
-    r = requests.get(url, headers=_hs_headers(), timeout=15)
-    r.raise_for_status()
+    params = {"limit": 100, "includeProperties": "true"}
+    r = requests.get(url, headers=_hs_headers(), params=params, timeout=15)
+    if not r.ok:
+        return {"error": f"HubSpot {r.status_code}: {r.text[:300]}"}
     defs = r.json().get("results", [])
     return {
         "results": [
-            {"fullyQualifiedName": d.get("fullyQualifiedName"), "label": d.get("label")}
+            {
+                "fullyQualifiedName": d.get("fullyQualifiedName"),
+                "label": d.get("label"),
+                "name": d.get("name"),
+            }
             for d in defs
         ]
     }

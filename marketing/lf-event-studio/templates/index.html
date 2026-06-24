@@ -224,6 +224,8 @@
     .bc-detail { font-size:.73rem; color:var(--muted); margin-top:.1rem; }
     .bc-id { font-family:monospace; font-size:.71rem; background:#e2e8f0;
              padding:.05rem .35rem; border-radius:3px; color:#475569; margin-left:.4rem; }
+    .bc-link { font-size:.72rem; color:var(--teal); margin-left:.5rem; }
+    .bc-link:hover { color:#007bb0; }
 
     /* ── Final results (phase 5) ── */
     .result-hd { display:flex; align-items:center; gap:.6rem; margin-bottom:1rem; }
@@ -238,6 +240,7 @@
     .rl.master { background:#f0fdf4; border-color:var(--done); }
     .rl.flagged { background:#fffbeb; border-color:var(--active); }
     .rl.rebuilt { background:#f5f3ff; border-color:#c4b5fd; }
+    .rl.suppress { background:#fef2f2; border-color:#fca5a5; }
     .rl-icon { font-size:1rem; flex-shrink:0; margin-top:1px; }
     .rl-body { flex:1; }
     .rl-name   { font-weight:600; color:#1e293b; font-size:.85rem; }
@@ -404,19 +407,17 @@
     <div class="step" id="bs1"><div class="bubble"><span>1</span></div><div class="step-label">Snowflake<br>query</div></div>
     <div class="step" id="bs2"><div class="bubble"><span>2</span></div><div class="step-label">Brand<br>master</div></div>
     <div class="step" id="bs3"><div class="bubble"><span>3</span></div><div class="step-label">Build<br>plan</div></div>
-    <div class="step" id="bs4"><div class="bubble"><span>4</span></div><div class="step-label">List 1<br>Reg.</div></div>
-    <div class="step" id="bs5"><div class="bubble"><span>5</span></div><div class="step-label">List 2<br>Web vis.</div></div>
-    <div class="step" id="bs6"><div class="bubble"><span>6</span></div><div class="step-label">Rebuild<br>commSeg</div></div>
-    <div class="step" id="bs7"><div class="bubble"><span>7</span></div><div class="step-label">Master<br>list</div></div>
+    <div class="step" id="bs4"><div class="bubble"><span>4</span></div><div class="step-label">Build all<br>lists</div></div>
+    <div class="step" id="bs5"><div class="bubble"><span>5</span></div><div class="step-label">Suppressions<br>lookup</div></div>
+    <div class="step" id="bs6"><div class="bubble"><span>6</span></div><div class="step-label">Master<br>list</div></div>
   </div>
-  <div class="step-details cols4" style="grid-template-columns:repeat(4,1fr)">
+  <div class="step-details cols4" style="grid-template-columns:repeat(3,1fr)">
     <div class="sd" id="bsd1"><div class="sd-n">Step 1</div><div class="sd-t">Snowflake query</div><div class="sd-b">Past editions (uses event name from plan — no re-scraping)</div></div>
-    <div class="sd" id="bsd2"><div class="sd-n">Step 2</div><div class="sd-t">Brand master list</div><div class="sd-b">Look up brand's HubSpot master list ID</div></div>
-    <div class="sd" id="bsd3"><div class="sd-n">Step 3</div><div class="sd-t">Print build plan</div><div class="sd-b">Claude narrates exactly what it will create before acting</div></div>
-    <div class="sd" id="bsd4"><div class="sd-n">Step 4</div><div class="sd-t">List 1 — Registrants</div><div class="sd-b">Custom-event filter per past edition</div></div>
-    <div class="sd" id="bsd5"><div class="sd-n">Step 5</div><div class="sd-t">List 2 — Web Visitors</div><div class="sd-b">List 1 OR page-visit AND brand master</div></div>
-    <div class="sd cs-step" id="bsd6"><div class="sd-n">Step 6</div><div class="sd-t">Rebuild communitySeg</div><div class="sd-b">Replace past-reg commSeg lists with custom event equivalents</div></div>
-    <div class="sd" id="bsd7"><div class="sd-n">Step 7</div><div class="sd-t">Master Audience</div><div class="sd-b">OR of all built lists · zero communitySeg sources</div></div>
+    <div class="sd" id="bsd2"><div class="sd-n">Step 2</div><div class="sd-t">Brand master + event types</div><div class="sd-b">Look up brand's master list ID · get HubSpot event type names</div></div>
+    <div class="sd" id="bsd3"><div class="sd-n">Step 3</div><div class="sd-t">Print build plan</div><div class="sd-b">Claude narrates every list it will create, in order</div></div>
+    <div class="sd" id="bsd4"><div class="sd-n">Step 4</div><div class="sd-t">Build all inclusion lists</div><div class="sd-b">One list per inclusion source from plan · commSeg rebuilt as custom-event</div></div>
+    <div class="sd" id="bsd5"><div class="sd-n">Step 5</div><div class="sd-t">Standard suppressions</div><div class="sd-b">Look up LF Global Opt-Outs, GDPR, Master Exclusion, LF Europe, etc.</div></div>
+    <div class="sd" id="bsd6"><div class="sd-n">Step 6</div><div class="sd-t">Master Audience List</div><div class="sd-b">OR of all built lists AND NOT each suppression — always created</div></div>
   </div>
 
   <!-- Per-list build checklist -->
@@ -454,6 +455,20 @@
   </div>
 </div>
 
+<!-- Suppression lists panel -->
+<div id="suppress-panel" style="max-width:940px;margin:0 auto 1.25rem;display:none;">
+  <div class="card" style="border:2px solid #fca5a5;background:#fef2f2;padding:1.25rem 1.5rem;">
+    <div style="display:flex;align-items:center;gap:.6rem;margin-bottom:.6rem;">
+      <span style="font-size:1.1rem;">🚫</span>
+      <strong style="font-size:.92rem;color:#991b1b;">Add these as suppression lists when scheduling the email send</strong>
+    </div>
+    <p style="font-size:.77rem;color:#7f1d1d;margin-bottom:.85rem;">
+      These are <em>not</em> part of the master list filter — apply them in HubSpot's email send settings so contacts are excluded at send time.
+    </p>
+    <div id="suppress-list" class="result-lists"></div>
+  </div>
+</div>
+
 <!-- Flagged items panel (shown outside card for visibility) -->
 <div id="flagged-panel">
   <h4>⚠️ Flagged for Review</h4>
@@ -477,25 +492,23 @@
   const BUILD_STEP_RE = [
     null,
     /step 1|snowflake|sql|event_registrations|past edition|distinct.*event|query.*registr/i,
-    /step 2|brand master|master list|list id|looking up/i,
+    /step 2|brand master|master list id|looking up.*brand|event.type|fullyqualified/i,
     /step 3|## build plan|build plan|printing.*plan/i,
-    /step 4|list 1[^0-9]|all past registrant|custom.event.*filter|clone.*list/i,
-    /step 5|list 2[^0-9]|web visitor|registrant.*web|page.*visit/i,
-    /step 6|communit|rebuild.*communit|has completed event/i,
-    /step 7|master audience|## master|final.*master|master.*created/i,
+    /step 4|build.*inclusion|all past registrant|custom.event.*filter|behavioral.event|web visitor|communit.*rebuild/i,
+    /step 5|suppression|opt.out|gdpr|exclusion list|looking up.*suppress/i,
+    /step 6|master audience|## master|final.*master|master.*created|🏆/i,
   ];
 
   const BUILD_STEP_STATUS = [
     "",
     "Querying Snowflake for past editions…",
-    "Looking up brand master list…",
+    "Looking up brand master list and event types…",
     "Printing build plan…",
-    "Building List 1 — All Past Registrants…",
-    "Building List 2 — Registrants + Web Visitors…",
-    "Rebuilding communitySeg lists as custom event lists…",
+    "Building inclusion lists…",
+    "Looking up standard suppression lists…",
     "Building Master Audience List…",
   ];
-  const BUILD_STEP_ICONS = ["","❄️","📋","🗒️","📝","👁️","🔄","🏆"];
+  const BUILD_STEP_ICONS = ["","❄️","📋","🗒️","📝","🚫","🏆"];
 
   // ── State ─────────────────────────────────────────────────────────────────
   let eventUrl   = "";
@@ -770,16 +783,30 @@
       }).join("");
     }
 
-    // ── Build checklist items ──────────────────────────────────────────
-    buildItems = [
-      { id:"l1",     name:"List 1 — All Past Registrants",       icon:"📝", isMaster:false, status:"pending", hubspotId:null },
-      { id:"l2",     name:"List 2 — Registrants + Web Visitors",  icon:"👁️", isMaster:false, status:"pending", hubspotId:null },
-    ];
-    csReg.slice(0,4).forEach((l, i) => {
-      const name = l.replace(/^[-*•\d.)\s]+/,"").slice(0,60);
-      buildItems.push({ id:"cs"+i, name: name + " (custom event rebuild)", icon:"🔄", isMaster:false, status:"pending", hubspotId:null });
-    });
-    buildItems.push({ id:"master", name:"Master Audience List", icon:"🏆", isMaster:true, status:"pending", hubspotId:null });
+    // ── Build checklist — seeded from plan, extended dynamically during build
+    buildItems = [];
+    // Seed with a placeholder for each numbered inclusion list detected in the plan
+    const inclusionSection = plan.match(/inclusion strategy[\s\S]*?(?=\*\*exclusion|\*\*opt-in|$)/i);
+    if (inclusionSection) {
+      const iLines = inclusionSection[0].split("\n").filter(l => /^\s*\d+[\.\)]\s+/.test(l));
+      iLines.forEach((l, i) => {
+        const name = l.replace(/^\s*\d+[\.\)]\s+/,"").replace(/\*+/g,"").trim().slice(0,80);
+        const isMaster = /master/i.test(name);
+        const icon = /past registrant|behavioral/i.test(name) ? "📝"
+                   : /web visitor|page.?view/i.test(name) ? "👁️"
+                   : /communit/i.test(name) ? "🔄"
+                   : isMaster ? "🏆" : "📋";
+        if (name.length > 2)
+          buildItems.push({ id:"plan"+i, name, icon, isMaster, status:"pending", hubspotId:null, hubspotUrl:null });
+      });
+    }
+    // Fallback if regex found nothing
+    if (buildItems.length === 0) {
+      buildItems = [
+        { id:"plan0", name:"Inclusion lists (see build log)", icon:"📝", isMaster:false, status:"pending", hubspotId:null, hubspotUrl:null },
+      ];
+    }
+    buildItems.push({ id:"master", name:"Master Audience List", icon:"🏆", isMaster:true, status:"pending", hubspotId:null, hubspotUrl:null });
   }
 
   // ── Collect Q&A answers ───────────────────────────────────────────────────
@@ -904,56 +931,102 @@
     }
   }
 
-  // Detect each list being built/done in the stream
-  const LIST_DETECTORS = [
-    { id:"l1",     re:/list\s*1[^0-9].*(?:created|id[\s:]+\d{4,})|all past registrant.*(?:created|id)/i },
-    { id:"l2",     re:/list\s*2[^0-9].*(?:created|id[\s:]+\d{4,})|registrant.*web.*(?:created|id)/i },
-    { id:"master", re:/master.*(?:created|id[\s:]+\d{4,})|## master/i },
-  ];
-  // commSeg rebuilds detected generically
-  const CS_BUILD_RE = /rebuilt?.*communit|communit.*rebuild|custom event.*created/i;
+  // Extract HubSpot URL from a line like "✅ ... created — ID: 12345 — https://app.hubspot.com/..."
+  function extractHubSpotUrl(text) {
+    const m = text.match(/https:\/\/app\.hubspot\.com\/contacts\/\d+\/lists\/\d+/);
+    return m ? m[0] : null;
+  }
+
+  // Extract list name from a ✅ confirmation line
+  // "✅ CNCF - KubeCon India - All Past Registrants created — ID: 123 — https://..."
+  function extractCreatedName(text) {
+    const m = text.match(/✅\s+(.+?)\s+(?:created|rebuilt)/i);
+    return m ? m[1].trim() : null;
+  }
+
+  function markItemDone(item, text, label) {
+    if (!item || item.status === "done") return;
+    item.status = "done";
+    item.hubspotId = extractId(text);
+    item.hubspotUrl = extractHubSpotUrl(text);
+    const el = document.getElementById("bc-" + item.id);
+    if (!el) return;
+    el.className = "bc-item done" + (item.isMaster ? " master" : "");
+    document.getElementById("bc-icon-" + item.id).textContent = item.isMaster ? "🏆" : "✓";
+    const detailEl = document.getElementById("bc-detail-" + item.id);
+    let detail = label || "Created";
+    if (item.hubspotId) detail += ` · ID: ${item.hubspotId}`;
+    if (item.hubspotUrl) {
+      detailEl.innerHTML = escHtml(detail) +
+        ` <a class="bc-link" href="${item.hubspotUrl}" target="_blank" rel="noopener">Open in HubSpot ↗</a>`;
+    } else {
+      detailEl.textContent = detail;
+    }
+  }
+
+  // Dynamically add a new checklist item if Claude creates a list we didn't anticipate
+  let _dynCounter = 0;
+  function ensureChecklistItem(name, isMaster) {
+    // Try to find an existing pending item whose name roughly matches
+    const norm = s => s.toLowerCase().replace(/[^a-z0-9]/g,"");
+    let item = buildItems.find(b =>
+      b.status === "pending" &&
+      b.isMaster === isMaster &&
+      (norm(b.name).includes(norm(name.slice(0,20))) || norm(name).includes(norm(b.name.slice(0,20))))
+    );
+    if (!item) {
+      // Create a new row dynamically
+      const id = "dyn" + (_dynCounter++);
+      const icon = isMaster ? "🏆" : "📋";
+      item = { id, name, icon, isMaster, status:"pending", hubspotId:null, hubspotUrl:null };
+      // Insert before master
+      const masterIdx = buildItems.findIndex(b => b.id === "master");
+      if (masterIdx >= 0 && !isMaster) buildItems.splice(masterIdx, 0, item);
+      else buildItems.push(item);
+      // Render new row into checklist DOM
+      const cl = document.getElementById("build-checklist");
+      const masterEl = document.getElementById("bc-master");
+      const row = document.createElement("div");
+      row.className = "bc-item" + (isMaster ? " master" : "");
+      row.id = "bc-" + id;
+      row.innerHTML = `<span class="bc-icon" id="bc-icon-${id}">${icon}</span>
+        <div class="bc-body">
+          <div class="bc-name">${escHtml(name)}</div>
+          <div class="bc-detail" id="bc-detail-${id}">Building…</div>
+        </div>`;
+      if (masterEl && !isMaster) cl.insertBefore(row, masterEl);
+      else cl.appendChild(row);
+    }
+    return item;
+  }
 
   function updateChecklist(text) {
-    // Check named lists
-    LIST_DETECTORS.forEach(({ id, re }) => {
-      const item = buildItems.find(b => b.id === id);
-      if (item && item.status === "pending" && re.test(text)) {
-        item.status = "done";
-        item.hubspotId = extractId(text);
-        const el = document.getElementById("bc-" + id);
-        if (el) {
-          el.className = "bc-item done" + (item.isMaster ? " master" : "");
-          document.getElementById("bc-icon-" + id).textContent = item.isMaster ? "🏆" : "✓";
-          document.getElementById("bc-detail-" + id).textContent =
-            "Created" + (item.hubspotId ? ` · ID: ${item.hubspotId}` : "");
-        }
-      }
-    });
-
-    // Check commSeg rebuilds
-    if (CS_BUILD_RE.test(text)) {
-      const csItem = buildItems.find(b => b.id.startsWith("cs") && b.status === "pending");
-      if (csItem) {
-        csItem.status = "done"; csItem.hubspotId = extractId(text);
-        const el = document.getElementById("bc-" + csItem.id);
-        if (el) {
-          el.className = "bc-item done";
-          document.getElementById("bc-icon-" + csItem.id).textContent = "✓";
-          document.getElementById("bc-detail-" + csItem.id).textContent =
-            "Rebuilt from communitySeg" + (csItem.hubspotId ? ` · ID: ${csItem.hubspotId}` : "");
-        }
-      }
+    // Primary: detect ✅ confirmation lines Claude prints after each create
+    if (/^✅/.test(text.trim())) {
+      const isMaster = /master/i.test(text);
+      const createdName = extractCreatedName(text) || (isMaster ? "Master Audience List" : "List");
+      const label = /commSeg rebuilt/i.test(text) ? "Rebuilt from communitySeg" : "Created";
+      const item = ensureChecklistItem(createdName, isMaster);
+      markItemDone(item, text, label);
+      renderChecklist(); // re-render to reflect any dynamic additions
+      return;
+    }
+    if (/^🏆/.test(text.trim())) {
+      const item = buildItems.find(b => b.isMaster && b.status === "pending");
+      if (item) markItemDone(item, text, "Master list created");
+      return;
     }
 
-    // Mark active item
-    const active = buildItems.find(b => b.status === "pending");
+    // Secondary: mark next pending item as active while Claude is working
+    const active = buildItems.find(b => b.status === "pending" && !b.isMaster);
     if (active && buildCur > 0) {
       const el = document.getElementById("bc-" + active.id);
-      if (el && !el.classList.contains("active")) {
-        el.className = "bc-item active" + (active.isMaster ? " master" : "");
+      if (el && !el.classList.contains("active") && !el.classList.contains("done")) {
+        el.className = "bc-item active";
         document.getElementById("bc-icon-" + active.id).textContent = "⏳";
-        document.getElementById("bc-detail-" + active.id).className = "bc-detail dots";
-        document.getElementById("bc-detail-" + active.id).textContent = "Building";
+        const det = document.getElementById("bc-detail-" + active.id);
+        det.className = "bc-detail dots";
+        det.textContent = "Building";
       }
     }
   }
@@ -975,23 +1048,53 @@
       ? "All lists built successfully"
       : "Build completed — some items may need review";
 
-    // Build result list from buildItems + any log-extracted IDs
-    const buildLog = document.getElementById("build-log").textContent;
+    // Build result list from buildItems
     const resultHtml = buildItems.map(item => {
       const statusIcon = item.status === "done" ? (item.isMaster ? "🏆" : "✓") : "⚠️";
       const cls = item.isMaster ? "rl master" : item.id.startsWith("cs") ? "rl rebuilt" : "rl";
-      const detail = item.status === "done"
+      let detail = item.status === "done"
         ? (item.hubspotId ? `HubSpot ID: ${item.hubspotId}` : "Created — check log for ID")
         : "Not completed — see log";
+      const linkHtml = item.hubspotUrl
+        ? ` &nbsp;<a href="${item.hubspotUrl}" target="_blank" rel="noopener"
+              style="font-size:.75rem;color:var(--teal);font-weight:600;white-space:nowrap;">
+              Open in HubSpot ↗</a>`
+        : "";
       return `<div class="${cls}">
         <span class="rl-icon">${statusIcon}</span>
         <div class="rl-body">
           <div class="rl-name">${escHtml(item.name)}</div>
-          <div class="rl-detail">${detail}</div>
+          <div class="rl-detail">${escHtml(detail)}${linkHtml}</div>
         </div>
       </div>`;
     }).join("");
     document.getElementById("result-lists").innerHTML = resultHtml;
+
+    // Extract and show suppression lists
+    const suppressMatch = buildLog.match(/##\s*suppression lists?([\s\S]*?)(?:##\s*flagged|$)/i);
+    if (suppressMatch && suppressMatch[1].trim()) {
+      // Parse markdown table rows: | name | id | link |
+      const rows = suppressMatch[1].trim().split("\n")
+        .filter(l => /^\|/.test(l) && !/^[\|\s\-]+$/.test(l) && !/list name/i.test(l));
+      const suppressHtml = rows.map(row => {
+        const cols = row.split("|").map(c => c.trim()).filter(Boolean);
+        const name = cols[0] || "";
+        const id   = cols[1] || "";
+        const url  = (cols[2] || "").match(/https:\/\/[^\s)]+/);
+        const link = url ? `<a class="bc-link" href="${url[0]}" target="_blank" rel="noopener">Open ↗</a>` : "";
+        return `<div class="rl suppress">
+          <span class="rl-icon">🚫</span>
+          <div class="rl-body">
+            <div class="rl-name">${escHtml(name)}</div>
+            <div class="rl-detail">${id ? `ID: ${escHtml(id)}` : "see log"} ${link}</div>
+          </div>
+        </div>`;
+      }).join("");
+      if (suppressHtml) {
+        document.getElementById("suppress-panel").style.display = "block";
+        document.getElementById("suppress-list").innerHTML = suppressHtml;
+      }
+    }
 
     // Extract and show flagged items
     const flaggedMatch = buildLog.match(/##\s*flagged for review([\s\S]*?)(?:##|$)/i);
@@ -1027,6 +1130,8 @@
     document.getElementById("qa-section").style.display = "none";
     document.getElementById("qa-cards").innerHTML = "";
     document.getElementById("flagged-panel").style.display = "none";
+    document.getElementById("suppress-panel").style.display = "none";
+    document.getElementById("suppress-list").innerHTML = "";
     document.getElementById("result-lists").innerHTML = "";
     planText = ""; planCur = 0; buildCur = 0; buildItems = [];
     // Reset all stepper steps

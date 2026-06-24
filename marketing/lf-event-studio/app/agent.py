@@ -69,7 +69,7 @@ def _run_agent(prompt: str, q: queue.Queue) -> None:
                 tools=TOOL_DEFS_OPENAI,
                 tool_choice="auto",
                 stream=True,
-                max_tokens=16000,
+                max_tokens=32000,
             )
 
             for chunk in stream:
