@@ -665,11 +665,64 @@ def _build_email_preview(banner_url: str, body_html: str,
         'border-radius:4px;overflow:hidden;">'
         + banner_row
         + "<tr><td>" + body_html + "</td></tr>"
-        '<tr><td style="background-color:#F4F4F4;padding:20px 40px;'
-        'text-align:center;font-size:12px;color:#888888;">'
-        "Linux Foundation Events&nbsp;&nbsp;"
-        '<a href="{{ unsubscribe_link }}" style="color:#888888;text-decoration:underline;">'
-        "Unsubscribe</a>"
+        # ── Pre-footer divider ──────────────────────────────────────────
+        + '<tr><td style="padding:0 40px;">'
+        '<hr style="border:none;border-top:1px solid #23496d;margin:20px 0 0;">'
+        "</td></tr>"
+        # ── Social icons row (CSS circles — no external image dependency) ─
+        + '<tr><td style="background-color:#ffffff;padding:16px 40px;text-align:center;">'
+        '<table role="presentation" cellpadding="0" cellspacing="0" border="0"'
+        ' style="margin:0 auto;">'
+        "<tr>"
+        # LFX
+        '<td style="padding:0 6px;">'
+        '<a href="https://insights.linuxfoundation.org/'
+        '?utm_campaign=23551824-Q3-2025-LF-Awareness-LFX-Insights'
+        '&amp;utm_source=email&amp;utm_medium=LF-Events&amp;utm_content=regular-email"'
+        ' target="_blank" style="display:inline-block;width:32px;height:32px;'
+        'background-color:#09c0d9;border-radius:50%;color:#ffffff;text-align:center;'
+        'line-height:32px;text-decoration:none;font-weight:bold;font-size:11px;'
+        'font-family:Arial,sans-serif;">LFX</a></td>'
+        # Twitter / X
+        '<td style="padding:0 6px;">'
+        '<a href="https://twitter.com/linuxfoundation" target="_blank"'
+        ' style="display:inline-block;width:32px;height:32px;background-color:#000000;'
+        'border-radius:50%;color:#ffffff;text-align:center;line-height:32px;'
+        'text-decoration:none;font-weight:bold;font-size:14px;'
+        'font-family:Arial,sans-serif;">𝕏</a></td>'
+        # LinkedIn
+        '<td style="padding:0 6px;">'
+        '<a href="https://www.linkedin.com/company/the-linux-foundation/" target="_blank"'
+        ' style="display:inline-block;width:32px;height:32px;background-color:#0077b5;'
+        'border-radius:50%;color:#ffffff;text-align:center;line-height:32px;'
+        'text-decoration:none;font-weight:bold;font-size:13px;'
+        'font-family:Arial,sans-serif;">in</a></td>'
+        # Facebook
+        '<td style="padding:0 6px;">'
+        '<a href="https://www.facebook.com/TheLinuxFoundation/" target="_blank"'
+        ' style="display:inline-block;width:32px;height:32px;background-color:#1877f2;'
+        'border-radius:50%;color:#ffffff;text-align:center;line-height:32px;'
+        'text-decoration:none;font-weight:bold;font-size:16px;'
+        'font-family:Arial,sans-serif;">f</a></td>'
+        "</tr></table>"
+        "</td></tr>"
+        # ── "Sent by" text ──────────────────────────────────────────────
+        + '<tr><td style="background-color:#ffffff;padding:0 40px 8px;text-align:center;">'
+        '<p style="margin:0;font-size:12px;line-height:175%;color:#000000;">'
+        "This email was sent by: "
+        '<strong>The Linux Foundation Events</strong>'
+        "</p>"
+        "</td></tr>"
+        # ── Address + subscription center ───────────────────────────────
+        + '<tr><td style="background-color:#ffffff;padding:0 40px 24px;text-align:center;">'
+        '<p style="margin:0 0 6px;font-size:12px;line-height:150%;color:#666666;">'
+        "The Linux Foundation, 2810 N Church St., PMB 57274,<br>"
+        "Wilmington, Delaware 19802-4447, United States"
+        "</p>"
+        '<p style="margin:0;font-size:12px;">'
+        '<a href="{{ unsubscribe_link }}"'
+        ' style="color:#0094ff;text-decoration:underline;">Subscription Center</a>'
+        "</p>"
         "</td></tr>"
         "</table></td></tr></table></body></html>"
     )
@@ -680,16 +733,24 @@ def generate_email_content(
     stage_info: dict,
     brand_history: dict | None,
     change_request: str = "",
+    source_email_id: str = "",
 ) -> dict:  # noqa: C901
     """
     Generate subject, preview text, and full HTML email body.
 
-    Uses the official LF Events Marketing Journey stage templates as the base,
-    then asks Claude to substitute real event details and render as HTML.
-    Returns: {subject, preview_text, html}
+    Primary mode: fetches the reference email's actual content (the most recent
+    sent email for this brand/stage) and asks Claude to produce a similar email
+    for the new event — same structure, tone, and style; all event-specific
+    content (name, dates, speakers, sponsors) substituted.
+
+    Fallback: if no reference email is available, falls back to the official
+    Marketing Journey stage template.
+
+    Returns: {subject, preview_text, html, body_html, banner_url}
     """
     import re as _re
-    from email_templates import get_template
+    import logging as _logging
+    _log = _logging.getLogger("email-staging")
 
     event_name    = event_details.get("event_name", "")
     event_dates   = event_details.get("event_dates", [])
@@ -700,6 +761,7 @@ def generate_email_content(
     logo_img      = event_details.get("logo_url", "")
     speakers      = event_details.get("speakers", [])
     topics        = event_details.get("topics", [])
+    sponsors      = event_details.get("sponsors", [])
     reg           = event_details.get("registration") or {}
 
     stage_name    = stage_info.get("name", "")
@@ -709,27 +771,16 @@ def generate_email_content(
     from_name     = (brand_history or {}).get("from_name") or "Linux Foundation Events"
     dates_display = event_dates[0] if event_dates else event_date
 
-    # Upload images to HubSpot so they're reliably hosted on HubSpot CDN
-    import logging as _logging
-    _log = _logging.getLogger("email-staging")
-    _log.info(f"[GEN_EMAIL] hero_img={hero_img!r} logo_img={logo_img!r}")
+    # Upload hero / logo images to HubSpot CDN for reliable rendering
     from hubspot_tools import upload_image_to_hubspot as _upload_img
+    _log.info(f"[GEN_EMAIL] hero={hero_img!r} logo={logo_img!r} source_ref={source_email_id!r}")
     if hero_img:
         hero_img = _upload_img(hero_img) or hero_img
-        _log.info(f"[GEN_EMAIL] hero_img after upload={hero_img!r}")
     if logo_img:
         logo_img = _upload_img(logo_img) or logo_img
-        _log.info(f"[GEN_EMAIL] logo_img after upload={logo_img!r}")
-    # Uploaded hero image is the email banner (CDN URL or original)
     banner_url = hero_img
 
-    # Get the official stage template from the Marketing Journey dashboard
-    tmpl = get_template(stage_name) or get_template("Event Announcement")
-    template_subject   = tmpl["subject"]
-    template_preheader = tmpl["preheader"]
-    template_body      = tmpl["body"]
-
-    # Build supplementary context
+    # Build supplementary context lines
     reg_lines = []
     if reg.get("ticket_types"):
         reg_lines.append(f"Ticket info: {'; '.join(reg['ticket_types'][:2])}")
@@ -739,116 +790,216 @@ def generate_email_content(
         reg_lines.append(f"Register at: {reg['url']}")
     reg_info = "\n".join(reg_lines)
 
-    speakers_str = ", ".join(speakers[:3]) if speakers else ""
-    topics_str   = ", ".join(topics[:4])   if topics   else "Open Source, Cloud Native, Linux"
+    speakers_str = "\n".join(f"  • {s}" for s in speakers) if speakers else "  (to be announced)"
+    sponsors_str = "\n".join(f"  • {s}" for s in sponsors) if sponsors else "  (not listed on event page)"
+    topics_str   = ", ".join(topics[:4]) if topics else "Open Source, Cloud Native, Linux"
 
-    hero_tag = (
-        f'<img src="{hero_img}" width="600" alt="{event_name} Banner" '
-        'style="display:block;width:100%;max-width:600px;height:auto;">'
-        if hero_img
-        else '<div style="background:#0099CC;height:6px;width:100%;"></div>'
-    )
-    logo_tag = (
-        f'<img src="{logo_img}" alt="{event_name} Logo" '
-        'style="max-height:60px;max-width:200px;display:block;margin:0 auto 16px;">'
-        if logo_img
-        else ""
-    )
-
-    # HubSpot personalization token format (avoids f-string brace escaping issues)
+    # HubSpot personalization tokens
     hs_firstname = "{{ contact.firstname }}"
     hs_company   = "{{ contact.company }}"
-    hs_unsub     = "{{ unsubscribe_link }}"
+
+    # ── Fetch reference email from HubSpot (primary mode) ─────────────────────
+    ref_block = ""
+    ref_name  = ""
+    ref       = {}   # keep in scope for task_instructions block below
+    if source_email_id:
+        try:
+            import hubspot_tools as _ht
+            ref = _ht.get_email_content_text(source_email_id)
+            ref_sections  = ref.get("sections", [])
+            ref_body_html = ref.get("body_html", "")
+            ref_body_text = ref.get("body_text", "")
+
+            if ref.get("success") and (ref_sections or ref_body_html):
+                ref_name = ref.get("email_name", source_email_id)
+                ref_subj = ref.get("subject", "")
+                ref_prev = ref.get("preview_text", "")
+
+                # Build a component-by-component layout description so Claude
+                # knows the exact sequence: image → rich_text → button → divider…
+                layout_lines = []
+                for i, comp in enumerate(ref_sections):
+                    ctype = comp.get("type", "")
+                    if ctype == "image":
+                        layout_lines.append(f"  [{i+1}] IMAGE — hero banner (full-width event graphic)")
+                    elif ctype == "image_row":
+                        imgs = comp.get("images", [])
+                        alts = ", ".join(im.get("alt", "?") for im in imgs)
+                        layout_lines.append(f"  [{i+1}] IMAGE ROW ({len(imgs)} columns) — sponsor logos: {alts}")
+                    elif ctype == "rich_text":
+                        preview = _re.sub(r"<[^>]+>", "", comp.get("html", ""))[:80].strip()
+                        layout_lines.append(f"  [{i+1}] RICH TEXT — \"{preview}…\"")
+                    elif ctype == "button":
+                        layout_lines.append(
+                            f"  [{i+1}] BUTTON — \"{comp.get('text','')}\" "
+                            f"bg={comp.get('background_color','#04c0da')}"
+                        )
+                    elif ctype == "divider":
+                        layout_lines.append(f"  [{i+1}] DIVIDER — {comp.get('style','solid')} {comp.get('height',1)}px")
+                    elif ctype == "social_icons":
+                        layout_lines.append(f"  [{i+1}] SOCIAL ICONS — {comp.get('networks', [])}")
+
+                layout_desc = "\n".join(layout_lines)
+
+                ref_block = (
+                    f"━━━ REFERENCE EMAIL ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"Name    : {ref_name}\n"
+                    f"Subject : {ref_subj}\n"
+                    f"Preview : {ref_prev}\n\n"
+                    f"COMPONENT LAYOUT (replicate this exact sequence):\n"
+                    f"{layout_desc}\n\n"
+                    f"RICH TEXT HTML (actual HTML from each text block, in order):\n"
+                    f"{ref_body_html}\n"
+                )
+                _log.info(
+                    f"[GEN_EMAIL] reference loaded: {ref_name!r} "
+                    f"components={len(ref_sections)} html={len(ref_body_html)} chars"
+                )
+            else:
+                _log.warning(f"[GEN_EMAIL] reference fetch failed: {ref.get('error')}")
+        except Exception as exc:
+            _log.warning(f"[GEN_EMAIL] reference email exception: {exc}")
+
+    # ── Fallback to official marketing stage template ──────────────────────────
+    template_block = ""
+    if not ref_block:
+        from email_templates import get_template
+        tmpl = get_template(stage_name) or get_template("Event Announcement")
+        template_block = (
+            f"━━━ STAGE TEMPLATE (use when no reference email is available) ━━━━━━━━━━━━\n"
+            f"Subject   : {tmpl['subject']}\n"
+            f"Preheader : {tmpl['preheader']}\n\n"
+            f"Body:\n{tmpl['body']}\n"
+        )
+        _log.info(f"[GEN_EMAIL] using fallback template for stage={stage_name!r}")
+
+    # ── Build the prompt ───────────────────────────────────────────────────────
+    if ref_block:
+        # Derive button color from reference (default teal if not found)
+        ref_btn_color = "#04c0da"
+        for comp in (ref.get("sections") or []):
+            if comp.get("type") == "button" and comp.get("background_color"):
+                ref_btn_color = comp["background_color"]
+                break
+
+        task_instructions = f"""\
+━━━ YOUR TASK ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+You are given a COMPONENT LAYOUT and RICH TEXT HTML from a real previously sent
+email. Build a new email for the event below that follows the same design exactly.
+
+═══ COMPONENT-BY-COMPONENT RULES ═══════════════════════════════════════════════
+
+For each component in the COMPONENT LAYOUT above, output the matching HTML:
+
+▸ IMAGE (hero banner)
+  — The system injects the hero banner automatically. Skip this in your output.
+
+▸ RICH TEXT blocks
+  — Copy the inline CSS from the reference HTML exactly (font-size, line-height,
+    color, background-color, text-align, font-weight).
+  — Keep the same heading style: if the reference uses <p> with inline bold+size,
+    use <p>; if it uses <h2>, use <h2>. Do NOT switch tag types.
+  — Keep emoji prefixes on section headings (💡 🎟️ 🤝 etc.) — pick appropriate
+    emoji for each section based on the stage context.
+  — Replace all event-specific text (name, date, location, URL, topics, speakers,
+    sponsors) with the new event's details.
+  — Keep body text font-size and color identical to the reference.
+
+▸ BUTTON
+  — Render every button as a centered <table> with background-color={ref_btn_color}
+    exactly as in the reference. No div-based buttons.
+  — Button text should match the stage CTA: "{cta_label}"
+  — If reference has multiple buttons (one per section), replicate same count.
+
+▸ DIVIDER
+  — Render as <hr style="border:none;border-top:1px solid #000000;margin:20px 0;">
+  — Place a divider between every major content section, exactly as in reference.
+
+▸ IMAGE ROW (sponsor logos)
+  — If the reference has a sponsor logo row, keep it.
+  — If sponsors are known: show their names in a 3-column table as bold text
+    (logos won't be available for the new event yet).
+  — If no sponsors: show a placeholder "Sponsors to be announced" centered text.
+
+▸ SOCIAL ICONS / FOOTER
+  — The system injects the footer automatically. Skip this in your output.
+
+═══ STAGE & CONTENT RULES ═══════════════════════════════════════════════════════
+Stage: {stage_name} ({funnel})
+Primary CTA: "{cta_label}"
+- Tailor headlines, urgency wording, and section focus to match this stage.
+- CFP stage → focus on speaking topics, deadline, submission link.
+- Registration stage → focus on early bird pricing, date, venue.
+- Announcement stage → focus on event overview, why attend, save the date.
+
+Speaker list: include ALL confirmed speakers (never say "and more").
+Sponsor list: include ALL sponsors (never say "and more").
+
+HubSpot personalization tokens (exact syntax — spaces and dots matter):
+  First name : {hs_firstname}
+  Company    : {hs_company}
+
+═══ OUTPUT FORMAT ════════════════════════════════════════════════════════════════
+- Output ONLY the body content wrapped in one outer <div>
+- The system automatically adds: hero banner image, social icons footer, address
+- Do NOT include: DOCTYPE, html, head, body tags, outer wrapper tables,
+  the banner image section, social icons, or unsubscribe/address footer
+- Outer wrapper to emit:
+  <div style="padding:36px 40px;font-family:Arial,sans-serif;color:#333333;max-width:600px;margin:0 auto;">
+    …your sections here…
+  </div>
+- Inline CSS only — no <style> tags.
+- Bullet lists: <ul>/<li> tags — never the • character.
+- CTA buttons: centered <table cellpadding="0" cellspacing="0"> with a <td> containing <a>."""
+    else:
+        task_instructions = f"""\
+━━━ YOUR TASK ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Replace every placeholder ([Event Name], [City], [Dates], [LINK], etc.) with
+the real event details above and render as a production-ready HTML email body.
+
+1. Include ALL speakers listed (with names — do not say "and more").
+2. Include ALL sponsors listed (if any).
+3. Stage: {stage_name} ({funnel}) — CTA: "{cta_label}"
+
+4. HubSpot personalization tokens (EXACT syntax):
+   - First name : {hs_firstname}
+   - Company    : {hs_company}
+
+5. Output ONLY the body <div>...</div> — system adds banner + footer.
+   No DOCTYPE/html/head/body. No outer wrappers. No footer/unsubscribe.
+   Inline CSS only. Lists as <ul>/<li>. CTA as a centered <table>."""
 
     prompt = f"""You are a senior email marketer for Linux Foundation open source events.
 
-Your job: take the official stage template below and personalise it for a specific event,
-then render it as a complete, production-ready HTML email.
-
-━━━ EVENT DETAILS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+{ref_block or template_block}
+━━━ NEW EVENT ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Event Name  : {event_name}
 Date        : {dates_display}
 Location    : {location}
 Event URL   : {url}
 Description : {description}
-Speakers    : {speakers_str or "To be announced"}
+Stage       : {stage_name} ({funnel})
+
+Confirmed Speakers:
+{speakers_str}
+
+Sponsors / Partners:
+{sponsors_str}
+
 Topics      : {topics_str}
 {reg_info}
 
-━━━ CAMPAIGN STAGE ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Stage  : {stage_name} ({funnel})
-CTA    : {cta_label}
-
-━━━ OFFICIAL TEMPLATE ━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Subject   : {template_subject}
-Preheader : {template_preheader}
-
-Body:
-{template_body}
-
-━━━ YOUR TASK ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-1. Replace every placeholder ([Event Name], [City], [Dates], [Date], [LINK], etc.)
-   with the real event details provided above.
-
-2. HubSpot personalization tokens — use EXACTLY this syntax (spaces and dots matter):
-   - Recipient first name : {hs_firstname}
-   - Company name         : {hs_company}
-   Do NOT use {{first_name}}, {{ first_name }}, or any other variant.
-
-3. Remove sections that don't apply (e.g. speaker section if no speakers listed).
-
-4. Generate ONLY the email body content — the banner image and footer are added
-   automatically by the system. Do NOT include:
-   - DOCTYPE, html, head, body tags
-   - Outer wrapper tables
-   - Banner/header image section (dark blue header row)
-   - Footer with unsubscribe link
-
-   Structure the output as a single padded <div>:
-
-   <div style="padding:36px 40px;font-family:Arial,sans-serif;color:#333333;">
-
-     <p style="margin:0 0 20px 0;line-height:1.7;font-size:15px;color:#333333;">
-       Hi {hs_firstname},
-     </p>
-
-     [body paragraphs as <p> tags with margin:0 0 20px 0;line-height:1.7;font-size:15px;]
-
-     [bullet lists as proper <ul>/<li> — NEVER use • character]:
-     <ul style="margin:0 0 20px 20px;padding:0;list-style-type:disc;">
-       <li style="margin-bottom:10px;line-height:1.7;font-size:15px;color:#333333;">item</li>
-     </ul>
-
-     [headings as <h2> tags]:
-     <h2 style="margin:0 0 12px 0;font-size:18px;color:#003366;font-weight:bold;">Heading</h2>
-
-     [CTA button — centered, in its own table]:
-     <table role="presentation" cellpadding="0" cellspacing="0" border="0"
-            style="margin:28px auto;">
-       <tr><td style="border-radius:4px;background-color:#0099CC;">
-         <a href="{url}" target="_blank"
-            style="display:inline-block;padding:14px 36px;color:#ffffff;font-weight:bold;
-                   font-size:16px;text-decoration:none;font-family:Arial,sans-serif;">
-           {cta_label}
-         </a>
-       </td></tr>
-     </table>
-
-     [closing paragraph and signature]
-
-   </div>
-
-5. ALL CSS inline — no <style> tags.
+{task_instructions}
 
 Return ONLY a JSON object — no markdown fences, no text before or after:
 {{"subject": "...", "preview_text": "...", "html": "..."}}
 
-subject: personalised subject line (max 60 chars)
-preview_text: personalised preheader (max 90 chars)
-html: ONLY the <div>...</div> body content as described above — NO outer HTML structure
+subject: email subject line (max 60 chars, matches {stage_name} urgency)
+preview_text: preheader text (max 90 chars)
+html: ONLY the <div>...</div> body content — NO outer HTML structure
 {("" if not change_request else f"{chr(10)}━━━ CHANGE REQUEST ━━━{chr(10)}{change_request}{chr(10)}")}"""
 
-    raw = _claude_text(prompt, max_tokens=4000, timeout=180)
+    raw = _claude_text(prompt, max_tokens=6000, timeout=240)
 
     # Strip markdown fences
     raw = _re.sub(r'^```(?:json)?\s*', '', raw.strip())
@@ -1034,10 +1185,26 @@ def plan_turn(session, url: str, extra_context: str = None) -> tuple[str, list]:
         "⚠️  DO NOT write any plan content before completing STEP 1 and STEP 2.\n"
         "⚠️  DO NOT say 'the plan above', 'as shown above', or 'presented above'.\n"
         "⚠️  Your FINAL message must contain the COMPLETE plan written from scratch.\n\n"
-        "Your final response MUST contain the full plan in this exact format:\n\n"
+        "Your final response MUST contain the full plan in this EXACT format "
+        "(all four sections — Stage & Content Overview FIRST, then Settings, then Audience):\n\n"
         "---\n"
         "## Email Staging Plan — [Event Name]\n\n"
-        "Brief 1-2 sentence summary of what will be staged.\n\n"
+        "One sentence: what event, what type of email, which stage.\n\n"
+        "### Stage & Content Overview\n\n"
+        "| Field | Value |\n"
+        "|---|---|\n"
+        "| **Current Stage** | [stage name] ([funnel] — [N] days to event) |\n"
+        "| **Stage Goal** | [what this email is trying to achieve] |\n"
+        "| **Email Type** | [Invite / Last Chance / Reminder / Newsletter / etc.] |\n"
+        "| **CTA** | [call-to-action label] |\n"
+        "| **Event Date** | [event date] |\n"
+        "| **Content Reference** | [name of previous email used as style reference, or 'Stage template'] |\n\n"
+        "**What will be included in the generated email:**\n"
+        "- **Speakers**: [list ALL confirmed speaker names, or 'To be announced']\n"
+        "- **Sponsors / Partners**: [list ALL confirmed sponsor names, or 'None found']\n"
+        "- **Topics / Tracks**: [list]\n"
+        "- **Email Sections**: [intro paragraph → [stage-specific content] → speaker highlights → "
+        "registration CTA → closing]\n\n"
         "### Settings\n\n"
         "| Field | Value |\n"
         "|---|---|\n"
@@ -1117,17 +1284,17 @@ def clone_turn(session, subject=None, preview_text=None, send_list_id=None) -> t
     new_email_id = clone_result["email_id"]
     draft_url    = clone_result.get("draft_url", "")
 
-    # Step 2: Update settings directly
+    # Step 2: Update settings directly (from/subject/preview_text — NOT the send list)
+    # The send list is applied last via set_email_send_list() so content patches
+    # can't accidentally interfere with the `to` field.
     settings: dict = {
         "email_id":             new_email_id,
         "from_name":            from_name,
         "from_address":         from_addr,
-        "suppression_list_ids": suppression,
         "email_type":           email_type,
     }
     if effective_subject:      settings["subject"]       = effective_subject
     if effective_preview_text: settings["preview_text"]  = effective_preview_text
-    if effective_send_list:    settings["send_list_id"]  = effective_send_list
 
     update_result = json.loads(
         _execute_tool("update_email_settings", settings, session_email_id=new_email_id)
@@ -1157,6 +1324,18 @@ def clone_turn(session, subject=None, preview_text=None, send_list_id=None) -> t
                 _log.warning(f"[CLONE] Content apply failed: {content_result.get('error')}")
         except Exception as e:
             _log.warning(f"[CLONE] Content apply exception: {e}")
+
+    # Step 4: Apply send list LAST — after all content patches so nothing can
+    # overwrite the `to` field.  Uses set_email_send_list() which looks up the
+    # list's processingType and uses the correct contactLists vs contactIlsLists
+    # sub-field; mixing them in a single PATCH causes HubSpot to silently reject
+    # the entire `to` object.
+    if effective_send_list:
+        try:
+            sls = hubspot_tools.set_email_send_list(new_email_id, effective_send_list, suppression)
+            _log.info(f"[CLONE] set_email_send_list → success={sls.get('success')} type={sls.get('list_type')}")
+        except Exception as exc:
+            _log.warning(f"[CLONE] set_email_send_list exception: {exc}")
 
     # Store flag so main.py can include it in the response
     session.meta["content_applied"] = content_applied

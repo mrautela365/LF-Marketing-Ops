@@ -99,6 +99,7 @@ async def create_plan(req: PlanRequest):
         log.info(f"[PLAN] no lookup match for {raw_event!r}, using scraped brand={brand_name!r}")
 
     email_type = (req.email_type or "").strip()
+    candidates: list = []   # all fetched HubSpot email candidates — reused for content reference
 
     # ── AI-driven source email selection ──────────────────────────────────────
     # 1. Collect all event short names for this brand from the mapping so we can
@@ -116,6 +117,7 @@ async def create_plan(req: PlanRequest):
             candidates = hubspot_tools.get_brand_emails(
                 short_brand_name, brand_name,
                 event_short_names=event_short_names,
+                event_url=req.url,
             )
 
             if candidates:
@@ -179,8 +181,101 @@ async def create_plan(req: PlanRequest):
     stage_info = detect_stage(url_data.get("event_dates", []))
     session.meta["stage_info"] = stage_info
     log.info(f"[PLAN] Stage: {stage_info['name']!r} ({stage_info['funnel']}, days={stage_info['days_to_event']})")
+
+    # ── Step B2: Find stage-specific content reference email ──────────────────
+    # Look for the most recent sent email whose name contains the stage keyword
+    # (e.g. "Last Chance" for a Last Chance stage). This email's actual HTML will
+    # be used as the reference for AI content generation — NOT the generic template.
+    #
+    # Keyword map covers all 13 marketing-journey stage names from stage_detector.py.
+    # Multiple keywords per stage so we match the varied naming in HubSpot
+    # (e.g. "CFP Closes 14 July" matches "cfp"; "Registration Live" matches "registration").
+    _STAGE_KW_MAP: dict = {
+        "Event Announcement":               ["announcement", "invite", "announcing"],
+        "CFP Launch":                       ["cfp", "call for proposals", "call for speakers", "speak"],
+        "Registration Launch":              ["registration", "register", "cfp open", "registration live"],
+        "Co-Located Events + CFP Reminder": ["cfp", "co-located", "colocated", "reminder"],
+        "DEI & Travel Fund":                ["dei", "travel fund", "scholarship", "diversity"],
+        "Schedule Announcement":            ["schedule", "keynote", "sessions", "agenda"],
+        "Main Registration Push":           ["register", "reminder", "registration", "push"],
+        "Final Countdown":                  ["last chance", "last call", "final", "countdown",
+                                             "closing", "closes", "deadline"],
+        "Event Week":                       ["reminder", "event week", "logistics", "venue", "join us"],
+        "Thank You + Survey":               ["thank you", "thanks", "survey", "feedback", "post-event"],
+        "Content & Recordings Release":     ["recording", "content", "recap", "slides", "session"],
+        "Next Event CFP Teaser":            ["cfp", "upcoming", "next event", "teaser", "save the date"],
+        "Community Nurture":                ["community", "newsletter", "update", "nurture"],
+        # Legacy/alias names that might come through
+        "Invite":                           ["invite"],
+        "Last Chance":                      ["last chance", "last call", "closes", "deadline"],
+        "Reminder":                         ["reminder"],
+        "Save the Date":                    ["save the date", "save-the-date"],
+    }
+    _stage_ref_id = ""
+    _stage_ref_name = ""
+    _stage_keywords = _STAGE_KW_MAP.get(stage_info.get("name", ""), [])
+
+    # Re-use `candidates` already fetched for AI selection — it now includes URL-slug results.
+    _ref_candidates = candidates
+
+    if _stage_keywords and _ref_candidates:
+        for _cand in _ref_candidates:
+            _cname = (_cand.get("name") or "").lower()
+            if any(_kw in _cname for _kw in _stage_keywords):
+                _stage_ref_id   = str(_cand["id"])
+                _stage_ref_name = _cand.get("name", "")
+                log.info(f"[PLAN] stage-match ref: {_stage_ref_name!r} (keyword in name)")
+                break
+
+    # Fall back: most-recent candidate for this event (any stage keyword match fails)
+    if not _stage_ref_id and _ref_candidates:
+        _stage_ref_id   = str(_ref_candidates[0]["id"])
+        _stage_ref_name = _ref_candidates[0].get("name", "")
+        log.info(f"[PLAN] stage-match fallback → most recent: {_stage_ref_name!r}")
+
+    # Final fall back: AI-selected clone source
+    if not _stage_ref_id:
+        _bh = session.meta.get("brand_history") or {}
+        _stage_ref_id   = str(_bh.get("matched_email_id") or "")
+        _stage_ref_name = _bh.get("matched_email_name", "")
+    if _stage_ref_id:
+        session.meta["content_reference_id"]   = _stage_ref_id
+        session.meta["content_reference_name"] = _stage_ref_name
+        log.info(f"[PLAN] content reference: {_stage_ref_name!r} (id={_stage_ref_id})")
+
     # Content generation happens separately via /api/generate-content
     # (keeps /api/plan fast; frontend calls it automatically after plan loads)
+
+    # ── Stage & Content context hint ─────────────────────────────────────────
+    # Build the data block that Claude will use to write the Stage & Content
+    # Overview section at the top of the plan.
+    _speakers = url_data.get("speakers", [])
+    _sponsors  = url_data.get("sponsors", [])
+    _topics    = url_data.get("topics", [])
+    _ref_name  = session.meta.get("content_reference_name", "")
+    _days      = stage_info.get("days_to_event")
+    _days_str  = f"{_days} days" if _days is not None else "unknown"
+
+    def _fmt_list(items, label, empty_msg):
+        if items:
+            return f"{label} ({len(items)}): " + ", ".join(items)
+        return f"{label}: {empty_msg}"
+
+    stage_content_hint = (
+        f"STAGE & CONTENT DATA — include this in the Stage & Content Overview section:\n"
+        f"  Current Stage   : {stage_info['name']} — {stage_info.get('funnel','')}, {_days_str} to event\n"
+        f"  Stage Goal      : {stage_info.get('goal','')}\n"
+        f"  Email Type      : {stage_info.get('email_type','')}\n"
+        f"  CTA             : {stage_info.get('cta_label','Register Now')}\n"
+        f"  Event Date      : {stage_info.get('event_date_str','')}\n"
+        f"  {_fmt_list(_speakers, 'Speakers', 'None found on event page — will say TBA')}\n"
+        f"  {_fmt_list(_sponsors, 'Sponsors', 'None found on event page')}\n"
+        f"  {_fmt_list(_topics[:4], 'Topics', 'Open Source, Cloud Native, Linux')}\n"
+        f"  Content reference: {_ref_name or 'No prior email found — will use stage template'}\n"
+        f"  Content sections : intro, {stage_info.get('email_type','')} highlights, "
+        f"speakers showcase, {'sponsors mention, ' if _sponsors else ''}"
+        f"registration CTA, closing\n"
+    )
 
     # Build brand hint for Claude so it uses the right short code in the email name
     brand_hint = None
@@ -196,7 +291,7 @@ async def create_plan(req: PlanRequest):
         )
 
     # ── Step B: Call Claude to generate the plan text ──
-    combined_context = "\n\n".join(filter(None, [req.extra_context, brand_hint]))
+    combined_context = "\n\n".join(filter(None, [req.extra_context, brand_hint, stage_content_hint]))
     try:
         text, messages = agent.plan_turn(session, req.url, combined_context or None)
     except Exception as exc:
@@ -254,12 +349,20 @@ async def generate_content(req: GenerateContentRequest):
         stage_info    = session.meta.get("stage_info", {})
         brand_history = session.meta.get("brand_history")
 
-        change_request = req.change_request or ""
+        change_request  = req.change_request or ""
+        source_email_id = session.meta.get("content_reference_id", "")
+
+        log.info(f"[GEN-CONTENT] source_ref={source_email_id!r} "
+                 f"ref_name={session.meta.get('content_reference_name', '')!r}")
+
         loop = asyncio.get_running_loop()
         generated = await loop.run_in_executor(
             None,
-            lambda: agent.generate_email_content(url_data, stage_info, brand_history,
-                                                  change_request=change_request)
+            lambda: agent.generate_email_content(
+                url_data, stage_info, brand_history,
+                change_request=change_request,
+                source_email_id=source_email_id,
+            )
         )
 
         session.meta["generated_subject"] = generated["subject"]
@@ -722,7 +825,7 @@ async def stream_audience_build(job_id: str, session_id: str = ""):
     accumulated: list[str] = []
 
     async def generate():
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()  # get_event_loop() is deprecated; get_running_loop() is correct inside a coroutine
         while True:
             try:
                 item = await loop.run_in_executor(None, lambda: q.get(timeout=5))
@@ -736,18 +839,23 @@ async def stream_audience_build(job_id: str, session_id: str = ""):
             yield f"data: {json.dumps(item)}\n\n"
 
             if item.get("done"):
-                all_text   = "\n".join(accumulated)
-                master_id  = audience_tools.extract_master_list_id(all_text)
+                try:
+                    all_text  = "\n".join(accumulated)
+                    master_id = audience_tools.extract_master_list_id(all_text)
 
-                if session_id and master_id:
-                    session = session_store.get(session_id)
-                    if session:
-                        session.meta["audience_list_id"] = master_id
-                        session_store.update(session)
-                        log.info(f"[AUDIENCE] master list {master_id} stored in session {session_id[:8]}")
+                    if session_id and master_id:
+                        sess = session_store.get(session_id)
+                        if sess:
+                            sess.meta["audience_list_id"] = master_id
+                            session_store.update(sess)
+                            log.info(f"[AUDIENCE] master list {master_id} stored in session {session_id[:8]}")
 
-                yield f"data: {json.dumps({'type':'complete','done':True,'master_list_id':master_id,'success':item.get('success',False)})}\n\n"
-                audience_tools.remove_job(job_id)
+                    yield f"data: {json.dumps({'type':'complete','done':True,'master_list_id':master_id,'success':item.get('success',False)})}\n\n"
+                except Exception as exc:
+                    log.error(f"[AUDIENCE] completion handling error: {exc}")
+                    yield f"data: {json.dumps({'type':'complete','done':True,'master_list_id':'','success':False})}\n\n"
+                finally:
+                    audience_tools.remove_job(job_id)
                 break
 
     return StreamingResponse(

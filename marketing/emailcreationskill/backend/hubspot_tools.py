@@ -181,20 +181,62 @@ def search_emails_for_event(brand_name: str, event_name: str, location: str = ""
     }
 
 
-def get_brand_emails(short_brand_name: str, brand_name: str,
-                     event_short_names: list = None, limit_per_call: int = 20) -> list:
+# Generic conference words to strip when building slug search tokens.
+# We keep brand-specific abbreviations (mcp, cfp, kcd, etc.) and locations.
+_SLUG_GENERIC = {
+    "summit", "conference", "con", "forum", "day", "days",
+    "event", "events", "virtual", "online", "global",
+    "north", "south", "east", "west", "central",
+}
+
+
+def _slug_key_tokens(url: str) -> list[str]:
     """
-    Fetch 30-40 published emails for a brand by searching across multiple terms:
-      1. short_brand_name  (e.g. "AIF", "CNCF") — matches new "26QN - AIF - ..." naming
-      2. Each event_short_name from the brand's full event list in BRAND_MAP
-      3. brand_name fallback if results are still thin
+    Extract meaningful search tokens from an event URL slug.
+
+    Examples:
+      mcp-dev-summit-toronto  →  ["mcp", "dev", "toronto"]
+      open-source-summit-india →  ["open", "source", "india"]
+      kubecon-cloudnativecon-eu →  ["kubecon", "cloudnativecon", "eu"]
+    """
+    import re as _re
+    from urllib.parse import urlparse
+    try:
+        path   = urlparse(url).path.strip("/")
+        slug   = path.split("/")[-1]
+        tokens = [t.lower() for t in _re.split(r"[-_]", slug) if len(t) > 1]
+        return [t for t in tokens if t not in _SLUG_GENERIC]
+    except Exception:
+        return []
+
+
+def get_brand_emails(short_brand_name: str, brand_name: str,
+                     event_short_names: list = None,
+                     event_url: str = "",
+                     limit_per_call: int = 20) -> list:
+    """
+    Fetch 30-40 published emails for a brand by searching across multiple terms.
+
+    Search order:
+      1. short_brand_name        — catches new "26QN - AIF - …" naming
+      2. event_short_names       — each term searched as TOKEN-ANCHORED:
+                                   search by first word, filter results by the rest.
+                                   Fixes contiguous-substring failures like
+                                   "MCP Toronto" not matching "MCP Dev Summit Toronto".
+      3. URL slug tokens         — parse event_url slug, search by first key token,
+                                   filter results by remaining tokens.
+                                   e.g. mcp-dev-summit-toronto → anchor "mcp",
+                                   filter by ["dev","toronto"] → finds all emails
+                                   whose names contain every key word from the slug.
+      4. brand_name fallback     — only when results are still thin (<10)
 
     Results are deduplicated by email ID and sorted newest-first.
     """
-    seen: set = set()
+    seen: set       = set()
     all_emails: list = []
 
     def _fetch_and_add(filt: str) -> None:
+        """Exact-phrase icontains search."""
         if not filt or len(filt) < 2:
             return
         data = _get("/marketing/v3/emails", params={
@@ -208,14 +250,53 @@ def get_brand_emails(short_brand_name: str, brand_name: str,
                 seen.add(eid)
                 all_emails.append(e)
 
-    # Primary: brand short code (catches all new-style emails)
+    def _fetch_tokenized(anchor: str, rest: list[str]) -> None:
+        """
+        Search by `anchor` (icontains), then keep only results whose name also
+        contains every word in `rest`. Handles multi-word terms where the words
+        may not be adjacent in the HubSpot email name.
+        """
+        if not anchor or len(anchor) < 2:
+            return
+        data = _get("/marketing/v3/emails", params={
+            "limit": limit_per_call * 3,   # cast a wider net before filtering
+            "name__icontains": anchor,
+            "orderBy": "-publishDate",
+        })
+        for e in data.get("results", []):
+            eid = e.get("id")
+            if e.get("state") != "PUBLISHED" or not eid or eid in seen:
+                continue
+            name_lc = (e.get("name") or "").lower()
+            if all(r.lower() in name_lc for r in rest):
+                seen.add(eid)
+                all_emails.append(e)
+
+    # ── Tier 1: brand short code ──────────────────────────────────────────────
     _fetch_and_add(short_brand_name)
 
-    # Expand: each known event short name for this brand
+    # ── Tier 2: event short names — token-anchored matching ───────────────────
     for esn in (event_short_names or []):
-        _fetch_and_add(esn)
+        if not esn:
+            continue
+        parts = esn.split()
+        if len(parts) == 1:
+            _fetch_and_add(esn)
+        else:
+            # "MCP Toronto" → anchor="MCP", rest=["Toronto"]
+            _fetch_tokenized(parts[0], parts[1:])
 
-    # Fallback: full brand name (catches older naming conventions)
+    # ── Tier 3: URL slug tokens ───────────────────────────────────────────────
+    # mcp-dev-summit-toronto → ["mcp","dev","toronto"]
+    # search anchor="mcp", filter by ["dev","toronto"]
+    if event_url:
+        slug_tokens = _slug_key_tokens(event_url)
+        if len(slug_tokens) >= 2:
+            _fetch_tokenized(slug_tokens[0], slug_tokens[1:])
+        elif len(slug_tokens) == 1:
+            _fetch_and_add(slug_tokens[0])
+
+    # ── Tier 4: full brand name fallback ─────────────────────────────────────
     if len(all_emails) < 10:
         _fetch_and_add(brand_name)
 
@@ -323,25 +404,243 @@ def update_email_settings(
     if frm:
         payload["from"] = frm
 
-    # HubSpot stores send/suppression lists in contactIlsLists (v3 ILS) and/or
-    # contactLists (legacy). We write to both so the setting lands regardless of
-    # which format the receiving email expects.
-    if send_list_id or suppression_list_ids is not None:
-        ils: dict = {}
-        legacy: dict = {}
-        if send_list_id:
-            ils["include"]    = [str(send_list_id)]
-            legacy["include"] = [int(send_list_id)]
-        if suppression_list_ids is not None:
-            ils["exclude"]    = [str(s) for s in suppression_list_ids]
-            legacy["exclude"] = [int(s) for s in suppression_list_ids if str(s).isdigit()]
-        payload["to"] = {
-            "contactIlsLists": ils,
-            "contactLists":    legacy,
+    result = _patch(f"/marketing/v3/emails/{email_id}", payload)
+    return {"success": True, "email_id": email_id, "fields_updated": list(payload.keys())}
+
+
+# ── Tool 3b: Set email send / suppression lists ──────────────────────────────
+
+def _get_list_processing_type(list_id: str) -> str:
+    """Return 'SNAPSHOT', 'DYNAMIC', or 'UNKNOWN' for a HubSpot contact list."""
+    import logging as _logging
+    _l = _logging.getLogger("email-staging")
+    try:
+        data = requests.get(
+            f"https://api.hubapi.com/crm/v3/lists/{list_id}",
+            headers=_headers(),
+            timeout=10,
+        )
+        if data.ok:
+            return data.json().get("processingType", "UNKNOWN")
+        _l.warning(f"[HS-LISTS] list type lookup for {list_id}: HTTP {data.status_code}")
+    except Exception as exc:
+        _l.warning(f"[HS-LISTS] list type lookup for {list_id} failed: {exc}")
+    return "UNKNOWN"
+
+
+def set_email_send_list(
+    email_id: str,
+    send_list_id: str,
+    suppression_list_ids: list = None,
+) -> dict:
+    """
+    Set the recipient + suppression lists on a HubSpot marketing email.
+
+    Root cause of the common failure: HubSpot silently rejects the entire `to`
+    object when a SNAPSHOT list ID appears in `contactIlsLists` (which expects
+    DYNAMIC/ILS lists only). Fix: look up the processing type and use only the
+    correct sub-field — never mix types in the same `to` object.
+    """
+    import logging as _logging
+    _log = _logging.getLogger("email-staging")
+
+    suppression_list_ids = [str(s) for s in (suppression_list_ids or []) if s]
+
+    list_type = _get_list_processing_type(send_list_id)
+    _log.info(f"[HS-LISTS] set_email_send_list email={email_id} list={send_list_id} type={list_type}")
+
+    if list_type == "DYNAMIC":
+        to_payload = {
+            "contactIlsLists": {
+                "include": [str(send_list_id)],
+                "exclude": suppression_list_ids,
+            }
+        }
+    else:
+        # SNAPSHOT or UNKNOWN — safe default; contactLists accepts static list IDs
+        to_payload = {
+            "contactLists": {
+                "include": [int(send_list_id)],
+                "exclude": [int(s) for s in suppression_list_ids if s.isdigit()],
+            }
         }
 
-    _patch(f"/marketing/v3/emails/{email_id}", payload)
-    return {"success": True, "email_id": email_id, "fields_updated": list(payload.keys())}
+    _log.info(f"[HS-LISTS] PATCHing to={to_payload}")
+    result = _patch(f"/marketing/v3/emails/{email_id}", {"to": to_payload})
+
+    applied_to = result.get("to") or {}
+    all_applied = (
+        [str(x) for x in (applied_to.get("contactLists")    or {}).get("include", [])] +
+        [str(x) for x in (applied_to.get("contactIlsLists") or {}).get("include", [])]
+    )
+    success = str(send_list_id) in all_applied
+    if success:
+        _log.info(f"[HS-LISTS] ✓ send list {send_list_id} applied (type={list_type})")
+    else:
+        _log.warning(
+            f"[HS-LISTS] ⚠ send_list_id={send_list_id!r} not in PATCH response to={applied_to}"
+        )
+
+    return {
+        "success": success,
+        "email_id": email_id,
+        "send_list_id": send_list_id,
+        "list_type": list_type,
+        "to": applied_to,
+    }
+
+
+# ── Tool 3c: Read a sent email's content and structure as reference ───────────
+
+def get_email_content_text(email_id: str) -> dict:
+    """
+    Extract full content and layout structure from a HubSpot marketing email.
+
+    HubSpot module-based emails store data in two places:
+      - content.widgets : flat dict keyed by module-ID string → actual widget data
+      - content.flexAreas.main.sections[].columns[].widgets[] : ordered list of
+        those module-ID strings (NOT dicts — just references)
+
+    The old code looked for body["value"] inside the section widget dicts, but
+    those are just string IDs. The real content is in content.widgets[id].body
+    with field names: "html" (rich text), "text"/"destination"/"background_color"
+    (button), "img" (image), "line_type" (divider), "social" (social icons).
+
+    Returns:
+      sections     : ordered list of component dicts (type, html, button attrs…)
+      body_html    : concatenated rich-text HTML blocks (for AI style reference)
+      body_text    : stripped plain text (for logging/fallback)
+      subject, preview_text, email_name
+    """
+    import re as _re
+    import logging as _logging
+    _log = _logging.getLogger("email-staging")
+    try:
+        email   = _get(f"/marketing/v3/emails/{email_id}")
+        content = email.get("content") or {}
+
+        subject      = email.get("subject") or ""
+        preview_text = ""
+
+        # content.widgets is the flat lookup dict for ALL module widget data
+        top_widgets = content.get("widgets") or {}
+
+        # Preview text is a special top-level key (DnD emails only)
+        pt_body = (top_widgets.get("preview_text") or {}).get("body") or {}
+        preview_text = pt_body.get("value", "")
+
+        # Walk flexAreas in section order.  Each section's widgets list holds
+        # MODULE-ID STRINGS — resolve each to its actual data in top_widgets.
+        html_parts:  list[str]  = []   # rich-text HTML blocks, in order
+        sections_out: list[dict] = []  # structured component map for the AI
+
+        for _area_name, area in (content.get("flexAreas") or {}).items():
+            for section in (area.get("sections") or []):
+                col_count = len(section.get("columns") or [])
+                # Multi-column sections (e.g. sponsor logo row)
+                if col_count > 1:
+                    col_images = []
+                    for col in (section.get("columns") or []):
+                        for wid in (col.get("widgets") or []):
+                            if not isinstance(wid, str):
+                                continue
+                            body = (top_widgets.get(wid) or {}).get("body") or {}
+                            img  = body.get("img") or {}
+                            if isinstance(img, dict) and img.get("src"):
+                                col_images.append({
+                                    "src": img["src"],
+                                    "alt": img.get("alt", ""),
+                                })
+                    if col_images:
+                        sections_out.append({"type": "image_row", "images": col_images})
+                    continue  # skip per-widget walk for multi-col sections
+
+                # Single-column sections — walk widgets in order
+                for col in (section.get("columns") or []):
+                    for wid in (col.get("widgets") or []):
+                        if not isinstance(wid, str):
+                            continue
+                        wdata = top_widgets.get(wid) or {}
+                        body  = wdata.get("body") or {}
+
+                        # ── Rich text ────────────────────────────────────────
+                        html = body.get("html", "")
+                        if html and html.strip():
+                            html_parts.append(html)
+                            sections_out.append({"type": "rich_text", "html": html})
+                            continue
+
+                        # ── Button ───────────────────────────────────────────
+                        btn_text = body.get("text", "")
+                        if btn_text:
+                            sections_out.append({
+                                "type":             "button",
+                                "text":             btn_text,
+                                "background_color": body.get("background_color", "#04c0da"),
+                                "destination":      str(body.get("destination", "")),
+                            })
+                            continue
+
+                        # ── Single image ─────────────────────────────────────
+                        img = body.get("img") or {}
+                        if isinstance(img, dict) and img.get("src"):
+                            sections_out.append({
+                                "type": "image",
+                                "src":  img["src"],
+                                "alt":  img.get("alt", ""),
+                            })
+                            continue
+
+                        # ── Divider ──────────────────────────────────────────
+                        if body.get("line_type"):
+                            sections_out.append({
+                                "type":   "divider",
+                                "style":  body.get("line_type", "solid"),
+                                "height": body.get("height", 1),
+                            })
+                            continue
+
+                        # ── Social icons ─────────────────────────────────────
+                        social = body.get("social")
+                        if social:
+                            nets = [s.get("network", "") for s in social if isinstance(s, dict)]
+                            sections_out.append({"type": "social_icons", "networks": nets})
+
+        # Concatenated rich-text HTML (preserves inline CSS, emoji, heading styles)
+        body_html = "\n\n".join(h for h in html_parts if h.strip())
+
+        # Stripped plain text for logging / fallback
+        def _strip(html: str) -> str:
+            html = _re.sub(r"<br\s*/?>",            "\n",  html, flags=_re.I)
+            html = _re.sub(r"</?(p|div|tr)[^>]*>",  "\n",  html, flags=_re.I)
+            html = _re.sub(r"</?(h[1-6])[^>]*>",    "\n",  html, flags=_re.I)
+            html = _re.sub(r"<li[^>]*>",            "• ",  html, flags=_re.I)
+            html = _re.sub(r"<[^>]+>",              "",    html)
+            html = _re.sub(r"[ \t]+",               " ",   html)
+            html = _re.sub(r"\n{3,}",               "\n\n",html)
+            return html.strip()
+
+        body_text = "\n\n".join(_strip(h) for h in html_parts if h.strip())
+        body_text = _re.sub(r"\n{3,}", "\n\n", body_text).strip()
+
+        _log.info(
+            f"[REF-EMAIL] {email_id} — subject={subject!r} "
+            f"components={len(sections_out)} html_blocks={len(html_parts)} "
+            f"body_html={len(body_html)} chars"
+        )
+        return {
+            "success":      True,
+            "email_id":     email_id,
+            "email_name":   email.get("name", ""),
+            "subject":      subject,
+            "preview_text": preview_text,
+            "body_text":    body_text[:4000],
+            "body_html":    body_html[:12000],
+            "sections":     sections_out,   # structured component list for AI
+        }
+    except Exception as exc:
+        _log.warning(f"[REF-EMAIL] failed to read {email_id}: {exc}")
+        return {"success": False, "email_id": email_id, "error": str(exc)}
 
 
 # ── Tool 4: Update email body content ───────────────────────────────────────
@@ -437,6 +736,93 @@ def update_email_content(
     sections.append({
         "id":      "section-staging-body",
         "columns": [{"id": "col-body-0", "widgets": [BODY], "width": 12}],
+        "path":    None,
+        "style":   _section_style,
+    })
+
+    # ── Footer sections ────────────────────────────────────────────────────────
+    # These replace the footer modules that the clone originally had.
+    # The cloned email's flexAreas are fully overwritten by this PATCH, so we
+    # must re-add the footer ourselves in the correct order.
+
+    # Pre-footer divider (dark navy, matching the reference email)
+    FOOTER_DIV = "staging_footer_divider"
+    widgets[FOOTER_DIV] = {
+        "type": "module",
+        "body": {
+            "path":           "@hubspot/divider",
+            "schema_version": 2,
+            "line_type":      "solid",
+            "color":          {"color": "#23496d", "opacity": 100},
+            "height":         1,
+            "width":          100,
+        },
+    }
+    sections.append({
+        "id":      "section-footer-divider",
+        "columns": [{"id": "col-footer-div-0", "widgets": [FOOTER_DIV], "width": 12}],
+        "path":    None,
+        "style":   _section_style,
+    })
+
+    # Social icons (LFX, Twitter, LinkedIn, Facebook) — same links for all LF emails
+    FOOTER_SOCIAL = "staging_footer_social"
+    widgets[FOOTER_SOCIAL] = {
+        "type": "module",
+        "body": {
+            "path":           "@hubspot/follow_me_email",
+            "schema_version": 2,
+            "color_scheme":   "",
+            "icon_shape":     "",
+            "social": [
+                {
+                    "network": "icon",
+                    "url": (
+                        "https://insights.linuxfoundation.org/"
+                        "?utm_campaign=23551824-Q3-2025-LF-Awareness-LFX-Insights"
+                        "&utm_source=email&utm_medium=LF-Events&utm_content=regular-email"
+                    ),
+                },
+                {"network": "twitter",  "url": "https://twitter.com/linuxfoundation"},
+                {"network": "linkedin", "url": "https://www.linkedin.com/company/the-linux-foundation/"},
+                {"network": "facebook", "url": "https://www.facebook.com/TheLinuxFoundation/"},
+            ],
+        },
+    }
+    sections.append({
+        "id":      "section-footer-social",
+        "columns": [{"id": "col-footer-soc-0", "widgets": [FOOTER_SOCIAL], "width": 12}],
+        "path":    None,
+        "style":   _section_style,
+    })
+
+    # "Sent by" text + address + subscription center
+    FOOTER_BODY = "staging_footer_body"
+    widgets[FOOTER_BODY] = {
+        "type": "module",
+        "body": {
+            "path":           "@hubspot/rich_text",
+            "schema_version": 2,
+            "html": (
+                '<h2 style="font-size:8px;line-height:175%;font-weight:normal;text-align:center;">'
+                '<span style="font-size:12px;color:#000000;">'
+                'This email was sent by: '
+                '<span style="font-weight:bold;">The Linux Foundation Events</span>'
+                '</span></h2>'
+                '<p style="font-size:12px;line-height:150%;text-align:center;color:#666666;margin:4px 0;">'
+                'The Linux Foundation, 2810 N Church St., PMB 57274, '
+                'Wilmington, Delaware 19802-4447, United States'
+                '</p>'
+                '<p style="font-size:12px;line-height:150%;text-align:center;margin:4px 0;">'
+                '<a href="{{ unsubscribe_link }}" '
+                'style="color:#0094ff;text-decoration:underline;">Subscription Center</a>'
+                '</p>'
+            ),
+        },
+    }
+    sections.append({
+        "id":      "section-footer-body",
+        "columns": [{"id": "col-footer-body-0", "widgets": [FOOTER_BODY], "width": 12}],
         "path":    None,
         "style":   _section_style,
     })

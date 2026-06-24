@@ -188,6 +188,35 @@ def scrape_event_full(url: str) -> dict:
             if text and 3 < len(text) < 50 and text not in topics:
                 topics.append(text)
 
+        # ── Sponsors / partners ───────────────────────────────────────────────
+        sponsors = []
+        # Strategy 1: elements whose class names contain sponsor/partner keywords
+        for el in soup.find_all(
+            ["div", "section", "article", "li", "figure"],
+            class_=re.compile(r"sponsor|partner|supporter|exhibitor", re.I),
+        )[:12]:
+            # Prefer alt text of logo images, else visible text
+            img = el.find("img")
+            name = ""
+            if img:
+                name = (img.get("alt") or "").strip()
+            if not name:
+                name = el.get_text(separator=" ", strip=True)
+            # Filter noise: skip generic section headings and very short/long strings
+            if name and 2 < len(name) < 70 and name.lower() not in (
+                "sponsors", "partners", "our sponsors", "our partners",
+                "supported by", "thank you sponsors",
+            ) and name not in sponsors:
+                sponsors.append(name)
+        # Strategy 2: headings like "Sponsors" / "Partners" followed by img elements
+        for h in soup.find_all(["h2", "h3", "h4"], string=re.compile(r"sponsor|partner|exhibitor", re.I)):
+            sibling = h.find_next_sibling()
+            if sibling:
+                for img in sibling.find_all("img")[:6]:
+                    name = (img.get("alt") or "").strip()
+                    if name and 2 < len(name) < 70 and name not in sponsors:
+                        sponsors.append(name)
+
         # ── Registration URL ──────────────────────────────────────────────────
         reg_url = ""
         for a in soup.find_all("a", href=True):
@@ -227,8 +256,9 @@ def scrape_event_full(url: str) -> dict:
             **base,
             "hero_image_url": hero_image_url,
             "logo_url": logo_url,
-            "speakers": speakers[:5],
+            "speakers": speakers[:8],
             "topics": topics[:6],
+            "sponsors": sponsors[:8],
             "registration": reg_details,
         }
 
@@ -239,6 +269,7 @@ def scrape_event_full(url: str) -> dict:
             "logo_url": "",
             "speakers": [],
             "topics": [],
+            "sponsors": [],
             "registration": {},
         }
 
