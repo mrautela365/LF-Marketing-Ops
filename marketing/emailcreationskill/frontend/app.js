@@ -396,17 +396,44 @@ async function approvePlan() {
     const data = await resp.json();
     if (!resp.ok) throw new Error(data.detail || "Request failed");
 
+    // ── Explicit, separate step: apply the send-to list to the cloned email ──
+    // Done as its own API call (not inside clone) so the assignment is visible
+    // and any failure is surfaced instead of leaving send-to silently empty.
+    let sendListNote = "";
+    if (sendListId && data.email_id) {
+      setLoading("step2-status", "Applying send-to list to the email…");
+      try {
+        const slResp = await fetch(`${API}/set-send-list`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            session_id: sessionId,
+            email_id: data.email_id,
+            send_list_id: sendListId,
+          }),
+        });
+        const slData = await slResp.json();
+        if (!slResp.ok) throw new Error(slData.detail || "Send list not applied");
+        sendListNote = `\n\n✅ Send-to list applied (List ID ${sendListId}${slData.list_type ? `, ${slData.list_type}` : ""}).`;
+      } catch (slErr) {
+        // Don't abort the whole flow — the email is cloned; just warn loudly.
+        sendListNote = `\n\n⚠️ Send-to list NOT applied: ${slErr.message}. Open the email and set it manually, or click Retry.`;
+      }
+    } else if (!sendListId) {
+      sendListNote = "\n\n⚠️ No send-to list selected — the email has no recipients yet.";
+    }
+
     clearStatus("step2-status");
 
     if (data.content_applied) {
       // Content was auto-applied — go directly to Done
       showStep(4);
-      renderMessage("done-message", data.message);
+      renderMessage("done-message", data.message + sendListNote);
       if (data.draft_url) showDraftLink("done-draft-link", data.draft_url);
     } else {
       // No auto-content — show optional override step
       showStep(3);
-      renderMessage("clone-message", data.message);
+      renderMessage("clone-message", data.message + sendListNote);
       if (data.draft_url) showDraftLink("clone-draft-link", data.draft_url);
     }
   } catch (err) {
