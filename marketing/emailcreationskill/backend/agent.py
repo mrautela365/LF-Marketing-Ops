@@ -410,7 +410,10 @@ def _sdk_run_turn_cc(messages: list, user_message: str) -> tuple[str, list]:
             raise RuntimeError("Claude CLI timed out after 90s")
 
         if proc.returncode != 0:
-            raise RuntimeError(f"Claude CLI error: {stderr_b.decode('utf-8', errors='replace').strip()}")
+            stderr_text = stderr_b.decode("utf-8", errors="replace").strip()
+            stdout_text = stdout_b.decode("utf-8", errors="replace").strip()
+            detail = stderr_text or stdout_text or f"exit code {proc.returncode}"
+            raise RuntimeError(f"Claude CLI error: {detail}")
         return stdout_b.decode("utf-8", errors="replace").strip()
 
     # Pull session email ID from conversation history (set during clone step)
@@ -552,7 +555,10 @@ def _claude_text(prompt: str, max_tokens: int = 100, timeout: int = 60) -> str:
             raise RuntimeError(f"Claude CLI timed out after {timeout}s generating content")
 
         if proc.returncode != 0:
-            raise RuntimeError(f"Claude CLI: {stderr_b.decode('utf-8', errors='replace').strip()}")
+            stderr_text = stderr_b.decode("utf-8", errors="replace").strip()
+            stdout_text = stdout_b.decode("utf-8", errors="replace").strip()
+            detail = stderr_text or stdout_text or f"exit code {proc.returncode}"
+            raise RuntimeError(f"Claude CLI: {detail}")
         return stdout_b.decode("utf-8", errors="replace").strip()
 
 
@@ -614,7 +620,10 @@ Return ONLY this JSON (no markdown fences, no explanation — raw JSON only):
         raise RuntimeError("Asana MCP fetch timed out after 180s")
 
     if proc.returncode != 0:
-        raise RuntimeError(f"Claude CLI error: {stderr_b.decode('utf-8', errors='replace').strip()}")
+        stderr_text = stderr_b.decode("utf-8", errors="replace").strip()
+        stdout_text = stdout_b.decode("utf-8", errors="replace").strip()
+        detail = stderr_text or stdout_text or f"exit code {proc.returncode}"
+        raise RuntimeError(f"Claude CLI error: {detail}")
 
     raw = stdout_b.decode("utf-8", errors="replace").strip()
 
@@ -632,6 +641,82 @@ Return ONLY this JSON (no markdown fences, no explanation — raw JSON only):
     data.setdefault("email_name", data.get("task_name", ""))
     data.setdefault("subtask_names", [])
     return data
+
+
+import re as _re
+
+# Patterns that Claude should never emit in rich_text sections — the system adds them.
+_STRIP_PATTERNS = [
+    # "Thank You to Our Sponsors!" heading
+    r'<[^>]+>[^<]*[Tt]hank [Yy]ou to [Oo]ur [Ss]ponsors[!]?[^<]*</[^>]+>',
+    # "This email was sent by: ..." footer line
+    r'<[^>]+>[^<]*[Tt]his email was sent by[^<]*</[^>]+>',
+    # "Subscription Center" or "Unsubscribe" footer paragraphs
+    r'<[^>]+>[^<]*[Uu]nsubscribe[^<]*</[^>]+>',
+    r'<[^>]+>[^<]*[Ss]ubscription [Cc]enter[^<]*</[^>]+>',
+    # LF address footer
+    r'<[^>]+>[^<]*2810 N Church[^<]*</[^>]+>',
+    r'<[^>]+>[^<]*Wilmington, Delaware[^<]*</[^>]+>',
+]
+_STRIP_RE = _re.compile("|".join(_STRIP_PATTERNS), _re.IGNORECASE)
+
+
+def _strip_system_content(html: str) -> str:
+    """Remove headings/lines that the system adds automatically (sponsors, footer, sent-by)."""
+    return _STRIP_RE.sub("", html).strip()
+
+
+def _sections_to_html(sections: list, btn_color: str = "#04c0da",
+                      sponsors: list = None) -> str:
+    """Convert structured sections array to flat HTML for the UI iframe preview."""
+    parts = []
+    for sec in sections:
+        stype = sec.get("type", "")
+        if stype == "rich_text":
+            html = _strip_system_content(sec.get("html", "").strip())
+            if html:
+                parts.append(f'<div style="padding:15px 40px 10px;">{html}</div>')
+        elif stype == "button":
+            text  = sec.get("text", "")
+            url   = sec.get("url", "#")
+            color = sec.get("color") or btn_color
+            parts.append(
+                f'<div style="text-align:center;padding:5px 20px;">'
+                f'<table cellpadding="0" cellspacing="0" border="0" style="margin:0 auto;">'
+                f'<tr><td style="background-color:{color};border-radius:8px;'
+                f'padding:12px 24px;text-align:center;">'
+                f'<a href="{url}" style="color:#ffffff;font-weight:bold;font-size:16px;'
+                f'text-decoration:none;font-family:Arial,sans-serif;">{text}</a>'
+                f'</td></tr></table></div>'
+            )
+    if sponsors:
+        _logo  = [s for s in sponsors if isinstance(s, dict) and s.get("logo_url")]
+        _names = [s for s in sponsors if isinstance(s, dict) and not s.get("logo_url") and s.get("name")]
+        if _logo or _names:
+            parts.append(
+                '<div style="padding:10px 40px;">'
+                '<hr style="border:none;border-top:1px solid #eee;margin:10px 0;">'
+                '</div>'
+                '<p style="font-weight:bold;text-align:center;font-size:18px;'
+                'padding:0 40px;margin:0 0 10px;">Thank You to Our Sponsors!</p>'
+            )
+        if _logo:
+            imgs = "".join(
+                f'<td style="padding:8px 16px;text-align:center;">'
+                f'<img src="{s["logo_url"]}" alt="{s.get("name","Sponsor")}" '
+                f'height="60" style="max-width:180px;height:60px;object-fit:contain;"></td>'
+                for s in _logo
+            )
+            parts.append(
+                f'<table cellpadding="0" cellspacing="0" border="0" style="margin:0 auto;">'
+                f'<tr>{imgs}</tr></table>'
+            )
+        if _names:
+            names_html = " &nbsp;|&nbsp; ".join(
+                f'<strong>{s.get("name","")}</strong>' for s in _names
+            )
+            parts.append(f'<p style="text-align:center;font-size:14px;padding:0 40px;">{names_html}</p>')
+    return "\n".join(parts)
 
 
 def _build_email_preview(banner_url: str, body_html: str,
@@ -761,17 +846,19 @@ def generate_email_content(
     logo_img      = event_details.get("logo_url", "")
     speakers      = event_details.get("speakers", [])
     topics        = event_details.get("topics", [])
-    sponsors      = event_details.get("sponsors", [])
+    sponsors      = event_details.get("sponsors", [])[:5]
     reg           = event_details.get("registration") or {}
 
-    stage_name    = stage_info.get("name", "")
-    funnel        = stage_info.get("funnel", "")
-    cta_label     = stage_info.get("cta_label", "Register Now")
-    event_date    = stage_info.get("event_date_str", "") or (event_dates[0] if event_dates else "")
-    from_name     = (brand_history or {}).get("from_name") or "Linux Foundation Events"
-    dates_display = event_dates[0] if event_dates else event_date
+    stage_name         = stage_info.get("name", "")
+    funnel             = stage_info.get("funnel", "")
+    cta_label          = stage_info.get("cta_label", "Register Now")
+    event_date         = stage_info.get("event_date_str", "") or (event_dates[0] if event_dates else "")
+    from_name          = (brand_history or {}).get("from_name") or "Linux Foundation Events"
+    dates_display      = event_dates[0] if event_dates else event_date
+    marketing_strategy = stage_info.get("marketing_strategy", "")
+    content_ideas      = stage_info.get("content_ideas", [])
 
-    # Upload hero / logo images to HubSpot CDN for reliable rendering
+    # Upload hero / logo / sponsor images to HubSpot CDN for reliable rendering
     from hubspot_tools import upload_image_to_hubspot as _upload_img
     _log.info(f"[GEN_EMAIL] hero={hero_img!r} logo={logo_img!r} source_ref={source_email_id!r}")
     if hero_img:
@@ -779,6 +866,18 @@ def generate_email_content(
     if logo_img:
         logo_img = _upload_img(logo_img) or logo_img
     banner_url = hero_img
+
+    # Upload sponsor logos to HubSpot CDN so they render reliably in email clients
+    uploaded_sponsors = []
+    for sp in sponsors:
+        if isinstance(sp, dict):
+            raw_logo = sp.get("logo_url", "")
+            cdn_logo = (_upload_img(raw_logo) or raw_logo) if raw_logo else ""
+            uploaded_sponsors.append({"name": sp.get("name", ""), "logo_url": cdn_logo})
+        else:
+            uploaded_sponsors.append({"name": str(sp), "logo_url": ""})
+    sponsors = uploaded_sponsors
+    _log.info(f"[GEN_EMAIL] sponsors uploaded: {len([s for s in sponsors if s['logo_url']])}/{len(sponsors)}")
 
     # Build supplementary context lines
     reg_lines = []
@@ -791,7 +890,15 @@ def generate_email_content(
     reg_info = "\n".join(reg_lines)
 
     speakers_str = "\n".join(f"  • {s}" for s in speakers) if speakers else "  (to be announced)"
-    sponsors_str = "\n".join(f"  • {s}" for s in sponsors) if sponsors else "  (not listed on event page)"
+
+    def _sponsor_line(s) -> str:
+        if isinstance(s, dict):
+            name = s.get("name", "")
+            logo = s.get("logo_url", "")
+            return f"  • {name}" + (f"  [logo: {logo}]" if logo else "")
+        return f"  • {s}"
+
+    sponsors_str = "\n".join(_sponsor_line(s) for s in sponsors) if sponsors else "  (not listed on event page)"
     topics_str   = ", ".join(topics[:4]) if topics else "Open Source, Cloud Native, Linux"
 
     # HubSpot personalization tokens
@@ -906,23 +1013,36 @@ For each component in the COMPONENT LAYOUT above, output the matching HTML:
   — Keep body text font-size and color identical to the reference.
 
 ▸ BUTTON
-  — Render every button as a centered <table> with background-color={ref_btn_color}
-    exactly as in the reference. No div-based buttons.
-  — Button text should match the stage CTA: "{cta_label}"
-  — If reference has multiple buttons (one per section), replicate same count.
+  — For every CTA, output a SEPARATE button section object:
+    {{"type": "button", "text": "REGISTER NOW >>", "url": "https://...", "color": "{ref_btn_color}"}}
+  — Do NOT embed button HTML inside a rich_text section.
+  — Button text must match the stage CTA: "{cta_label}"
+  — If reference has multiple CTAs (one per section), output the same number of button sections.
 
 ▸ DIVIDER
-  — Render as <hr style="border:none;border-top:1px solid #000000;margin:20px 0;">
-  — Place a divider between every major content section, exactly as in reference.
+  — Between major content sections, end the rich_text html with:
+    <hr style="border:none;border-top:1px solid #000000;margin:20px 0;">
 
 ▸ IMAGE ROW (sponsor logos)
-  — If the reference has a sponsor logo row, keep it.
-  — If sponsors are known: show their names in a 3-column table as bold text
-    (logos won't be available for the new event yet).
-  — If no sponsors: show a placeholder "Sponsors to be announced" centered text.
+  — The system adds sponsor images automatically as native HubSpot image modules.
+  — Do NOT include sponsor images or logos in any section.
+  — Do NOT include sponsor names in the HTML sections either — the system handles them.
+  — Do NOT include a "Thank You to Our Sponsors!" heading or any sponsor section header —
+    the system injects this heading automatically before the sponsor logos.
 
-▸ SOCIAL ICONS / FOOTER
-  — The system injects the footer automatically. Skip this in your output.
+▸ STRICT SECTION ORDER — output section objects in this exact sequence:
+  1. Greeting / intro paragraph  (rich_text)
+  2. Event highlights / main body  (rich_text)
+  3. Speakers section if speakers available  (rich_text)
+  4. Topics / tracks if available  (rich_text)
+  5. CTA button  (button section)
+  6. Additional CTAs if reference had multiple  (button sections)
+  Sponsors are added by the system after your last section — do NOT output them.
+
+▸ SOCIAL ICONS / FOOTER / BANNER
+  — The system injects banner, footer, social icons automatically. Skip in your output.
+  — Do NOT include: "This email was sent by", address, "Subscription Center", "Unsubscribe",
+    "{{ unsubscribe_link }}", or any footer-related text — the system adds these.
 
 ═══ STAGE & CONTENT RULES ═══════════════════════════════════════════════════════
 Stage: {stage_name} ({funnel})
@@ -932,43 +1052,52 @@ Primary CTA: "{cta_label}"
 - Registration stage → focus on early bird pricing, date, venue.
 - Announcement stage → focus on event overview, why attend, save the date.
 
+{("MARKETING STRATEGY FOR THIS STAGE (use as messaging direction):\n  " + marketing_strategy) if marketing_strategy else ""}
+
+{("CONTENT IDEAS FOR THIS STAGE (draw from these for section headlines & copy):\n" + chr(10).join(f"  • {idea}" for idea in content_ideas[:6])) if content_ideas else ""}
+
+DESIGN RULE: Copy the EXACT design, layout, and component structure from the reference email
+above. Only the copy/messaging/content changes — never the visual structure or styling.
+
 Speaker list: include ALL confirmed speakers (never say "and more").
-Sponsor list: include ALL sponsors (never say "and more").
+Sponsor list: include ALL sponsors (never say "and more" — but do NOT render them in sections).
 
 HubSpot personalization tokens (exact syntax — spaces and dots matter):
   First name : {hs_firstname}
   Company    : {hs_company}
 
 ═══ OUTPUT FORMAT ════════════════════════════════════════════════════════════════
-- Output ONLY the body content wrapped in one outer <div>
-- The system automatically adds: hero banner image, social icons footer, address
-- Do NOT include: DOCTYPE, html, head, body tags, outer wrapper tables,
-  the banner image section, social icons, or unsubscribe/address footer
-- Outer wrapper to emit:
-  <div style="padding:36px 40px;font-family:Arial,sans-serif;color:#333333;max-width:600px;margin:0 auto;">
-    …your sections here…
-  </div>
-- Inline CSS only — no <style> tags.
-- Bullet lists: <ul>/<li> tags — never the • character.
-- CTA buttons: centered <table cellpadding="0" cellspacing="0"> with a <td> containing <a>."""
+- Output sections in the JSON sections array — NOT as a single HTML block.
+- Each rich_text "html" value: inline HTML paragraphs/lists only. No outer <div> wrapper.
+  Use inline CSS (font-size, line-height, color, text-align, etc.) — no <style> tags.
+- Each CTA button: a separate button section object — NOT embedded HTML in rich_text.
+- Do NOT include: <html>, <head>, <body>, outer <div> wrapper, banner image,
+  sponsor images/names, social icons, footer, or unsubscribe content.
+- Bullet lists: <ul>/<li> tags — never the • character."""
     else:
         task_instructions = f"""\
 ━━━ YOUR TASK ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Replace every placeholder ([Event Name], [City], [Dates], [LINK], etc.) with
-the real event details above and render as a production-ready HTML email body.
+the real event details above and produce an ordered sections array.
 
-1. Include ALL speakers listed (with names — do not say "and more").
-2. Include ALL sponsors listed (if any).
-3. Stage: {stage_name} ({funnel}) — CTA: "{cta_label}"
+1. Stage: {stage_name} ({funnel}) — CTA: "{cta_label}"
+{("   Marketing strategy: " + marketing_strategy) if marketing_strategy else ""}
+{("   Content ideas (draw from these for section copy):" + chr(10) + chr(10).join("   • " + idea for idea in content_ideas[:5])) if content_ideas else ""}
+
+2. Include ALL speakers listed (with names — do not say "and more").
+3. Do NOT include sponsor images/names — the system adds them as native modules.
 
 4. HubSpot personalization tokens (EXACT syntax):
    - First name : {hs_firstname}
    - Company    : {hs_company}
 
-5. Output ONLY the body <div>...</div> — system adds banner + footer.
-   No DOCTYPE/html/head/body. No outer wrappers. No footer/unsubscribe.
-   Inline CSS only. Lists as <ul>/<li>. CTA as a centered <table>."""
+5. Output sections array — NOT a single HTML block:
+   - rich_text sections: inline HTML only (no outer div wrapper, no style tags)
+   - button sections: {{"type":"button","text":"...","url":"...","color":"#04c0da"}}
+   - Do NOT include banner, sponsor images, footer, or unsubscribe content.
+   Bullet lists as <ul>/<li>. Inline CSS only."""
 
+    _stage_num_label = f"Stage {stage_info.get('stage_number')} — " if stage_info.get("stage_number") else ""
     prompt = f"""You are a senior email marketer for Linux Foundation open source events.
 
 {ref_block or template_block}
@@ -978,7 +1107,7 @@ Date        : {dates_display}
 Location    : {location}
 Event URL   : {url}
 Description : {description}
-Stage       : {stage_name} ({funnel})
+Stage       : {_stage_num_label}{stage_name} ({funnel})
 
 Confirmed Speakers:
 {speakers_str}
@@ -992,11 +1121,22 @@ Topics      : {topics_str}
 {task_instructions}
 
 Return ONLY a JSON object — no markdown fences, no text before or after:
-{{"subject": "...", "preview_text": "...", "html": "..."}}
+{{"subject": "...", "preview_text": "...", "sections": [...]}}
 
 subject: email subject line (max 60 chars, matches {stage_name} urgency)
 preview_text: preheader text (max 90 chars)
-html: ONLY the <div>...</div> body content — NO outer HTML structure
+sections: ordered array of content blocks. The system automatically adds the hero
+  banner image, sponsor images/names, social icons footer, and unsubscribe footer —
+  do NOT include those.
+
+  Each block must be one of:
+    Rich text: {{"type": "rich_text", "html": "<p style='...'>...</p>"}}
+    CTA button: {{"type": "button", "text": "REGISTER NOW >>", "url": "https://...", "color": "#46b6b3"}}
+
+  CRITICAL:
+    - Do NOT embed buttons as HTML in rich_text blocks — separate button objects only.
+    - Do NOT include sponsor images, sponsor names, banner, footer, or social icons.
+    - rich_text "html" must NOT have an outer <div> wrapper — just the inner content.
 {("" if not change_request else f"{chr(10)}━━━ CHANGE REQUEST ━━━{chr(10)}{change_request}{chr(10)}")}"""
 
     raw = _claude_text(prompt, max_tokens=6000, timeout=240)
@@ -1017,16 +1157,22 @@ html: ONLY the <div>...</div> body content — NO outer HTML structure
             if depth == 0 and start != -1:
                 try:
                     data = json.loads(raw[start:i + 1])
-                    body_html    = str(data.get("html", ""))
+                    sections_list = data.get("sections") or []
+                    # Backwards compat: if Claude returned "html" instead of "sections"
+                    if not sections_list and data.get("html"):
+                        sections_list = [{"type": "rich_text", "html": str(data["html"])}]
+                    body_html    = _sections_to_html(sections_list, ref_btn_color, sponsors)
                     preview_html = _build_email_preview(
                         banner_url, body_html, url, event_name
                     )
                     return {
                         "subject":      str(data.get("subject", "")),
                         "preview_text": str(data.get("preview_text", "")),
-                        "html":         preview_html,  # full HTML for UI iframe
-                        "body_html":    body_html,     # body-only for HubSpot injection
-                        "banner_url":   banner_url,    # uploaded HubSpot CDN URL (or "")
+                        "html":         preview_html,   # full HTML for UI iframe
+                        "body_html":    body_html,      # flat HTML fallback
+                        "sections":     sections_list,  # structured sections for native modules
+                        "sponsors":     sponsors,       # CDN-uploaded sponsors
+                        "banner_url":   banner_url,     # uploaded HubSpot CDN URL (or "")
                     }
                 except json.JSONDecodeError:
                     break
@@ -1302,17 +1448,23 @@ def clone_turn(session, subject=None, preview_text=None, send_list_id=None) -> t
     if "error" in update_result:
         _log.warning(f"Settings update partial error: {update_result['error']}")
 
-    # Step 3: Auto-apply generated HTML content if available from plan phase
-    content_applied = False
-    # Prefer body_html (body-only, no outer tables) over generated_html (full preview)
-    body_html  = session.meta.get("body_html") or session.meta.get("generated_html", "")
-    banner_url = session.meta.get("banner_url", "")
-    event_url  = (session.meta.get("url_data") or {}).get("url", "")
-    if body_html:
+    # Step 3: Auto-apply generated content if available from plan phase.
+    # Prefer structured sections (native HubSpot modules) over flat body_html.
+    content_applied    = False
+    content_sections   = session.meta.get("sections") or []
+    sponsors_list      = session.meta.get("sponsors") or []
+    body_html          = session.meta.get("body_html") or session.meta.get("generated_html", "")
+    banner_url         = session.meta.get("banner_url", "")
+    event_url          = (session.meta.get("url_data") or {}).get("url", "")
+    if content_sections or body_html:
         try:
             content_result = hubspot_tools.update_email_content(
-                new_email_id, body_html,
-                banner_url=banner_url, event_url=event_url,
+                new_email_id,
+                html_content=body_html if not content_sections else "",
+                banner_url=banner_url,
+                event_url=event_url,
+                content_sections=content_sections or None,
+                sponsors=sponsors_list or None,
             )
             if "error" not in content_result:
                 content_applied = True

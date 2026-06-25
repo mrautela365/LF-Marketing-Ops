@@ -272,10 +272,16 @@ def get_brand_emails(short_brand_name: str, brand_name: str,
                 seen.add(eid)
                 all_emails.append(e)
 
-    # ── Tier 1: brand short code ──────────────────────────────────────────────
-    _fetch_and_add(short_brand_name)
+    # ── Tier 1: brand short code — wrapped in " - " to match naming convention ──
+    # "26Q2 - AIF - Event" → search "- AIF -" matches; "LFEducation_..." does NOT.
+    if short_brand_name:
+        _fetch_and_add(f"- {short_brand_name} -")
+        _fetch_and_add(f"- {short_brand_name} ")  # end-of-segment: "- LFE Summit"
 
-    # ── Tier 2: event short names — token-anchored matching ───────────────────
+    # ── Tier 2: event short names — smart anchor selection ───────────────────
+    # Skip generic/short first words (LF, the, etc.) so "LF Energy Summit EU"
+    # uses anchor="Energy" not anchor="LF" (which is on every LF email).
+    _ANCHOR_SKIP = {"lf", "the", "a", "an", "of", "for", "and", "or"}
     for esn in (event_short_names or []):
         if not esn:
             continue
@@ -283,8 +289,15 @@ def get_brand_emails(short_brand_name: str, brand_name: str,
         if len(parts) == 1:
             _fetch_and_add(esn)
         else:
-            # "MCP Toronto" → anchor="MCP", rest=["Toronto"]
-            _fetch_tokenized(parts[0], parts[1:])
+            # Find first meaningful anchor word (not in skip list, length > 2)
+            anchor_idx = 0
+            for i, p in enumerate(parts):
+                if p.lower() not in _ANCHOR_SKIP and len(p) > 2:
+                    anchor_idx = i
+                    break
+            anchor = parts[anchor_idx]
+            rest   = [p for i, p in enumerate(parts) if i != anchor_idx]
+            _fetch_tokenized(anchor, rest)
 
     # ── Tier 3: URL slug tokens ───────────────────────────────────────────────
     # mcp-dev-summit-toronto → ["mcp","dev","toronto"]
@@ -436,34 +449,42 @@ def set_email_send_list(
     """
     Set the recipient + suppression lists on a HubSpot marketing email.
 
-    Root cause of the common failure: HubSpot silently rejects the entire `to`
-    object when a SNAPSHOT list ID appears in `contactIlsLists` (which expects
-    DYNAMIC/ILS lists only). Fix: look up the processing type and use only the
-    correct sub-field — never mix types in the same `to` object.
+    Sends a COMPLETE `to` object so HubSpot replaces all sub-fields:
+      - contactIds.include cleared  → removes any individual contacts from the clone source
+      - contactIlsLists.include     → DYNAMIC list (audience-built list)
+      - contactLists.include        → SNAPSHOT/UNKNOWN list
+      - suppress_list_ids go into .exclude on both sub-fields (HubSpot ignores unknown IDs)
+
+    Why complete object: HubSpot's PATCH keeps sub-fields you omit, so a partial
+    `to` patch leaves stale contactIds / stale list IDs from the clone source.
     """
     import logging as _logging
     _log = _logging.getLogger("email-staging")
 
-    suppression_list_ids = [str(s) for s in (suppression_list_ids or []) if s]
+    suppression_ids_str = [str(s) for s in (suppression_list_ids or []) if s]
+    suppression_ids_int = [int(s) for s in suppression_ids_str if s.isdigit()]
 
     list_type = _get_list_processing_type(send_list_id)
     _log.info(f"[HS-LISTS] set_email_send_list email={email_id} list={send_list_id} type={list_type}")
 
-    if list_type == "DYNAMIC":
-        to_payload = {
-            "contactIlsLists": {
-                "include": [str(send_list_id)],
-                "exclude": suppression_list_ids,
-            }
-        }
-    else:
-        # SNAPSHOT or UNKNOWN — safe default; contactLists accepts static list IDs
-        to_payload = {
-            "contactLists": {
-                "include": [int(send_list_id)],
-                "exclude": [int(s) for s in suppression_list_ids if s.isdigit()],
-            }
-        }
+    is_dynamic = list_type == "DYNAMIC"
+
+    # Always send a complete `to` object so clone-source contactIds / stale lists
+    # are fully replaced rather than left as-is by HubSpot's partial-patch behavior.
+    to_payload = {
+        "contactIds": {
+            "include": [],          # clear any individual contacts from the clone source
+            "exclude": [],
+        },
+        "contactIlsLists": {
+            "include": [str(send_list_id)] if is_dynamic else [],
+            "exclude": suppression_ids_str,
+        },
+        "contactLists": {
+            "include": [int(send_list_id)] if not is_dynamic else [],
+            "exclude": suppression_ids_int,
+        },
+    }
 
     _log.info(f"[HS-LISTS] PATCHing to={to_payload}")
     result = _patch(f"/marketing/v3/emails/{email_id}", {"to": to_payload})
@@ -478,7 +499,8 @@ def set_email_send_list(
         _log.info(f"[HS-LISTS] ✓ send list {send_list_id} applied (type={list_type})")
     else:
         _log.warning(
-            f"[HS-LISTS] ⚠ send_list_id={send_list_id!r} not in PATCH response to={applied_to}"
+            f"[HS-LISTS] ⚠ send_list_id={send_list_id!r} not in PATCH response "
+            f"to={applied_to} — full response keys: {list(result.keys())}"
         )
 
     return {
@@ -647,9 +669,11 @@ def get_email_content_text(email_id: str) -> dict:
 
 def update_email_content(
     email_id: str,
-    html_content: str,
+    html_content: str = "",
     banner_url: str = "",
     event_url: str = "",
+    content_sections: list = None,
+    sponsors: list = None,
 ) -> dict:
     """
     Replace email body using HubSpot's DnD widget/flexArea structure.
@@ -723,39 +747,200 @@ def update_email_content(
         })
         log.info(f"[CONTENT] banner widget added: {banner_url!r}")
 
-    # Body rich-text
-    BODY = "staging_body"
-    widgets[BODY] = {
-        "type": "module",
-        "body": {
-            "path":           "@hubspot/rich_text",
-            "schema_version": 2,
-            "html":           inner_html,
-        },
-    }
-    sections.append({
-        "id":      "section-staging-body",
-        "columns": [{"id": "col-body-0", "widgets": [BODY], "width": 12}],
-        "path":    None,
-        "style":   _section_style,
-    })
+    # Body content — structured sections (native modules) or fallback rich_text
+    if content_sections:
+        for _idx, _sec in enumerate(content_sections):
+            _stype = _sec.get("type", "")
+            if _stype == "rich_text":
+                _wid = f"staging_sec_{_idx}"
+                widgets[_wid] = {
+                    "type": "module",
+                    "body": {
+                        "path":      "@hubspot/rich_text",
+                        "module_id": 1155639,
+                        "html":      _sec.get("html", ""),
+                        "hs_enable_module_padding": True,
+                        "hs_wrapper_css": {
+                            "padding-bottom": "10px",
+                            "padding-left":   "20px",
+                            "padding-right":  "20px",
+                            "padding-top":    "15px",
+                        },
+                    },
+                }
+                sections.append({
+                    "id":      f"section-sec-{_idx}",
+                    "columns": [{"id": f"col-sec-{_idx}-0", "widgets": [_wid], "width": 12}],
+                    "path":    None,
+                    "style":   _section_style,
+                })
+            elif _stype == "button":
+                _btn_color = _sec.get("color") or "#04c0da"
+                _wid = f"staging_btn_{_idx}"
+                widgets[_wid] = {
+                    "type": "module",
+                    "body": {
+                        "module_id":      1976948,
+                        "background_color": _btn_color,
+                        "corner_radius":  8,
+                        "destination":    _sec.get("url", "#"),
+                        "font":           "Arial, sans-serif",
+                        "font_color":     "#ffffff",
+                        "font_size":      16,
+                        "font_style": {
+                            "color":  "#ffffff",
+                            "font":   "Arial, sans-serif",
+                            "size":   {"units": "px", "value": 16},
+                            "styles": {"bold": True, "font-weight": "bold",
+                                       "italic": False, "underline": False},
+                        },
+                        "text": _sec.get("text", "Register Now"),
+                        "hs_enable_module_padding": True,
+                        "hs_wrapper_css": {
+                            "padding-bottom": "5px",
+                            "padding-left":   "20px",
+                            "padding-right":  "20px",
+                            "padding-top":    "5px",
+                        },
+                    },
+                }
+                sections.append({
+                    "id":      f"section-btn-{_idx}",
+                    "columns": [{"id": f"col-btn-{_idx}-0", "widgets": [_wid], "width": 12}],
+                    "path":    None,
+                    "style":   _section_style,
+                })
+
+        # Sponsors as native @hubspot/image modules (visible in DnD editor)
+        if sponsors:
+            _SPON_HDR = "staging_sponsor_header"
+            widgets[_SPON_HDR] = {
+                "type": "module",
+                "body": {
+                    "path":      "@hubspot/rich_text",
+                    "module_id": 1155639,
+                    "html":      '<p style="font-weight:bold;text-align:center;font-size:18px;line-height:175%;">Thank You to Our Sponsors!</p>',
+                    "hs_enable_module_padding": True,
+                    "hs_wrapper_css": {
+                        "padding-bottom": "10px",
+                        "padding-left":   "20px",
+                        "padding-right":  "20px",
+                        "padding-top":    "10px",
+                    },
+                },
+            }
+            sections.append({
+                "id":      "section-sponsor-header",
+                "columns": [{"id": "col-sph-0", "widgets": [_SPON_HDR], "width": 12}],
+                "path":    None,
+                "style":   _section_style,
+            })
+
+            _logo_sp = [s for s in sponsors if isinstance(s, dict) and s.get("logo_url")]
+            _name_sp = [s for s in sponsors if isinstance(s, dict) and not s.get("logo_url") and s.get("name")]
+
+            if _logo_sp:
+                _n     = len(_logo_sp)
+                _col_w = max(2, 12 // _n)
+                _cols  = []
+                for _j, _sp in enumerate(_logo_sp):
+                    _img_wid = f"staging_sponsor_img_{_j}"
+                    widgets[_img_wid] = {
+                        "type": "module",
+                        "body": {
+                            "module_id": 1367093,
+                            "img": {
+                                "alt":     _sp.get("name", "Sponsor"),
+                                "height":  60,
+                                "loading": "disabled",
+                                "src":     _sp["logo_url"],
+                                "width":   180,
+                            },
+                            "link": "",
+                            "hs_enable_module_padding": True,
+                            "hs_wrapper_css": {
+                                "padding-bottom": "20px",
+                                "padding-left":   "20px",
+                                "padding-right":  "20px",
+                                "padding-top":    "20px",
+                            },
+                        },
+                    }
+                    _cols.append({"id": f"col-sp-{_j}", "widgets": [_img_wid], "width": _col_w})
+                sections.append({
+                    "id":      "section-sponsor-row",
+                    "columns": _cols,
+                    "path":    None,
+                    "style":   _section_style,
+                })
+
+            if _name_sp:
+                _names_html = " &nbsp;|&nbsp; ".join(
+                    f'<strong>{s.get("name", "")}</strong>' for s in _name_sp
+                )
+                _SPON_NAMES = "staging_sponsor_names"
+                widgets[_SPON_NAMES] = {
+                    "type": "module",
+                    "body": {
+                        "path":      "@hubspot/rich_text",
+                        "module_id": 1155639,
+                        "html":      f'<p style="text-align:center;font-size:14px;">{_names_html}</p>',
+                        "hs_enable_module_padding": True,
+                        "hs_wrapper_css": {
+                            "padding-bottom": "10px",
+                            "padding-left":   "20px",
+                            "padding-right":  "20px",
+                            "padding-top":    "10px",
+                        },
+                    },
+                }
+                sections.append({
+                    "id":      "section-sponsor-names",
+                    "columns": [{"id": "col-spn-0", "widgets": [_SPON_NAMES], "width": 12}],
+                    "path":    None,
+                    "style":   _section_style,
+                })
+    else:
+        # Fallback: monolithic rich_text (used when no structured sections available)
+        BODY = "staging_body"
+        widgets[BODY] = {
+            "type": "module",
+            "body": {
+                "path":           "@hubspot/rich_text",
+                "schema_version": 2,
+                "html":           inner_html,
+            },
+        }
+        sections.append({
+            "id":      "section-staging-body",
+            "columns": [{"id": "col-body-0", "widgets": [BODY], "width": 12}],
+            "path":    None,
+            "style":   _section_style,
+        })
 
     # ── Footer sections ────────────────────────────────────────────────────────
-    # These replace the footer modules that the clone originally had.
-    # The cloned email's flexAreas are fully overwritten by this PATCH, so we
-    # must re-add the footer ourselves in the correct order.
+    # Mirrors the exact widget structure used in real published LF emails.
+    # Order: divider → "FOLLOW US" heading → social icons → "sent by" text → HS footer
 
-    # Pre-footer divider (dark navy, matching the reference email)
+    # Pre-footer divider — must use @hubspot/email_divider (module_id 2191110),
+    # NOT @hubspot/divider. Different module; HubSpot won't render the wrong one.
     FOOTER_DIV = "staging_footer_divider"
     widgets[FOOTER_DIV] = {
         "type": "module",
         "body": {
-            "path":           "@hubspot/divider",
-            "schema_version": 2,
-            "line_type":      "solid",
-            "color":          {"color": "#23496d", "opacity": 100},
-            "height":         1,
-            "width":          100,
+            "path":      "@hubspot/email_divider",
+            "module_id": 2191110,
+            "line_type": "solid",
+            "color":     {"color": "#000000", "opacity": 100},
+            "height":    1,
+            "width":     100,
+            "hs_enable_module_padding": True,
+            "hs_wrapper_css": {
+                "padding-bottom": "10px",
+                "padding-left":   "20px",
+                "padding-right":  "20px",
+                "padding-top":    "5px",
+            },
         },
     }
     sections.append({
@@ -765,18 +950,54 @@ def update_email_content(
         "style":   _section_style,
     })
 
-    # Social icons (LFX, Twitter, LinkedIn, Facebook) — same links for all LF emails
+    # "FOLLOW US" heading above social icons
+    FOOTER_FOLLOW_HDR = "staging_footer_follow_header"
+    widgets[FOOTER_FOLLOW_HDR] = {
+        "type": "module",
+        "body": {
+            "path":      "@hubspot/rich_text",
+            "module_id": 1155639,
+            "html":      '<p style="font-weight: bold; text-align: center;">FOLLOW US</p>',
+            "hs_enable_module_padding": False,
+            "hs_wrapper_css": {},
+        },
+    }
+    sections.append({
+        "id":      "section-footer-follow-header",
+        "columns": [{"id": "col-footer-fhdr-0", "widgets": [FOOTER_FOLLOW_HDR], "width": 12}],
+        "path":    None,
+        "style":   _section_style,
+    })
+
+    # Social icons — module_id 2763545 is required; without it HubSpot cannot
+    # resolve the follow_me_email module and renders nothing.
+    # color_scheme and icon_shape must be non-empty strings, not "".
+    # LFX icon entry requires network_image dict with CDN-hosted src.
     FOOTER_SOCIAL = "staging_footer_social"
     widgets[FOOTER_SOCIAL] = {
         "type": "module",
         "body": {
-            "path":           "@hubspot/follow_me_email",
-            "schema_version": 2,
-            "color_scheme":   "",
-            "icon_shape":     "",
+            "path":         "@hubspot/follow_me_email",
+            "module_id":    2763545,
+            "color_scheme": "black",
+            "icon_shape":   "circle",
+            "font_style": {
+                "color":  "#000000",
+                "font":   "Helvetica,Arial,sans-serif",
+                "size":   {"units": "px", "value": 14},
+                "styles": {"bold": True, "italic": False, "underline": False},
+            },
+            "hs_enable_module_padding": False,
+            "hs_wrapper_css": {},
             "social": [
                 {
                     "network": "icon",
+                    "network_image": {
+                        "alt":    "LFX Insights",
+                        "height": 675,
+                        "src":    "https://8112310.fs1.hubspotusercontent-na1.net/hubfs/8112310/LFX%20Logo%20-%20white%20-%203-1.png",
+                        "width":  1536,
+                    },
                     "url": (
                         "https://insights.linuxfoundation.org/"
                         "?utm_campaign=23551824-Q3-2025-LF-Awareness-LFX-Insights"
@@ -785,6 +1006,7 @@ def update_email_content(
                 },
                 {"network": "twitter",  "url": "https://twitter.com/linuxfoundation"},
                 {"network": "linkedin", "url": "https://www.linkedin.com/company/the-linux-foundation/"},
+                {"network": "youtube",  "url": "https://www.youtube.com/user/TheLinuxFoundation"},
                 {"network": "facebook", "url": "https://www.facebook.com/TheLinuxFoundation/"},
             ],
         },
@@ -796,33 +1018,64 @@ def update_email_content(
         "style":   _section_style,
     })
 
-    # "Sent by" text + address + subscription center
+    # "Sent by" attribution text
     FOOTER_BODY = "staging_footer_body"
     widgets[FOOTER_BODY] = {
         "type": "module",
         "body": {
-            "path":           "@hubspot/rich_text",
-            "schema_version": 2,
+            "path":      "@hubspot/rich_text",
+            "module_id": 1155639,
             "html": (
                 '<h2 style="font-size:8px;line-height:175%;font-weight:normal;text-align:center;">'
                 '<span style="font-size:12px;color:#000000;">'
                 'This email was sent by: '
-                '<span style="font-weight:bold;">The Linux Foundation Events</span>'
+                '<span style="font-weight:normal;">The Linux Foundation Events</span>'
                 '</span></h2>'
-                '<p style="font-size:12px;line-height:150%;text-align:center;color:#666666;margin:4px 0;">'
-                'The Linux Foundation, 2810 N Church St., PMB 57274, '
-                'Wilmington, Delaware 19802-4447, United States'
-                '</p>'
-                '<p style="font-size:12px;line-height:150%;text-align:center;margin:4px 0;">'
-                '<a href="{{ unsubscribe_link }}" '
-                'style="color:#0094ff;text-decoration:underline;">Subscription Center</a>'
-                '</p>'
             ),
+            "hs_enable_module_padding": True,
+            "hs_wrapper_css": {
+                "padding-bottom": "0px",
+                "padding-left":   "20px",
+                "padding-right":  "20px",
+                "padding-top":    "0px",
+            },
         },
     }
     sections.append({
         "id":      "section-footer-body",
         "columns": [{"id": "col-footer-body-0", "widgets": [FOOTER_BODY], "width": 12}],
+        "path":    None,
+        "style":   _section_style,
+    })
+
+    # Native HubSpot email footer module — module_id 2869621 handles the
+    # unsubscribe link, physical address, and CAN-SPAM compliance automatically.
+    FOOTER_HS = "staging_footer_hs"
+    widgets[FOOTER_HS] = {
+        "type": "module",
+        "body": {
+            "path":      "@hubspot/email_footer",
+            "module_id": 2869621,
+            "font": {
+                "color":  "#000000",
+                "font":   "Arial, sans-serif",
+                "size":   {"units": "px", "value": 12},
+                "styles": {"bold": False, "italic": False, "underline": False},
+            },
+            "link_font": {
+                "color":    "#0094ff",
+                "font":     "Arial, sans-serif",
+                "font_set": "DEFAULT",
+                "size":     {"units": "px", "value": 12},
+                "styles":   {"bold": False, "italic": False, "underline": True},
+            },
+            "hs_enable_module_padding": False,
+            "hs_wrapper_css": {},
+        },
+    }
+    sections.append({
+        "id":      "section-footer-hs",
+        "columns": [{"id": "col-footer-hs-0", "widgets": [FOOTER_HS], "width": 12}],
         "path":    None,
         "style":   _section_style,
     })
@@ -849,8 +1102,11 @@ def update_email_content(
         new_content["styleSettings"] = style_settings
 
     _patch(f"/marketing/v3/emails/{email_id}", {"content": new_content})
-    method = "image+rich_text" if banner_url else "rich_text_only"
-    log.info(f"[CONTENT] patched OK method={method!r} sections={len(sections)}")
+    if content_sections:
+        method = f"structured({len(content_sections)} sections, {len(sponsors or [])} sponsors)"
+    else:
+        method = "image+rich_text" if banner_url else "rich_text_only"
+    log.info(f"[CONTENT] patched OK method={method!r} widgets={len(sections)}")
     return {"success": True, "email_id": email_id, "method": method}
 
 

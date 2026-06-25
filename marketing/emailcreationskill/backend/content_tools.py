@@ -189,33 +189,64 @@ def scrape_event_full(url: str) -> dict:
                 topics.append(text)
 
         # ── Sponsors / partners ───────────────────────────────────────────────
-        sponsors = []
+        from urllib.parse import urljoin
+        sponsors = []   # list of {"name": str, "logo_url": str}
+        _sponsor_names_seen: set = set()
+        _NOISE = {"sponsors", "partners", "our sponsors", "our partners",
+                  "supported by", "thank you sponsors", "gold", "silver",
+                  "platinum", "bronze", "media partner", "community partner"}
+
+        def _abs(src: str) -> str:
+            """Make a logo src absolute using the event page URL as base."""
+            if not src or src.startswith("data:"):
+                return ""
+            return urljoin(url, src)
+
+        def _add_sponsor(name: str, logo_url: str) -> None:
+            name = name.strip()
+            if not name or len(name) < 3 or len(name) > 80:
+                return
+            if name.lower() in _NOISE:
+                return
+            if name in _sponsor_names_seen:
+                # Update logo_url if we now have one and didn't before
+                for s in sponsors:
+                    if s["name"] == name and not s["logo_url"] and logo_url:
+                        s["logo_url"] = logo_url
+                return
+            _sponsor_names_seen.add(name)
+            sponsors.append({"name": name, "logo_url": logo_url})
+
         # Strategy 1: elements whose class names contain sponsor/partner keywords
         for el in soup.find_all(
-            ["div", "section", "article", "li", "figure"],
+            ["div", "section", "article", "li", "figure", "a"],
             class_=re.compile(r"sponsor|partner|supporter|exhibitor", re.I),
-        )[:12]:
-            # Prefer alt text of logo images, else visible text
+        )[:20]:
             img = el.find("img")
-            name = ""
-            if img:
-                name = (img.get("alt") or "").strip()
+            logo_url = _abs(img.get("src", "") or img.get("data-src", "")) if img else ""
+            name = (img.get("alt") or "").strip() if img else ""
             if not name:
-                name = el.get_text(separator=" ", strip=True)
-            # Filter noise: skip generic section headings and very short/long strings
-            if name and 2 < len(name) < 70 and name.lower() not in (
-                "sponsors", "partners", "our sponsors", "our partners",
-                "supported by", "thank you sponsors",
-            ) and name not in sponsors:
-                sponsors.append(name)
+                name = el.get_text(separator=" ", strip=True)[:80]
+            _add_sponsor(name, logo_url)
+
         # Strategy 2: headings like "Sponsors" / "Partners" followed by img elements
         for h in soup.find_all(["h2", "h3", "h4"], string=re.compile(r"sponsor|partner|exhibitor", re.I)):
             sibling = h.find_next_sibling()
             if sibling:
-                for img in sibling.find_all("img")[:6]:
+                for img in sibling.find_all("img")[:10]:
+                    logo_url = _abs(img.get("src", "") or img.get("data-src", ""))
                     name = (img.get("alt") or "").strip()
-                    if name and 2 < len(name) < 70 and name not in sponsors:
-                        sponsors.append(name)
+                    _add_sponsor(name, logo_url)
+
+        # Strategy 3: any <img> with "sponsor" / "partner" in its src path or alt
+        for img in soup.find_all("img")[:60]:
+            src = img.get("src", "") or img.get("data-src", "")
+            alt = (img.get("alt") or "").strip()
+            if re.search(r"sponsor|partner|exhibitor", src, re.I) or \
+               re.search(r"sponsor|partner|exhibitor", alt, re.I):
+                logo_url = _abs(src)
+                if alt and 3 < len(alt) < 80:
+                    _add_sponsor(alt, logo_url)
 
         # ── Registration URL ──────────────────────────────────────────────────
         reg_url = ""
@@ -258,7 +289,7 @@ def scrape_event_full(url: str) -> dict:
             "logo_url": logo_url,
             "speakers": speakers[:8],
             "topics": topics[:6],
-            "sponsors": sponsors[:8],
+            "sponsors": sponsors[:5],
             "registration": reg_details,
         }
 
