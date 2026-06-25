@@ -65,10 +65,26 @@ class AsanaPlanRequest(BaseModel):
     asana_url: str
 
 
-class BuildAudienceRequest(BaseModel):
-    """Payload for POST /api/build-audience — starts an audience list build job."""
+class AudiencePlanRequest(BaseModel):
+    """Payload for POST /api/audience-plan — starts a segment planning job (Phase 1)."""
     session_id: str
     event_url: str = ""  # override; falls back to session's url_data if blank
+
+
+class AudienceRunRequest(BaseModel):
+    """Payload for POST /api/audience/run — standalone, no email session required."""
+    event_url: str
+    session_id: str = ""  # optional — if provided, master_list_id stored in session
+    plan: str = ""        # optional — skip planning phase if provided
+    qa: str = ""          # optional clarifying answers
+
+
+class BuildAudienceRequest(BaseModel):
+    """Payload for POST /api/build-audience — starts a list building job (Phase 2)."""
+    session_id: str
+    event_url: str = ""  # override; falls back to session's url_data if blank
+    plan: str = ""       # segment plan output from Phase 1 (PLANNING_PROMPT)
+    qa: str = ""         # optional user answers to clarifying questions
 
 
 class SessionState(BaseModel):

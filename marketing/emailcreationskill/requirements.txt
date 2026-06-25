@@ -10,3 +10,7 @@ pydantic==2.9.2
 nest_asyncio>=1.6.0
 claude-code-sdk>=0.0.25
 beautifulsoup4>=4.12.0
+lxml>=5.0
+openai>=1.30
+snowflake-connector-python>=3.6
+cryptography>=42.0

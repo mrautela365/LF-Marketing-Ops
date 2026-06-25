@@ -26,3 +26,9 @@ ASANA_ACCESS_TOKEN = os.getenv("ASANA_ACCESS_TOKEN", "")
 # LiteLLM proxy (takes priority over direct Anthropic API key when both are set)
 LITELLM_BASE_URL = os.getenv("LITELLM_BASE_URL", "")
 LITELLM_API_KEY  = os.getenv("LITELLM_API_KEY",  "")
+
+# Snowflake credentials (for audience list building)
+# Keys are read directly from os.environ in audience_tools.py — listed here for .env documentation.
+# SNOWFLAKE_ACCOUNT, SNOWFLAKE_USER, SNOWFLAKE_PRIVATE_KEY (PEM),
+# SNOWFLAKE_DATABASE (default: ANALYTICS), SNOWFLAKE_SCHEMA (default: Silver_Segment),
+# SNOWFLAKE_WAREHOUSE (optional), SNOWFLAKE_ROLE (optional)

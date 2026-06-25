@@ -9,7 +9,7 @@ import traceback
 from fastapi import FastAPI, HTTPException
 import hubspot_tools
 import content_tools
-from event_brands import lookup_event_brand, get_brand_events
+from event_brands import lookup_event_brand, get_brand_events, expand_location_words, location_fallback_chain, extract_location_from_name, build_location_chain
 from stage_detector import detect_stage
 
 log = logging.getLogger("email-staging")
@@ -21,7 +21,7 @@ if not log.handlers:
     log.propagate = False
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
-from models import PlanRequest, CloneRequest, ContentRequest, ChatRequest, GenerateContentRequest, StagingBriefRequest, AsanaPlanRequest, BuildAudienceRequest
+from models import PlanRequest, CloneRequest, ContentRequest, ChatRequest, GenerateContentRequest, StagingBriefRequest, AsanaPlanRequest, AudiencePlanRequest, AudienceRunRequest, BuildAudienceRequest
 import session_store
 import agent
 import audience_tools
@@ -51,6 +51,170 @@ log.info(f"[STARTUP] AI mode: {MODE} | model: {__import__('config').CLAUDE_MODEL
 @app.get("/api/status")
 async def status():
     return {"mode": MODE, "hubspot_configured": bool(HUBSPOT_PORTAL_ID)}
+
+
+@app.get("/api/debug-email")
+async def debug_email(email_id: str):
+    """
+    Dump the raw HubSpot widget + flexArea structure of any email by ID.
+    Use this to inspect how a real sent email's footer/social icons are structured.
+    """
+    raw = hubspot_tools._get(f"/marketing/v3/emails/{email_id}")
+    content = raw.get("content") or {}
+    widgets = content.get("widgets") or {}
+    flex    = content.get("flexAreas") or {}
+
+    # Summarise section order with widget paths
+    section_summary = []
+    for area_name, area in flex.items():
+        for sec in (area.get("sections") or []):
+            for col in (sec.get("columns") or []):
+                for wid_id in (col.get("widgets") or []):
+                    w = widgets.get(wid_id) or {}
+                    body = w.get("body") or {}
+                    section_summary.append({
+                        "widget_id":   wid_id,
+                        "path":        body.get("path", ""),
+                        "has_html":    bool(body.get("html")),
+                        "has_social":  bool(body.get("social")),
+                        "has_img":     bool(body.get("img")),
+                        "line_type":   body.get("line_type", ""),
+                        "social_data": body.get("social"),
+                    })
+
+    return {
+        "email_id":        email_id,
+        "name":            raw.get("name"),
+        "type":            raw.get("type"),
+        "state":           raw.get("state"),
+        "template_path":   content.get("templatePath"),
+        "flex_area_names": list(flex.keys()),
+        "section_order":   section_summary,
+        "raw_widgets":     widgets,
+    }
+
+
+@app.get("/api/debug-lookup")
+async def debug_lookup(url: str):
+    """
+    Debug endpoint: paste an event URL and see exactly what the system scrapes,
+    which brand it maps to, and which HubSpot emails it finds as candidates.
+    """
+    import re as _re
+
+    result = {}
+
+    # 1. Scrape
+    try:
+        url_data = content_tools.scrape_event_full(url)
+    except Exception as e:
+        url_data = {}
+        result["scrape_error"] = str(e)
+
+    raw_event = url_data.get("event_name", "")
+    location  = url_data.get("location", "")
+    result["scraped"] = {
+        "event_name": raw_event,
+        "brand_name": url_data.get("brand_name"),
+        "location":   location,
+        "hero_image": url_data.get("hero_image_url"),
+    }
+
+    # 2. Brand map lookup
+    known = lookup_event_brand(raw_event)
+    if known:
+        result["brand_lookup"] = known
+        brand_name       = known["brand_name"]
+        short_brand_name = known["short_brand_name"]
+        event_name       = known["event_name"]
+    else:
+        result["brand_lookup"] = None
+        brand_name       = url_data.get("brand_name", "")
+        short_brand_name = ""
+        event_name       = raw_event
+
+    # 3. HubSpot candidate fetch
+    brand_event_list  = get_brand_events(short_brand_name) if short_brand_name else []
+    event_short_names = list({e["event_short_name"] for e in brand_event_list})
+    result["brand_events"] = event_short_names
+
+    candidates = []
+    if brand_name or short_brand_name:
+        try:
+            candidates = hubspot_tools.get_brand_emails(
+                short_brand_name, brand_name,
+                event_short_names=event_short_names,
+                event_url=url,
+            )
+        except Exception as e:
+            result["hubspot_error"] = str(e)
+
+    # 4. Mandatory location filter: event name location first, then scraped city/country/region.
+    # e.g. "LF Energy Summit Europe" + "Berlin, Germany" → tries "europe/eu" before "berlin"
+    filter_level = "none"
+    ai_pool      = candidates
+
+    if location or event_name:
+        chain = build_location_chain(event_name, location)
+        for idx, loc_words in enumerate(chain):
+            level_hits = [e for e in candidates if any(w in (e.get("name") or "").lower() for w in loc_words)]
+            if len(level_hits) >= 2:
+                ai_pool      = level_hits
+                filter_level = f"level_{idx+1} ({', '.join(sorted(loc_words))})"
+                break
+        else:
+            filter_level = "ai_decides"
+
+    filtered = ai_pool
+
+    # 5. Keyword score — uses expanded location words so "NA" and "North America" both score
+    _SCORE_STOP = {"the", "a", "an", "and", "or", "of", "in", "at", "for", "on", "to", "is",
+                   "lf", "linux", "foundation", "events", "open", "source",
+                   "conference", "summit", "day", "edition", "annual"}
+    name_loc = extract_location_from_name(event_name)
+    query_score_kw = (
+        {w.lower() for w in _re.findall(r'\w+', event_name) if len(w) > 2 and w.lower() not in _SCORE_STOP}
+        | expand_location_words(name_loc or location)
+    )
+
+    def _score(e):
+        name_kw = {w.lower() for w in _re.findall(r'\w+', e.get("name") or "")}
+        return len(query_score_kw & name_kw)
+
+    scored = sorted(
+        candidates,
+        key=lambda e: (_score(e), e.get("publishDate") or ""),
+        reverse=True,
+    )
+
+    result["score_keywords"]      = sorted(query_score_kw)
+    result["filter_level_used"]   = filter_level
+    result["candidates_total"]    = len(candidates)
+    result["candidates_filtered"] = len(filtered)
+    result["pool_size"]           = len(ai_pool)
+    ai_pool_ids = {e.get("id") for e in ai_pool}
+    result["candidates"] = [
+        {
+            "id":          e.get("id"),
+            "name":        e.get("name"),
+            "state":       e.get("state"),
+            "publishDate": e.get("publishDate"),
+            "score":       _score(e),
+            "in_filtered_pool": e.get("id") in ai_pool_ids,
+        }
+        for e in scored
+    ]
+
+    # 5. Keyword fallback pick (what happens when AI selection fails)
+    try:
+        fallback = hubspot_tools.search_emails_for_event(
+            short_brand_name or brand_name, event_name, location
+        )
+        result["keyword_fallback"] = json.loads(fallback) if isinstance(fallback, str) else fallback
+    except Exception as e:
+        result["keyword_fallback_error"] = str(e)
+
+    return result
 
 
 # ── Step 1 — Generate plan ───────────────────────────────────────────────────
@@ -121,19 +285,24 @@ async def create_plan(req: PlanRequest):
             )
 
             if candidates:
-                # Location-based pre-filter: prefer emails mentioning the city/region
-                loc_words  = {w.lower() for w in _re.findall(r'\w+', location)  if len(w) > 3}
-                evt_words  = {w.lower() for w in _re.findall(r'\w+', event_name) if len(w) > 3} \
-                             - {"summit", "conference", "open", "source", "linux", "foundation",
-                                "cloud", "native", "north", "south", "east", "west"}
+                # Mandatory location filter: city → country → region fallback.
+                # If location is known, emails must match at some level.
+                # If nothing matches at any level, pass full pool to AI.
+                filter_level = "none"
+                ai_pool      = candidates
 
-                def _relevant(e):
-                    name = (e.get("name") or "").lower()
-                    return any(w in name for w in loc_words) or any(w in name for w in evt_words)
+                if location or event_name:
+                    chain = build_location_chain(event_name, location)
+                    for idx, loc_words in enumerate(chain):
+                        level_hits = [e for e in candidates if any(w in (e.get("name") or "").lower() for w in loc_words)]
+                        if len(level_hits) >= 2:
+                            ai_pool      = level_hits
+                            filter_level = f"level_{idx+1} ({', '.join(sorted(loc_words))})"
+                            break
+                    else:
+                        filter_level = "ai_decides"
 
-                filtered   = [e for e in candidates if _relevant(e)]
-                ai_pool    = filtered if len(filtered) >= 3 else candidates
-                log.info(f"[PLAN] AI select: {len(candidates)} total, {len(filtered)} location-filtered → pool={len(ai_pool)}")
+                log.info(f"[PLAN] AI select: {len(candidates)} total → location filter={filter_level!r} pool={len(ai_pool)}")
 
                 selected = agent.ai_select_source_email(
                     event_name, event_short_name, location,
@@ -257,22 +426,47 @@ async def create_plan(req: PlanRequest):
     _days_str  = f"{_days} days" if _days is not None else "unknown"
 
     def _fmt_list(items, label, empty_msg):
-        if items:
-            return f"{label} ({len(items)}): " + ", ".join(items)
-        return f"{label}: {empty_msg}"
+        if not items:
+            return f"{label}: {empty_msg}"
+        def _to_str(x):
+            return x.get("name", "") if isinstance(x, dict) else str(x)
+        return f"{label} ({len(items)}): " + ", ".join(_to_str(x) for x in items)
+
+
+    _stage_num  = stage_info.get("stage_number")
+    _stage_num_str = f"Stage {_stage_num} — " if _stage_num else ""
+    _strategy   = stage_info.get("marketing_strategy", "")
+    _ideas      = stage_info.get("content_ideas", [])
+    _timeline   = stage_info.get("timeline", "")
+    _ideas_str  = "\n".join(f"    • {idea}" for idea in _ideas) if _ideas else "    (none)"
 
     stage_content_hint = (
-        f"STAGE & CONTENT DATA — include this in the Stage & Content Overview section:\n"
-        f"  Current Stage   : {stage_info['name']} — {stage_info.get('funnel','')}, {_days_str} to event\n"
+        f"STAGE & CONTENT DATA — include this verbatim in the Stage & Content Overview section:\n"
+        f"\n"
+        f"  ── Current Stage ──\n"
+        f"  Stage           : {_stage_num_str}{stage_info['name']} ({stage_info.get('funnel','')})\n"
+        f"  Timeline        : {_timeline}\n"
+        f"  Days to Event   : {_days_str}\n"
+        f"  Event Date      : {stage_info.get('event_date_str','')}\n"
         f"  Stage Goal      : {stage_info.get('goal','')}\n"
         f"  Email Type      : {stage_info.get('email_type','')}\n"
         f"  CTA             : {stage_info.get('cta_label','Register Now')}\n"
-        f"  Event Date      : {stage_info.get('event_date_str','')}\n"
+        f"\n"
+        f"  ── Marketing Strategy ──\n"
+        f"  {_strategy}\n"
+        f"\n"
+        f"  ── Content Ideas for This Stage ──\n"
+        f"{_ideas_str}\n"
+        f"\n"
+        f"  ── Event Data ──\n"
         f"  {_fmt_list(_speakers, 'Speakers', 'None found on event page — will say TBA')}\n"
         f"  {_fmt_list(_sponsors, 'Sponsors', 'None found on event page')}\n"
         f"  {_fmt_list(_topics[:4], 'Topics', 'Open Source, Cloud Native, Linux')}\n"
-        f"  Content reference: {_ref_name or 'No prior email found — will use stage template'}\n"
-        f"  Content sections : intro, {stage_info.get('email_type','')} highlights, "
+        f"\n"
+        f"  ── Content Plan ──\n"
+        f"  Design & components: mirror the previously sent email ({_ref_name or 'stage template fallback'})\n"
+        f"  Copy & messaging   : use the marketing strategy and content ideas above as inspiration\n"
+        f"  Content sections   : intro, {stage_info.get('email_type','')} highlights, "
         f"speakers showcase, {'sponsors mention, ' if _sponsors else ''}"
         f"registration CTA, closing\n"
     )
@@ -370,6 +564,8 @@ async def generate_content(req: GenerateContentRequest):
         session.meta["generated_html"]     = generated["html"]       # full preview HTML (UI)
         session.meta["body_html"]          = generated.get("body_html", generated["html"])
         session.meta["banner_url"]         = generated.get("banner_url", "")
+        session.meta["sections"]           = generated.get("sections", [])
+        session.meta["sponsors"]           = generated.get("sponsors", [])
         session_store.update(session)
 
         log.info(f"[GEN-CONTENT] done: subject={generated['subject']!r} "
@@ -551,11 +747,14 @@ async def stage_from_brief(req: StagingBriefRequest):
                 None,
                 lambda: agent.generate_email_content(url_data, stage_info, None)
             )
+            _gen_sections = generated.get("sections") or []
             hubspot_tools.update_email_content(
                 new_email_id,
-                generated.get("body_html", generated["html"]),
+                html_content=generated.get("body_html", "") if not _gen_sections else "",
                 banner_url=generated.get("banner_url", ""),
                 event_url=req.event_url,
+                content_sections=_gen_sections or None,
+                sponsors=generated.get("sponsors") or None,
             )
             content_applied = True
             content_source  = "ai"
@@ -785,11 +984,11 @@ async def plan_from_asana(req: AsanaPlanRequest):
 
 # ── Audience list builder ─────────────────────────────────────────────────────
 
-@app.post("/api/build-audience")
-async def start_build_audience(req: BuildAudienceRequest):
+@app.post("/api/audience-plan")
+async def start_audience_plan(req: AudiencePlanRequest):
     """
-    Start a Claude subprocess that builds HubSpot audience lists for the event.
-    Uses the hubspot-event-list-builder skill (SKILL.md + Snowflake + HubSpot MCP).
+    Phase 1 — start segment planning job.
+    Scrapes event page, analyses historical HubSpot data, and produces a Segment Plan.
     Returns job_id — poll /api/audience-stream/{job_id} for SSE output.
     """
     session = session_store.get(req.session_id)
@@ -802,9 +1001,61 @@ async def start_build_audience(req: BuildAudienceRequest):
     if not event_url:
         raise HTTPException(status_code=400, detail="No event URL — provide event_url or run plan first")
 
-    job_id = audience_tools.start_build_job(event_url)
-    log.info(f"[AUDIENCE] job started: {job_id[:8]} url={event_url!r}")
+    job_id = audience_tools.start_plan_job(event_url)
+    log.info(f"[AUDIENCE-PLAN] job started: {job_id[:8]} url={event_url!r}")
     return {"job_id": job_id, "event_url": event_url}
+
+
+@app.post("/api/build-audience")
+async def start_build_audience(req: BuildAudienceRequest):
+    """
+    Phase 2 — start list building job.
+    Builds HubSpot DYNAMIC lists using the Segment Plan from Phase 1.
+    Returns job_id — poll /api/audience-stream/{job_id} for SSE output.
+    """
+    session = session_store.get(req.session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    event_url = (req.event_url or "").strip()
+    if not event_url:
+        event_url = (session.meta.get("url_data") or {}).get("url", "")
+    if not event_url:
+        raise HTTPException(status_code=400, detail="No event URL — provide event_url or run plan first")
+
+    job_id = audience_tools.start_build_job(event_url, plan=req.plan, qa=req.qa)
+    log.info(f"[AUDIENCE-BUILD] job started: {job_id[:8]} url={event_url!r}")
+    return {"job_id": job_id, "event_url": event_url}
+
+
+@app.post("/api/audience/run")
+async def run_audience_standalone(req: AudienceRunRequest):
+    """
+    Standalone audience build — no active email session required.
+    Runs the full two-phase flow (planning → building) when plan is empty,
+    or Phase 2 only when plan text is supplied.
+    Stream output via GET /api/audience-stream/{job_id}.
+    """
+    event_url = req.event_url.strip()
+    if not event_url:
+        raise HTTPException(status_code=400, detail="event_url is required")
+
+    job_id = audience_tools.start_build_job(event_url, plan=req.plan, qa=req.qa)
+    log.info(f"[AUDIENCE-RUN] standalone job {job_id[:8]} url={event_url!r} plan={'yes' if req.plan else 'no'}")
+    return {"job_id": job_id, "event_url": event_url}
+
+
+@app.get("/api/audience/status")
+async def audience_status():
+    """Return current audience builder config so the UI can show mode details."""
+    from config import LITELLM_BASE_URL, LITELLM_API_KEY
+    has_litellm = bool(LITELLM_BASE_URL and LITELLM_API_KEY)
+    return {
+        "mode": "litellm" if has_litellm else "cli",
+        "litellm_base_url": LITELLM_BASE_URL or None,
+        "litellm_key_set": bool(LITELLM_API_KEY),
+        "hubspot_token_set": bool(audience_tools.HUBSPOT_ACCESS_TOKEN),
+    }
 
 
 @app.get("/api/audience-stream/{job_id}")
@@ -840,20 +1091,35 @@ async def stream_audience_build(job_id: str, session_id: str = ""):
 
             if item.get("done"):
                 try:
-                    all_text  = "\n".join(accumulated)
-                    master_id = audience_tools.extract_master_list_id(all_text)
+                    all_text          = "\n".join(accumulated)
+                    master_id         = audience_tools.extract_master_list_id(all_text)
+                    suppression_lists = audience_tools.extract_suppression_lists(all_text)
+                    posthoc_applied   = False
 
                     if session_id and master_id:
                         sess = session_store.get(session_id)
                         if sess:
                             sess.meta["audience_list_id"] = master_id
+                            if suppression_lists:
+                                sess.meta["suppression_lists"] = suppression_lists
                             session_store.update(sess)
                             log.info(f"[AUDIENCE] master list {master_id} stored in session {session_id[:8]}")
 
-                    yield f"data: {json.dumps({'type':'complete','done':True,'master_list_id':master_id,'success':item.get('success',False)})}\n\n"
+                            # Email was already cloned before build finished — apply send list now
+                            if sess.email_id:
+                                try:
+                                    suppression_ids = (sess.meta.get("brand_history") or {}).get("suppression_list_ids", [])
+                                    sls = hubspot_tools.set_email_send_list(sess.email_id, master_id, suppression_ids)
+                                    posthoc_applied = sls.get("success", False)
+                                    log.info(f"[AUDIENCE] post-hoc send list: email={sess.email_id} list={master_id} success={posthoc_applied}")
+                                except Exception as exc:
+                                    log.warning(f"[AUDIENCE] post-hoc send list failed: {exc}")
+
+                    log.info(f"[AUDIENCE] build complete — master_id={master_id!r} posthoc_applied={posthoc_applied} suppressions={len(suppression_lists)}")
+                    yield f"data: {json.dumps({'type':'complete','done':True,'master_list_id':master_id,'suppression_lists':suppression_lists,'posthoc_applied':posthoc_applied,'success':item.get('success',False)})}\n\n"
                 except Exception as exc:
                     log.error(f"[AUDIENCE] completion handling error: {exc}")
-                    yield f"data: {json.dumps({'type':'complete','done':True,'master_list_id':'','success':False})}\n\n"
+                    yield f"data: {json.dumps({'type':'complete','done':True,'master_list_id':'','suppression_lists':[],'posthoc_applied':False,'success':False})}\n\n"
                 finally:
                     audience_tools.remove_job(job_id)
                 break

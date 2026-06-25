@@ -83,8 +83,258 @@ BRAND_MAP = [
     {"event_name": "Kubernetes on Edge Day North America",                                         "event_short_name": "KubeEdge Day",            "brand_name": "Cloud Native Computing Foundation", "short_brand_name": "CNCF"},
 ]
 
+# City → (country, broad_region).  Used to build the fallback chain:
+#   city match → country match → region match → AI decides from full pool
+CITY_TO_COUNTRY: dict[str, tuple[str, str]] = {
+    # North America
+    "toronto":       ("Canada",  "North America"),
+    "vancouver":     ("Canada",  "North America"),
+    "montreal":      ("Canada",  "North America"),
+    "chicago":       ("USA",     "North America"),
+    "seattle":       ("USA",     "North America"),
+    "san francisco": ("USA",     "North America"),
+    "new york":      ("USA",     "North America"),
+    "austin":        ("USA",     "North America"),
+    "denver":        ("USA",     "North America"),
+    "atlanta":       ("USA",     "North America"),
+    "los angeles":   ("USA",     "North America"),
+    "boston":        ("USA",     "North America"),
+    "washington":    ("USA",     "North America"),
+    "miami":         ("USA",     "North America"),
+    "detroit":       ("USA",     "North America"),
+    # Europe
+    "amsterdam":     ("Netherlands", "Europe"),
+    "paris":         ("France",      "Europe"),
+    "berlin":        ("Germany",     "Europe"),
+    "munich":        ("Germany",     "Europe"),
+    "london":        ("UK",          "Europe"),
+    "barcelona":     ("Spain",       "Europe"),
+    "madrid":        ("Spain",       "Europe"),
+    "vienna":        ("Austria",     "Europe"),
+    "brussels":      ("Belgium",     "Europe"),
+    "stockholm":     ("Sweden",      "Europe"),
+    "dublin":        ("Ireland",     "Europe"),
+    "copenhagen":    ("Denmark",     "Europe"),
+    "milan":         ("Italy",       "Europe"),
+    "rome":          ("Italy",       "Europe"),
+    "prague":        ("Czech Republic", "Europe"),
+    "warsaw":        ("Poland",      "Europe"),
+    "zurich":        ("Switzerland", "Europe"),
+    "geneva":        ("Switzerland", "Europe"),
+    "lisbon":        ("Portugal",    "Europe"),
+    "oslo":          ("Norway",      "Europe"),
+    "helsinki":      ("Finland",     "Europe"),
+    # Asia
+    "shanghai":      ("China",       "Asia"),
+    "beijing":       ("China",       "Asia"),
+    "shenzhen":      ("China",       "Asia"),
+    "tokyo":         ("Japan",       "Asia"),
+    "osaka":         ("Japan",       "Asia"),
+    "seoul":         ("South Korea", "Asia"),
+    "bangalore":     ("India",       "Asia"),
+    "bengaluru":     ("India",       "Asia"),
+    "mumbai":        ("India",       "Asia"),
+    "hyderabad":     ("India",       "Asia"),
+    "delhi":         ("India",       "Asia"),
+    "singapore":     ("Singapore",   "Asia Pacific"),
+    "sydney":        ("Australia",   "Asia Pacific"),
+    "melbourne":     ("Australia",   "Asia Pacific"),
+    # Africa
+    "nairobi":       ("Kenya",        "Africa"),
+    "cape town":     ("South Africa", "Africa"),
+    "johannesburg":  ("South Africa", "Africa"),
+    "lagos":         ("Nigeria",      "Africa"),
+    # Middle East
+    "dubai":         ("UAE",   "Middle East"),
+    "tel aviv":      ("Israel","Middle East"),
+    "istanbul":      ("Turkey","Middle East"),
+}
+
+
+def location_fallback_chain(location: str) -> list[set]:
+    """
+    Given a scraped location string, return an ordered list of word-sets to try
+    when filtering HubSpot email candidates:
+      [city_words, country_words, region_words]
+    The caller tries each level in order and stops at the first that yields >= 2 hits.
+    If none match, the full pool is passed to AI.
+
+    Examples:
+      "Toronto"              → [{"toronto"}, {"canada","ca"}, {"north","america","na"}]
+      "Amsterdam, Netherlands" → [{"amsterdam"}, {"netherlands","nl"}, {"europe","eu"}]
+      "North America"        → [{"north","america","na"}]   (already a region — 1 level)
+    """
+    if not location:
+        return []
+
+    loc_lower = location.lower().strip()
+
+    # Parse "City, Country" format
+    if "," in loc_lower:
+        city_part, country_part = [p.strip() for p in loc_lower.split(",", 1)]
+    else:
+        city_part    = loc_lower
+        country_part = ""
+
+    chain: list[set] = []
+
+    # Level 1 — city
+    city_words = expand_location_words(city_part)
+    if city_words:
+        chain.append(city_words)
+
+    # Resolve country + region from city lookup or parsed country
+    country_name, region_name = "", ""
+    if city_part in CITY_TO_COUNTRY:
+        country_name, region_name = CITY_TO_COUNTRY[city_part]
+    elif country_part:
+        country_name = country_part
+        # Try to infer region from any matching city entry
+        for _city, (cn, rn) in CITY_TO_COUNTRY.items():
+            if cn.lower() == country_part:
+                region_name = rn
+                break
+
+    # Level 2 — country (skip if same as city, e.g. "Japan" scraped as city)
+    if country_name and country_name.lower() != city_part:
+        country_words = expand_location_words(country_name)
+        if country_words:
+            chain.append(country_words)
+
+    # Level 3 — broad region
+    if region_name and region_name.lower() not in {city_part, country_name.lower()}:
+        region_words = expand_location_words(region_name)
+        if region_words:
+            chain.append(region_words)
+
+    return chain
+
+
+# Ordered list of known location terms to scan for inside event names.
+# Longer/more-specific phrases first so "North America" matches before "America".
+_KNOWN_LOCATION_TERMS = [
+    # Multi-word regions first
+    "North America", "South America", "Latin America", "Asia Pacific", "Middle East",
+    "Southeast Asia", "Central Asia",
+    # Abbreviations
+    "APAC", "LATAM",
+    # Single-word regions
+    "Europe", "Asia", "Africa",
+    # Countries
+    "Japan", "China", "India", "Germany", "France", "Netherlands", "Spain",
+    "Austria", "Belgium", "Sweden", "Ireland", "Denmark", "Italy", "Poland",
+    "Switzerland", "Portugal", "Norway", "Finland", "UK", "Canada", "Australia",
+    "Singapore", "South Korea", "Korea", "Kenya", "Nigeria", "South Africa",
+    "UAE", "Israel", "Turkey",
+    # Common cities used in LF event names
+    "Tokyo", "Shanghai", "Beijing", "Seoul", "Toronto", "Vancouver",
+    "Berlin", "Amsterdam", "Paris", "London", "Barcelona", "Vienna",
+    "Brussels", "Stockholm", "Dublin", "Copenhagen", "Milan", "Prague",
+    "Bengaluru", "Bangalore", "Mumbai", "Hyderabad", "Delhi", "Singapore",
+    "Sydney", "Melbourne", "Nairobi", "Cape Town", "Dubai", "Chicago",
+    "Seattle", "Austin", "Denver", "Atlanta", "New York", "San Francisco",
+]
+
+
+def extract_location_from_name(event_name: str) -> str:
+    """
+    Scan an event name for a recognised location term and return it.
+    Longer phrases are checked first so "North America" wins over "America".
+    Returns "" if nothing recognised is found.
+
+    Examples:
+      "LF Energy Summit Europe"          → "Europe"
+      "KubeCon + CloudNativeCon Japan"   → "Japan"
+      "Open Source Summit North America" → "North America"
+      "OpenSearchCon"                    → ""
+    """
+    name_lower = event_name.lower()
+    for term in _KNOWN_LOCATION_TERMS:
+        if term.lower() in name_lower:
+            return term
+    return ""
+
+
+def build_location_chain(event_name: str, scraped_location: str) -> list[set]:
+    """
+    Build the full location fallback chain by combining:
+      1. Location found in the event name (highest priority — matches HubSpot naming)
+      2. Scraped city/country/region (fallback)
+
+    Duplicate word-sets are skipped so we never retry the same filter twice.
+    """
+    seen: list[frozenset] = []
+    chain: list[set] = []
+
+    def _add(word_set: set) -> None:
+        fs = frozenset(word_set)
+        if fs and fs not in seen:
+            seen.append(fs)
+            chain.append(word_set)
+
+    # Priority 1: location embedded in the event name (e.g. "Europe" in "LF Energy Summit Europe")
+    name_loc = extract_location_from_name(event_name)
+    if name_loc:
+        for level in location_fallback_chain(name_loc):
+            _add(level)
+
+    # Priority 2: scraped city → country → region
+    for level in location_fallback_chain(scraped_location):
+        _add(level)
+
+    return chain
+
+
+# Maps full region names ↔ their short codes used in HubSpot email names.
+# Used to expand location words so "North America" also matches "NA" emails and vice versa.
+LOCATION_ALIASES: dict[str, str] = {
+    "north america": "NA",
+    "south america": "SA",
+    "latin america": "LATAM",
+    "europe":        "EU",
+    "asia pacific":  "APAC",
+    "middle east":   "ME",
+    "north africa":  "NA",   # rare but present
+    "united states": "US",
+    "united kingdom": "UK",
+}
+# Reverse map: short code → full name
+_ALIAS_REVERSE: dict[str, str] = {v.lower(): k for k, v in LOCATION_ALIASES.items()}
+
+
+def expand_location_words(location: str) -> set:
+    """
+    Return a set of all words (and abbreviations) that should match emails for this location.
+    e.g. "North America" → {"north", "america", "na"}
+         "EU"            → {"eu", "europe"}
+    """
+    words: set = set()
+    loc_lower = location.lower().strip()
+
+    # Add individual words from the location string
+    for w in re.findall(r'\w+', loc_lower):
+        words.add(w)
+
+    # Add short code if the full phrase matches
+    for phrase, code in LOCATION_ALIASES.items():
+        if phrase in loc_lower:
+            words.add(code.lower())
+
+    # Add full name if a short code was given
+    full = _ALIAS_REVERSE.get(loc_lower)
+    if full:
+        for w in re.findall(r'\w+', full):
+            words.add(w)
+
+    return words
+
+
 _STOP = {"the", "a", "an", "and", "or", "of", "in", "at", "for", "on", "to", "is",
-         "lf", "linux", "foundation", "events"}
+         "lf", "linux", "foundation", "events",
+         # Generic directional/regional terms — appear in too many event names
+         # to be meaningful discriminators on their own
+         "north", "south", "east", "west", "central",
+         "america", "europe", "asia", "africa"}
 
 
 def _keywords(text: str) -> set:
