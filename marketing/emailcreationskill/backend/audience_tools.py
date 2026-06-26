@@ -626,9 +626,11 @@ Save all created list IDs.
 ═══════════════════════════════════════════════════
 STEP 5 — Look up standard suppression list IDs
 ═══════════════════════════════════════════════════
-Suppressions are NOT added to the master list filter — they are applied separately
-at HubSpot email send time as suppression lists. Your job here is to find their IDs
-and report them so they can be added when scheduling the email.
+Every suppression found here is combined into ONE "Combined Suppression" list in
+STEP 5B, and that single list is then applied as a NOT_IN_LIST exclusion in each
+inclusion branch of the master list (STEP 6). Do NOT add the individual suppression
+lists into the inclusion groups. They are ALSO reported in the ## SUPPRESSION LISTS
+section so they can be applied at email send time. Your job here is to find their IDs.
 
 Use hubspot_search_lists to find the current list ID for each standard suppression.
 Search by the key term shown — take the most recently updated match.
@@ -644,17 +646,20 @@ Standard suppressions to look up:
 Also look up any event-specific suppressions from the Segment Plan
 (current registrants of this event, internal LF contacts, foundation opt-outs, etc.).
 
-Print the found suppression list IDs — they will be added to the ## SUPPRESSION LISTS section.
-If a search returns no match, note it in ## FLAGGED FOR REVIEW.
+Collect ALL found suppression list IDs into one set — they feed STEP 5B (the combined
+list) and the ## SUPPRESSION LISTS section. If a search returns no match, note it in
+## FLAGGED FOR REVIEW.
 
 ═══════════════════════════════════════════════════
-STEP 6 — Build Master Audience List (MANDATORY — never skip)
+STEP 5B — Build the Combined Suppression list (one list holding ALL suppressions)
 ═══════════════════════════════════════════════════
-THIS STEP IS REQUIRED. You must always execute it, even if only some inclusion lists succeeded.
+Create ONE dynamic list whose members are every contact in ANY suppression list found
+in STEP 5. This is a pure OR of IN_LIST membership filters — one AND branch per
+suppression list. STEP 6 references this single list as the only exclusion, so the
+suppression set is defined in exactly ONE place instead of being repeated in every group.
 
-The master list is a PURE OR of all successfully built inclusion list IDs.
-Do NOT add any AND NOT or suppression conditions to the filterBranch.
-Suppressions are handled at email send time, not inside the list.
+CRITICAL: membership filters MUST use filterType "IN_LIST" (NOT "LIST_MEMBERSHIP",
+which HubSpot rejects). The root MUST be "OR" with AND sub-branches.
 
 filterBranch structure:
 {{
@@ -663,17 +668,82 @@ filterBranch structure:
     {{
       "filterBranchType": "AND",
       "filterBranches": [],
-      "filters": [{{"filterType": "LIST_MEMBERSHIP", "listId": "[inclusion_id_1]", "operator": "IN_LIST"}}]
+      "filters": [
+        {{"filterType": "IN_LIST", "listId": "[suppression_id_1]", "operator": "IN_LIST"}}
+      ]
     }},
     {{
       "filterBranchType": "AND",
       "filterBranches": [],
-      "filters": [{{"filterType": "LIST_MEMBERSHIP", "listId": "[inclusion_id_2]", "operator": "IN_LIST"}}]
+      "filters": [
+        {{"filterType": "IN_LIST", "listId": "[suppression_id_2]", "operator": "IN_LIST"}}
+      ]
     }}
-    ... (one AND branch per successfully built inclusion list)
+    ... (one AND branch per suppression list found in STEP 5)
   ],
   "filters": []
 }}
+
+Name: [Quarter] [Year] - [Brand] - [Event Name] - Combined Suppression
+After success print:
+✅ Combined Suppression list created — ID: [listId] — [hubspot_url]
+Save this ID as [combined_suppression_id] — STEP 6 needs it.
+
+If STEP 5 found NO suppression lists, skip this step (there is nothing to combine) and
+note it; STEP 6 then builds a pure OR of inclusions with no exclusion filter.
+
+═══════════════════════════════════════════════════
+STEP 6 — Build Master Audience List (MANDATORY — never skip)
+═══════════════════════════════════════════════════
+THIS STEP IS REQUIRED. You must always execute it, even if only some inclusion lists succeeded.
+
+The master list is an OR of all successfully built inclusion list IDs, with the SINGLE
+Combined Suppression list from STEP 5B applied as ONE NOT_IN_LIST exclusion inside each
+inclusion branch. Do NOT add the individual suppression lists into the groups — only the
+one combined-suppression list ID goes in each branch.
+Logically: (inc_1 AND NOT combined_supp) OR (inc_2 AND NOT combined_supp) ...
+which equals (inc_1 OR inc_2 ...) AND NOT combined_supp.
+
+This distributed shape is REQUIRED by HubSpot — the root filterBranch MUST be "OR"
+with AND sub-branches (HubSpot rejects an AND root and rejects nested OR branches),
+and HubSpot exposes no separate list-level exclusion field via the API, so each AND
+branch carries the one combined-suppression NOT_IN_LIST filter.
+
+CRITICAL: membership filters MUST use filterType "IN_LIST" (NOT "LIST_MEMBERSHIP",
+which HubSpot rejects). operator "IN_LIST" includes; operator "NOT_IN_LIST" excludes.
+
+For each successfully built inclusion list, create ONE AND branch whose filters are:
+  • that inclusion list (operator IN_LIST), then
+  • the Combined Suppression list from STEP 5B (operator NOT_IN_LIST) — the SAME single
+    [combined_suppression_id] in every branch.
+
+filterBranch structure:
+{{
+  "filterBranchType": "OR",
+  "filterBranches": [
+    {{
+      "filterBranchType": "AND",
+      "filterBranches": [],
+      "filters": [
+        {{"filterType": "IN_LIST", "listId": "[inclusion_id_1]", "operator": "IN_LIST"}},
+        {{"filterType": "IN_LIST", "listId": "[combined_suppression_id]", "operator": "NOT_IN_LIST"}}
+      ]
+    }},
+    {{
+      "filterBranchType": "AND",
+      "filterBranches": [],
+      "filters": [
+        {{"filterType": "IN_LIST", "listId": "[inclusion_id_2]", "operator": "IN_LIST"}},
+        {{"filterType": "IN_LIST", "listId": "[combined_suppression_id]", "operator": "NOT_IN_LIST"}}
+      ]
+    }}
+    ... (one AND branch per inclusion list; EACH branch references the SAME single combined_suppression_id)
+  ],
+  "filters": []
+}}
+
+If STEP 5B was skipped (no suppressions), each AND branch contains only its single
+inclusion-list filter (a pure OR of inclusions).
 
 Name: follow the recommended master list name from the Segment Plan.
 If none given: [Quarter] [Year] - [Brand] - [Event Name] Master (With Opt-In and Filters)
@@ -687,7 +757,8 @@ DO NOT end without attempting to create the master list.
 ═══════════════════════════════════════════════════
 STEP 7 — Final summary
 ═══════════════════════════════════════════════════
-Print a markdown table of ALL created lists:
+Print a markdown table of ALL created lists (inclusion lists, the Combined Suppression
+list from STEP 5B, and the Master list from STEP 6):
 
 | # | List name | HubSpot ID | Link | Notes |
 |---|-----------|------------|------|-------|
