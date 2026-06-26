@@ -21,7 +21,7 @@ if not log.handlers:
     log.propagate = False
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
-from models import PlanRequest, CloneRequest, ContentRequest, ChatRequest, GenerateContentRequest, StagingBriefRequest, AsanaPlanRequest, AudiencePlanRequest, AudienceRunRequest, BuildAudienceRequest
+from models import PlanRequest, CloneRequest, ContentRequest, ChatRequest, GenerateContentRequest, StagingBriefRequest, AsanaPlanRequest, AudiencePlanRequest, AudienceRunRequest, BuildAudienceRequest, SetSendListRequest
 import session_store
 import agent
 import audience_tools
@@ -636,6 +636,71 @@ async def clone_email(req: CloneRequest):
         "email_id":        session.email_id,
         "draft_url":       session.draft_url,
         "content_applied": content_applied,
+    }
+
+
+# ── Step 2b — Apply send list (explicit, after approve) ──────────────────────
+
+@app.post("/api/set-send-list")
+async def set_send_list(req: SetSendListRequest):
+    """
+    Apply ONLY the send-to (and suppression) lists to an already-cloned email.
+
+    Called explicitly by the frontend right after /clone returns, so the list
+    assignment is a separate, visible, verifiable step. Resolves email_id and
+    suppression from the session when not passed directly.
+    Returns the actual `to` object HubSpot stored so the UI can confirm/warn.
+    """
+    send_list_id = (req.send_list_id or "").strip()
+    if not send_list_id:
+        raise HTTPException(status_code=400, detail="send_list_id is required")
+
+    email_id    = (req.email_id or "").strip()
+    suppression = list(req.suppression_list_ids or [])
+
+    sess = session_store.get(req.session_id) if req.session_id else None
+    if sess:
+        email_id = email_id or (sess.email_id or "")
+        if not suppression:
+            suppression = (sess.meta.get("brand_history") or {}).get("suppression_list_ids", []) or []
+
+    if not email_id:
+        raise HTTPException(
+            status_code=400,
+            detail="No email to update. Provide email_id, or a session_id whose email has been cloned.",
+        )
+
+    log.info(f"[SET-SEND-LIST] email={email_id} list={send_list_id} suppression={suppression}")
+    try:
+        result = hubspot_tools.set_email_send_list(email_id, send_list_id, suppression)
+    except Exception as exc:
+        log.error(f"[SET-SEND-LIST] failed: {exc}\n{traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Failed to apply send list: {exc}")
+
+    applied = result.get("success", False)
+    log.info(f"[SET-SEND-LIST] email={email_id} list={send_list_id} success={applied} type={result.get('list_type')}")
+
+    # Persist on the session so later steps know which list is the send list
+    if sess:
+        sess.meta["audience_list_id"] = send_list_id
+        session_store.update(sess)
+
+    if not applied:
+        # Surface the failure instead of silently leaving send-to empty
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                f"HubSpot did not accept send list {send_list_id} for email {email_id}. "
+                f"Applied `to`: {result.get('to')}"
+            ),
+        )
+
+    return {
+        "email_id":     email_id,
+        "send_list_id": send_list_id,
+        "list_type":    result.get("list_type"),
+        "success":      applied,
+        "to":           result.get("to"),
     }
 
 

@@ -424,7 +424,16 @@ def update_email_settings(
 # ── Tool 3b: Set email send / suppression lists ──────────────────────────────
 
 def _get_list_processing_type(list_id: str) -> str:
-    """Return 'SNAPSHOT', 'DYNAMIC', or 'UNKNOWN' for a HubSpot contact list."""
+    """Return 'SNAPSHOT', 'DYNAMIC', 'MANUAL', or 'UNKNOWN' for a HubSpot contact list.
+
+    The CRM v3 GET /lists/{id} response nests the list under a top-level "list"
+    key: {"list": {"processingType": "DYNAMIC", ...}}. Reading processingType
+    from the top level always yields UNKNOWN — which made set_email_send_list
+    misclassify every dynamic list as static and silently drop the `to` update.
+
+    Returns 'UNKNOWN' when the list is not found in CRM v3 (i.e. a legacy list
+    that only exists in the old /contacts/v1/lists namespace).
+    """
     import logging as _logging
     _l = _logging.getLogger("email-staging")
     try:
@@ -434,11 +443,31 @@ def _get_list_processing_type(list_id: str) -> str:
             timeout=10,
         )
         if data.ok:
-            return data.json().get("processingType", "UNKNOWN")
+            body = data.json()
+            # processingType lives under the "list" wrapper; fall back to top level
+            list_obj = body.get("list") if isinstance(body.get("list"), dict) else body
+            ptype = list_obj.get("processingType", "UNKNOWN")
+            _l.info(f"[HS-LISTS] list {list_id} processingType={ptype!r}")
+            return ptype
         _l.warning(f"[HS-LISTS] list type lookup for {list_id}: HTTP {data.status_code}")
     except Exception as exc:
         _l.warning(f"[HS-LISTS] list type lookup for {list_id} failed: {exc}")
     return "UNKNOWN"
+
+
+# CRM v3 processing types — any list with one of these is an ILS list and must
+# go into the email's contactIlsLists field. Lists not found in CRM v3 (returns
+# UNKNOWN) are legacy lists and go into contactLists.
+_ILS_PROCESSING_TYPES = {"DYNAMIC", "MANUAL", "SNAPSHOT"}
+
+
+def _is_ils_list(list_id: str) -> bool:
+    """True if the list lives in the CRM v3 (ILS) namespace → contactIlsLists.
+
+    False for legacy lists (404 in CRM v3) → contactLists. Audience-built lists
+    are always created via CRM v3, so they are always ILS.
+    """
+    return _get_list_processing_type(list_id) in _ILS_PROCESSING_TYPES
 
 
 def set_email_send_list(
@@ -451,9 +480,14 @@ def set_email_send_list(
 
     Sends a COMPLETE `to` object so HubSpot replaces all sub-fields:
       - contactIds.include cleared  → removes any individual contacts from the clone source
-      - contactIlsLists.include     → DYNAMIC list (audience-built list)
-      - contactLists.include        → SNAPSHOT/UNKNOWN list
-      - suppress_list_ids go into .exclude on both sub-fields (HubSpot ignores unknown IDs)
+      - contactIlsLists.include     → ILS list (DYNAMIC/MANUAL/SNAPSHOT — incl. audience-built)
+      - contactLists.include        → legacy list (not found in CRM v3)
+      - suppression IDs are routed into the matching field by namespace
+
+    Routing rule: a list goes into contactIlsLists if it exists in CRM v3
+    (any processingType), else contactLists. This is ILS-vs-legacy, NOT
+    dynamic-vs-static — putting an ILS list ID in contactLists makes HubSpot
+    silently reject the entire `to` object, leaving the email with no recipients.
 
     Why complete object: HubSpot's PATCH keeps sub-fields you omit, so a partial
     `to` patch leaves stale contactIds / stale list IDs from the clone source.
@@ -461,30 +495,51 @@ def set_email_send_list(
     import logging as _logging
     _log = _logging.getLogger("email-staging")
 
-    suppression_ids_str = [str(s) for s in (suppression_list_ids or []) if s]
-    suppression_ids_int = [int(s) for s in suppression_ids_str if s.isdigit()]
-
+    send_list_id = str(send_list_id)
     list_type = _get_list_processing_type(send_list_id)
-    _log.info(f"[HS-LISTS] set_email_send_list email={email_id} list={send_list_id} type={list_type}")
+    send_is_ils = list_type in _ILS_PROCESSING_TYPES
+    _log.info(
+        f"[HS-LISTS] set_email_send_list email={email_id} list={send_list_id} "
+        f"type={list_type} → {'contactIlsLists' if send_is_ils else 'contactLists'}"
+    )
 
-    is_dynamic = list_type == "DYNAMIC"
+    # Split suppressions by namespace. HubSpot mirrors excludes across the two
+    # namespaces automatically (an ILS list and its legacy mirror are the same
+    # logical list), so we only set them in the SAME namespace as the send list
+    # and let HubSpot create the mirror. Opposite-namespace suppressions can't be
+    # added in the same PATCH — doing so makes HubSpot drop the send-list include.
+    same_ns_suppress: list = []
+    other_ns_suppress: list = []
+    for sid in (suppression_list_ids or []):
+        sid = str(sid).strip()
+        if not sid:
+            continue
+        is_ils = _is_ils_list(sid)
+        if is_ils == send_is_ils:
+            same_ns_suppress.append(sid if send_is_ils else int(sid) if sid.isdigit() else sid)
+        else:
+            other_ns_suppress.append(sid)
+    if other_ns_suppress:
+        _log.info(
+            f"[HS-LISTS] {len(other_ns_suppress)} opposite-namespace suppression(s) "
+            f"{other_ns_suppress} left to HubSpot's automatic exclude-mirroring"
+        )
 
-    # Always send a complete `to` object so clone-source contactIds / stale lists
-    # are fully replaced rather than left as-is by HubSpot's partial-patch behavior.
-    to_payload = {
-        "contactIds": {
-            "include": [],          # clear any individual contacts from the clone source
-            "exclude": [],
-        },
-        "contactIlsLists": {
-            "include": [str(send_list_id)] if is_dynamic else [],
-            "exclude": suppression_ids_str,
-        },
-        "contactLists": {
-            "include": [int(send_list_id)] if not is_dynamic else [],
-            "exclude": suppression_ids_int,
-        },
+    # Build a MINIMAL `to` payload — only the namespace we're setting, plus a
+    # contactIds clear. Critically, do NOT send the OPPOSITE namespace at all
+    # (not even an empty include or an exclude-only): when setting an ILS list,
+    # any `contactLists` key in the same PATCH makes HubSpot reject the ILS
+    # include. Setting contactIlsLists alone already replaces the stale legacy
+    # list with the correct mirror.
+    to_payload: dict = {
+        # Clearing contactIds removes any individual contacts the clone carried over.
+        "contactIds": {"include": [], "exclude": []},
     }
+    if send_is_ils:
+        to_payload["contactIlsLists"] = {"include": [send_list_id], "exclude": same_ns_suppress}
+    else:
+        legacy_include = [int(send_list_id)] if send_list_id.isdigit() else []
+        to_payload["contactLists"] = {"include": legacy_include, "exclude": same_ns_suppress}
 
     _log.info(f"[HS-LISTS] PATCHing to={to_payload}")
     result = _patch(f"/marketing/v3/emails/{email_id}", {"to": to_payload})
