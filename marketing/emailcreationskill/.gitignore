@@ -1,0 +1,30 @@
+# ─── Secrets / environment ───────────────────────────────
+.env
+.env.*
+!.env.example
+
+# Credentials (Snowflake key, Google service account, etc.)
+*.pem
+*service-account*.json
+
+# ─── Python ──────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+
+# Stray empty artifact (accidental file)
+backend/python
+
+# ─── Logs ────────────────────────────────────────────────
+*.log
+
+# ─── OS / editor ─────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp

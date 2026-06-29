@@ -3,57 +3,51 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Email Staging — Linux Foundation</title>
-  <link rel="stylesheet" href="/static/style.css?v=2" />
+  <title>LF Email Automation — Campaign Builder</title>
+  <link rel="stylesheet" href="/static/style.css?v=7" />
 </head>
 <body>
 
 <header>
-  <span class="logo">LF Email Staging</span>
-  <span class="subtitle">Powered by Claude AI</span>
+  <span class="logo">LF Email Automation</span>
+  <span class="subtitle">Campaign Builder</span>
 </header>
 
 <div id="mode-banner" class="hidden"></div>
 <div class="container">
 
-  <!-- ── Tab switcher ── -->
-  <div class="tab-switcher">
-    <button class="tab-btn active" id="tab-event" onclick="switchTab('event')">From Event URL</button>
-    <button class="tab-btn" id="tab-asana" onclick="switchTab('asana')">From Asana Task</button>
-  </div>
-
   <!-- ══════════════════════════════════════════════════════════════════
-       EXISTING FLOW: From Event URL (unchanged)
+       Campaign flow: From Event / Campaign URL
        ══════════════════════════════════════════════════════════════════ -->
   <div id="flow-event">
 
     <!-- Steps indicator -->
     <div class="steps">
       <div class="step active" id="s1">
-        <div class="step-circle">1</div>
-        <span class="step-label">Configure</span>
+        <div class="step-circle"><svg viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/></svg></div>
+        <span class="step-label">Planning</span>
       </div>
       <div class="step" id="s2">
-        <div class="step-circle">2</div>
-        <span class="step-label">Review Plan</span>
+        <div class="step-circle"><svg viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/><polyline points="22,6 12,13 2,6"/></svg></div>
+        <span class="step-label">Email Preview</span>
       </div>
       <div class="step" id="s3">
-        <div class="step-circle">3</div>
-        <span class="step-label">Add Content</span>
+        <div class="step-circle"><svg viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></div>
+        <span class="step-label">Audience Preview</span>
       </div>
       <div class="step" id="s4">
-        <div class="step-circle">✓</div>
-        <span class="step-label">Done</span>
+        <div class="step-circle"><svg viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22,2 15,22 11,13 2,9 22,2"/></svg></div>
+        <span class="step-label">Implementation</span>
       </div>
     </div>
 
     <!-- ── Step 1: Configure ── -->
     <div id="step-1" class="step-panel">
       <div class="card">
-        <div class="card-title">Start Email Request</div>
+        <div class="card-title">Start Campaign Request</div>
         <div class="card-desc">
-          Paste the event or campaign URL. Claude will research the page, identify the brand,
-          look up HubSpot history, and generate a complete staging plan for you to review.
+          Paste the event or campaign URL. The Campaign Builder researches the page, identifies the brand,
+          pulls HubSpot send history, and drafts a complete campaign plan for you to review.
         </div>
 
         <div class="field">
@@ -84,7 +78,7 @@
 
         <div class="btn-row">
           <button class="btn btn-primary" id="plan-btn" onclick="generatePlan()">
-            Generate Plan →
+            Campaign brief →
           </button>
         </div>
       </div>
@@ -93,10 +87,20 @@
     <!-- ── Step 2: Review Everything ── -->
     <div id="step-2" class="step-panel hidden">
 
+      <!-- Live brief — real-time narration of backend AI activity -->
+      <div class="card" id="brief-card">
+        <div style="display:flex;align-items:center;gap:8px">
+          <div class="card-title" style="margin:0;font-size:15px">Live brief</div>
+          <span id="brief-status" style="font-size:12px;font-weight:600;color:var(--gray-400)"></span>
+        </div>
+        <div class="card-desc" style="margin:6px 0 0">What the automation engine is doing right now.</div>
+        <div id="brief-log"></div>
+      </div>
+
       <!-- Plan summary card -->
       <div class="card">
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap">
-          <div class="card-title" style="margin:0">Email Plan</div>
+          <div class="card-title" style="margin:0">Campaign Plan</div>
           <div id="stage-badge" class="hidden" style="
             display:inline-flex;align-items:center;gap:6px;
             padding:4px 12px;border-radius:20px;font-size:12px;font-weight:600;color:#fff;
@@ -123,8 +127,8 @@
       <!-- Generated content card — shows subject, preview, and full email HTML -->
       <div class="card" id="content-review-card">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
-          <div class="card-title" style="margin:0">Generated Email</div>
-          <span id="content-status-badge" style="font-size:12px;color:var(--gray-500)">⏳ Generating…</span>
+          <div class="card-title" style="margin:0">Email Content</div>
+          <span id="content-status-badge" style="font-size:12px;color:var(--gray-500)">⏳ Drafting…</span>
         </div>
 
         <!-- Subject display -->
@@ -133,7 +137,7 @@
           <div id="subject-display" style="
             padding:10px 14px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;
             font-size:15px;font-weight:500;color:var(--gray-800);min-height:38px;
-          ">⏳ Generating…</div>
+          ">⏳ Drafting…</div>
         </div>
 
         <!-- Preview text display -->
@@ -142,54 +146,29 @@
           <div id="preview-display" style="
             padding:10px 14px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;
             font-size:13px;color:var(--gray-600);min-height:34px;
-          ">⏳ Generating…</div>
+          ">⏳ Drafting…</div>
         </div>
 
+        <!-- Editable content sections — each can be removed -->
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+          <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--gray-500)">Content Sections</div>
+          <span style="font-size:11px;color:var(--gray-400)">Remove any block with the 🗑 icon</span>
+        </div>
+        <div id="sections-editor"></div>
+
         <!-- Full email preview iframe -->
-        <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--gray-500);margin-bottom:6px">Full Email Preview</div>
+        <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--gray-500);margin:16px 0 6px">Full Email Preview</div>
         <iframe id="email-preview-frame"
           sandbox="allow-same-origin allow-popups"
           style="width:100%;height:500px;border:1px solid #e2e8f0;border-radius:6px;background:#f9fafb"
         ></iframe>
-
-        <!-- Send list -->
-        <div style="margin-top:16px">
-          <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--gray-500);margin-bottom:4px">Send List</div>
-          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-            <div id="sendlist-display" style="
-              padding:8px 12px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;
-              font-size:13px;color:#166534;
-            ">Auto-detected from brand history</div>
-            <span style="font-size:12px;color:var(--gray-400)">or search to override:</span>
-          </div>
-
-          <!-- Audience build status (auto-starts with plan) -->
-          <div id="audience-build-panel" style="margin-top:10px;padding:12px;background:#fafafa;border:1px solid #e2e8f0;border-radius:8px">
-            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-              <strong style="font-size:13px;color:var(--gray-700)">Audience Lists</strong>
-              <span id="audience-status-badge" style="font-size:12px;color:var(--gray-400)">— building automatically…</span>
-              <button id="build-audience-retry-btn" class="btn btn-outline" onclick="buildAudience()" style="font-size:12px;display:none">↺ Retry</button>
-            </div>
-            <!-- Streaming ticker (visible while running) -->
-            <div id="audience-ticker" class="hidden" style="margin-top:8px;padding:8px;background:#1e1e2e;border-radius:6px;font-family:monospace;font-size:11px;color:#a6e3a1;max-height:140px;overflow-y:auto;white-space:pre-wrap;word-break:break-all"></div>
-            <div id="audience-status" class="hidden" style="margin-top:6px;font-size:13px"></div>
-          </div>
-
-          <div class="list-picker" style="margin-top:6px">
-            <input id="list-search-input" type="text" placeholder="Search HubSpot lists to override…"
-              oninput="onListSearch(this.value)" autocomplete="off" />
-            <div id="list-dropdown" class="list-dropdown hidden"></div>
-          </div>
-          <div id="list-selected" class="hidden"></div>
-          <input type="hidden" id="send_list_id" />
-        </div>
       </div>
 
-      <!-- Request changes card -->
+      <!-- Refine content card -->
       <div class="card">
-        <div class="card-title" style="font-size:15px">Request Changes</div>
+        <div class="card-title" style="font-size:15px">Refine Content</div>
         <div class="card-desc">
-          Ask Claude to update the subject, preview, email body, or anything else. Claude will regenerate the content above.
+          Add or remove copy, tighten the subject, or adjust the tone. The Campaign Builder regenerates the content above.
         </div>
         <div class="field">
           <textarea id="change-request-input" rows="3"
@@ -198,76 +177,93 @@
         <div id="change-status" class="hidden"></div>
         <div class="btn-row">
           <button class="btn btn-outline" id="update-btn" onclick="requestContentChanges()">
-            🔄 Update Content
+            🔄 Refine Content
           </button>
         </div>
       </div>
 
-      <!-- Approve card -->
-      <div class="card" style="background:#f0fdf4;border:1px solid #bbf7d0">
+      <!-- Advance to audience -->
+      <div class="card">
         <div id="step2-status" class="hidden"></div>
         <div class="btn-row">
-          <button class="btn btn-success" id="approve-btn" onclick="approvePlan()" disabled>
-            ⏳ Generating content…
+          <button class="btn btn-primary" id="build-audience-btn" onclick="goToAudience()" disabled>
+            ⏳ Drafting content…
           </button>
           <button class="btn btn-outline" onclick="editPlan()">← Edit Inputs</button>
         </div>
       </div>
 
-      <!-- Hidden inputs used by approvePlan() -->
+      <!-- Hidden inputs used by startImplementation() -->
       <input type="hidden" id="subject" />
       <input type="hidden" id="preview_text" />
     </div>
 
-    <!-- ── Step 3: Override Content (optional) ── -->
+    <!-- ── Step 3: Audience Preview ── -->
     <div id="step-3" class="step-panel hidden">
       <div class="card">
-        <div class="card-title">Email Cloned</div>
-        <div class="card-desc">The email was created with AI-generated content. You can optionally replace the body below.</div>
-
-        <div id="clone-message" class="hidden"></div>
-        <div id="clone-draft-link" class="hidden"></div>
-
-        <div style="margin-top:8px">
-          <div class="chat-row">
-            <input id="clone-chat-input" type="text" placeholder="Ask Claude about the clone or settings…"
-              onkeydown="onChatKey(event,'clone-message','clone-chat-input')" />
-            <button class="btn btn-outline" onclick="sendChat('clone-message','clone-chat-input')">Ask</button>
-          </div>
-          <div id="clone-message-status" class="hidden" style="margin-top:8px"></div>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px">
+          <div class="card-title" style="margin:0">Audience Preview</div>
+          <span id="audience-status-badge" style="font-size:12px;color:var(--gray-400)">— choose how to set the send audience</span>
         </div>
-      </div>
-
-      <div class="card">
-        <div class="card-title" style="font-size:15px">Override Content <span style="font-weight:400;color:var(--gray-500)">(optional)</span></div>
         <div class="card-desc">
-          Paste a Google Doc URL, raw HTML, or plain text to replace the AI-generated email body.
+          Build a segmented audience list from event activity, reuse an existing HubSpot list,
+          or skip and create the email only. Your choice is attached as the email’s send list at implementation.
         </div>
 
-        <div class="field">
-          <label>Replacement Content</label>
-          <textarea id="content" placeholder="https://docs.google.com/document/d/...&#10;&#10;— or paste HTML/text directly —"></textarea>
-          <div class="hint">Google Doc URL · Raw HTML · Plain text — all accepted.</div>
+        <!-- Choice buttons -->
+        <div class="btn-row" id="audience-options" style="margin-top:2px">
+          <button class="btn btn-primary" id="start-build-btn" onclick="runAudienceBuild()">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+            Build audience list
+          </button>
+          <button class="btn btn-outline" id="skip-audience-btn" onclick="skipAudience()">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><line x1="5.6" y1="5.6" x2="18.4" y2="18.4"/></svg>
+            Skip — create email only
+          </button>
         </div>
 
-        <div id="step3-status" class="hidden"></div>
+        <!-- Use an existing list -->
+        <div style="margin-top:20px">
+          <div class="section-subhead">Or use an existing list</div>
+          <div class="list-picker">
+            <input id="list-search-input" type="text" placeholder="Search HubSpot lists…"
+              oninput="onListSearch(this.value)" autocomplete="off" />
+            <div id="list-dropdown" class="list-dropdown hidden"></div>
+          </div>
+          <div id="list-selected" class="hidden"></div>
+          <input type="hidden" id="send_list_id" />
+        </div>
+
+        <!-- Live build log -->
+        <div id="audience-ticker" class="hidden" style="margin-top:18px;padding:10px;background:#0f172a;border-radius:8px;font-family:ui-monospace,monospace;font-size:11px;color:#e2e8f0;max-height:340px;overflow-y:auto;white-space:pre-wrap;word-break:break-all"></div>
+
+        <!-- Lists rolled up into the master audience -->
+        <div id="audience-sublists-wrap" class="hidden" style="margin-top:14px">
+          <div class="section-subhead">Lists in the master audience</div>
+          <div id="audience-sublists"></div>
+        </div>
+
+        <div id="audience-status" class="hidden" style="margin-top:10px;font-size:13px"></div>
 
         <div class="btn-row">
-          <button class="btn btn-primary" id="content-btn" onclick="submitContent()">
-            Replace Email Body →
+          <button class="btn btn-success" id="start-impl-btn" onclick="startImplementation()" disabled>
+            Start Implementation →
           </button>
-          <button class="btn btn-outline" onclick="showStep(4)">Skip — Email is Ready →</button>
+          <button class="btn btn-outline" onclick="showStep(2)">← Back to Email Preview</button>
         </div>
       </div>
     </div>
 
-    <!-- ── Step 4: Done ── -->
+    <!-- ── Step 4: Implementation ── -->
     <div id="step-4" class="step-panel hidden">
       <div class="card">
-        <div class="card-title">Email Staged as Draft</div>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px">
+          <div class="card-title" style="margin:0">Implementation</div>
+          <span id="impl-status-badge" style="font-size:12px;color:var(--gray-400)"></span>
+        </div>
         <div class="card-desc">
-          Claude has completed all steps. The email is saved as a DRAFT — review it in
-          HubSpot before scheduling.
+          Cloning the email to a HubSpot draft and attaching the master audience as its send list.
+          The email is saved as a DRAFT — review it in HubSpot before scheduling.
         </div>
 
         <div id="done-message" class="hidden"></div>
@@ -276,7 +272,7 @@
         <!-- Final chat -->
         <div style="margin-top:12px">
           <div style="font-size:12px;color:var(--gray-600);margin-bottom:6px">
-            Any final questions for Claude?
+            Any final questions about this campaign?
           </div>
           <div class="chat-row">
             <input id="done-chat-input" type="text" placeholder="e.g. How many suppression lists were applied?"
@@ -293,198 +289,8 @@
     </div>
 
   </div><!-- /flow-event -->
-
-
-  <!-- ══════════════════════════════════════════════════════════════════
-       NEW FLOW: From Asana Task
-       ══════════════════════════════════════════════════════════════════ -->
-  <div id="flow-asana" class="hidden">
-
-    <!-- Asana steps indicator (3 steps) -->
-    <div class="steps">
-      <div class="asana-step active" id="as1">
-        <div class="step-circle">1</div>
-        <span class="step-label">Fetch Brief</span>
-      </div>
-      <div class="asana-step" id="as2">
-        <div class="step-circle">2</div>
-        <span class="step-label">Review &amp; Stage</span>
-      </div>
-      <div class="asana-step" id="as3">
-        <div class="step-circle">&#10003;</div>
-        <span class="step-label">Done</span>
-      </div>
-    </div>
-
-    <!-- ── Asana Step 1: Enter task URL ── -->
-    <div id="asana-step-1" class="asana-panel">
-      <div class="card">
-        <div class="card-title">Stage from Asana Task</div>
-        <div class="card-desc">
-          Paste an Asana task URL. The service will read the task, subtasks, and comments,
-          fetch the linked Google Doc, search HubSpot for brand settings, and
-          pre-fill the staging brief for you to review.
-        </div>
-
-        <div class="field">
-          <label>Asana Task URL <span style="color:red">*</span></label>
-          <input id="asana_task_url" type="url"
-            placeholder="https://app.asana.com/0/123456/987654" />
-          <div class="hint">e.g. https://app.asana.com/0/&lt;project&gt;/&lt;task&gt;</div>
-        </div>
-
-        <div id="asana-step1-status" class="hidden"></div>
-
-        <div class="btn-row">
-          <button class="btn btn-primary" id="asana-fetch-btn" onclick="fetchAsanaBrief()">
-            Fetch Brief →
-          </button>
-        </div>
-      </div>
-    </div>
-
-    <!-- ── Asana Step 2: Review + edit brief ── -->
-    <div id="asana-step-2" class="asana-panel hidden">
-
-      <!-- Warnings (shown only if any) -->
-      <div id="ab-warnings-card" class="hidden">
-        <div class="card" style="border-color:#fcd34d;background:var(--yellow-light)">
-          <div style="font-weight:600;margin-bottom:8px;color:var(--yellow)">⚠ Notices</div>
-          <div id="ab-warnings-list" style="font-size:13px;color:var(--gray-700)"></div>
-        </div>
-      </div>
-
-      <!-- Task summary chip -->
-      <div id="ab-task-chip" class="hidden" style="
-        display:flex;align-items:center;gap:8px;padding:8px 14px;
-        background:var(--blue-light);border:1px solid #c7daf5;border-radius:var(--radius);
-        margin-bottom:16px;font-size:13px;color:var(--gray-700);
-      ">
-        <span style="font-size:16px">📋</span>
-        <span id="ab-task-name-label"></span>
-        <span id="ab-due-label" style="margin-left:auto;color:var(--gray-400);font-size:12px"></span>
-      </div>
-
-      <!-- Brief form card -->
-      <div class="card">
-        <div class="card-title">Email Brief</div>
-        <div class="card-desc">Review and edit all fields before staging.</div>
-
-        <div class="field">
-          <label>Email Name</label>
-          <input id="ab-email-name" type="text" placeholder="26Q2 - LF Research - Campaign Name - DRAFT" />
-        </div>
-
-        <div class="field-row">
-          <div class="field">
-            <label>From Name</label>
-            <input id="ab-from-name" type="text" placeholder="Linux Foundation Research Team" />
-          </div>
-          <div class="field">
-            <label>From Address</label>
-            <input id="ab-from-address" type="email" placeholder="research@linuxfoundation.org" />
-          </div>
-        </div>
-
-        <div class="field-row">
-          <div class="field">
-            <label>Subject Line <span style="color:var(--gray-400)">(optional)</span></label>
-            <input id="ab-subject" type="text" placeholder="Leave blank to fill in HubSpot" />
-          </div>
-          <div class="field">
-            <label>Preview Text <span style="color:var(--gray-400)">(optional)</span></label>
-            <input id="ab-preview" type="text" placeholder="Leave blank to fill in HubSpot" />
-          </div>
-        </div>
-
-        <div class="field-row">
-          <div class="field">
-            <label>Email Type</label>
-            <select id="ab-email-type">
-              <option value="BATCH_EMAIL">Batch Email</option>
-              <option value="LOCALTIME_EMAIL">Local Time Email</option>
-              <option value="AUTOMATED_EMAIL">Automated Email</option>
-            </select>
-          </div>
-          <div class="field">
-            <label>Clone Base Email ID</label>
-            <input id="ab-clone-base-id" type="text" placeholder="HubSpot email ID" />
-            <div id="ab-clone-base-name" class="hint"></div>
-          </div>
-        </div>
-
-        <!-- Send list picker (Asana flow — separate IDs from event-URL flow) -->
-        <div class="field">
-          <label>Send List</label>
-          <div class="list-picker">
-            <input id="ab-list-search-input" type="text"
-              placeholder="Search HubSpot lists…"
-              oninput="onAsanaListSearch(this.value)" autocomplete="off" />
-            <div id="ab-list-dropdown" class="list-dropdown hidden"></div>
-          </div>
-          <div id="ab-list-selected" class="hidden"></div>
-          <input type="hidden" id="ab-send-list-id" />
-        </div>
-
-        <!-- Suppression list IDs -->
-        <div class="field">
-          <label>Suppression List IDs <span style="color:var(--gray-400)">(comma-separated)</span></label>
-          <input id="ab-suppression-ids" type="text" placeholder="e.g. 111, 222, 333" />
-          <div class="hint">Numeric HubSpot list IDs to exclude from send.</div>
-        </div>
-
-        <!-- Content source indicator -->
-        <div id="ab-content-indicator" style="margin-top:4px;margin-bottom:4px"></div>
-
-        <!-- Audience instructions (read-only, shown if extracted from task) -->
-        <div id="ab-audience-section" class="hidden">
-          <div style="font-size:13px;font-weight:500;color:var(--gray-700);margin-bottom:6px">
-            Audience Instructions (from List Pull subtask)
-          </div>
-          <div id="ab-audience-text" style="
-            background:var(--gray-50);border:1px solid var(--gray-200);
-            border-radius:var(--radius);padding:10px 12px;
-            font-size:13px;color:var(--gray-600);white-space:pre-wrap;
-          "></div>
-        </div>
-
-      </div><!-- /brief form card -->
-
-      <!-- Stage button card -->
-      <div class="card" style="background:#f0fdf4;border:1px solid #bbf7d0">
-        <div id="asana-step2-status" class="hidden"></div>
-        <div class="btn-row">
-          <button class="btn btn-success" id="asana-stage-btn" onclick="stageFromBrief()">
-            Stage Email →
-          </button>
-          <button class="btn btn-outline" onclick="asanaBack()">← Edit Task URL</button>
-        </div>
-      </div>
-
-    </div><!-- /asana-step-2 -->
-
-    <!-- ── Asana Step 3: Done ── -->
-    <div id="asana-step-3" class="asana-panel hidden">
-      <div class="card">
-        <div class="card-title">Email Staged as Draft</div>
-        <div class="card-desc">
-          The email has been cloned, settings applied, and content injected.
-          Review it in HubSpot before scheduling.
-        </div>
-
-        <div id="asana-done-message" class="hidden"></div>
-        <div id="asana-done-link" class="hidden"></div>
-
-        <div class="btn-row">
-          <button class="btn btn-outline" onclick="asanaStartOver()">+ Stage Another Email</button>
-        </div>
-      </div>
-    </div>
-
-  </div><!-- /flow-asana -->
-
 </div><!-- /container -->
 
-<script src="/static/app.js?v=2"></script>
+<script src="/static/app.js?v=6"></script>
 </body>
 </html>

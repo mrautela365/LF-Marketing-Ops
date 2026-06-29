@@ -7,6 +7,7 @@ class PlanRequest(BaseModel):
     extra_context: str | None = None  # Optional: anything user wants to add
     email_type: str | None = None       # HubSpot type: BATCH_EMAIL, LOCALTIME_EMAIL, AUTOMATED_EMAIL, etc.
     is_transactional: bool | None = None  # True = transactional (bypasses unsubscribe)
+    progress_token: str | None = None  # optional: stream live "brief" of backend steps to /api/progress/{token}
 
 
 class CloneRequest(BaseModel):
@@ -25,6 +26,15 @@ class ContentRequest(BaseModel):
 class GenerateContentRequest(BaseModel):
     session_id: str
     change_request: str | None = None  # optional: "make subject shorter", "more urgent tone", etc.
+    progress_token: str | None = None  # optional: stream live "brief" to /api/progress/{token}
+
+
+class UpdateSectionsRequest(BaseModel):
+    """Payload for POST /api/update-sections — user removed/reordered email content sections.
+    Rebuilds the preview + body HTML from the trimmed sections and persists them on the session
+    so the clone uses the edited content."""
+    session_id: str
+    sections: list = []  # ordered list of {type:'rich_text'|'button', ...} blocks to keep
 
 
 class ChatRequest(BaseModel):
