@@ -21,13 +21,15 @@ if not log.handlers:
     log.propagate = False
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
-from models import PlanRequest, CloneRequest, ContentRequest, ChatRequest, GenerateContentRequest, StagingBriefRequest, AsanaPlanRequest, AudiencePlanRequest, AudienceRunRequest, BuildAudienceRequest, SetSendListRequest
+from models import PlanRequest, CloneRequest, ContentRequest, ChatRequest, GenerateContentRequest, StagingBriefRequest, AsanaPlanRequest, AudiencePlanRequest, AudienceRunRequest, BuildAudienceRequest, SetSendListRequest, UpdateSectionsRequest
 import session_store
 import agent
 import audience_tools
 from config import ANTHROPIC_API_KEY, HUBSPOT_PORTAL_ID, INTERNAL_API_TOKEN, ASANA_ACCESS_TOKEN, LITELLM_BASE_URL, LITELLM_API_KEY
 import asana_tools
 import json
+import queue as _queue
+import threading as _threading
 
 app = FastAPI(title="Email Staging Service", version="1.0.0")
 
@@ -46,6 +48,29 @@ else:
     MODE = "Claude AI (Claude Code)"
 
 log.info(f"[STARTUP] AI mode: {MODE} | model: {__import__('config').CLAUDE_MODEL}")
+
+
+# ── Live "brief" progress channel ────────────────────────────────────────────
+# A tiny in-memory pub/sub keyed by a client-generated token. Backend steps push
+# short human-readable lines; the frontend streams them over SSE so the user sees
+# what the AI is doing in real time while the tab has already advanced.
+_progress: dict[str, _queue.Queue] = {}
+
+def _progress_channel(token: str) -> _queue.Queue:
+    q = _progress.get(token)
+    if q is None:
+        q = _queue.Queue()
+        _progress[token] = q
+    return q
+
+def progress_emit(token: str, text: str, **extra) -> None:
+    """Push one brief line to a channel. No-op when token is falsy/unknown."""
+    if not token:
+        return
+    try:
+        _progress_channel(token).put({"type": "brief", "text": text, **extra})
+    except Exception:
+        pass
 
 
 @app.get("/api/status")
@@ -219,18 +244,18 @@ async def debug_lookup(url: str):
 
 # ── Step 1 — Generate plan ───────────────────────────────────────────────────
 
-@app.post("/api/plan")
-async def create_plan(req: PlanRequest):
+def _create_plan_impl(req: PlanRequest, emit=lambda *a, **k: None):
     """
-    Accepts brand, event_name, email_type.
-    Direct mode: calls HubSpot directly and returns a formatted plan.
-    Claude mode: Claude looks up history and generates the plan.
+    Synchronous plan orchestration. `emit(text)` streams a live "brief" line so the
+    UI can narrate backend AI activity in real time. Wrapped by POST /api/plan
+    (blocking) and POST /api/plan-start (streamed via /api/progress/{token}).
     """
     import re as _re
     session = session_store.create()
     log.info(f"[PLAN] url={req.url!r} session={session.session_id[:8]}")
 
     # ── Step A: Full event scrape (event + registration page + images) ─────────
+    emit("🔎 Reading the event page…")
     try:
         url_data = content_tools.scrape_event_full(req.url)
         session.meta["url_data"] = url_data
@@ -245,7 +270,10 @@ async def create_plan(req: PlanRequest):
 
     raw_event = url_data.get("event_name", "")
     location  = url_data.get("location", "")
+    if raw_event:
+        emit(f"📄 Event detected: {raw_event}" + (f" · {location}" if location else ""))
 
+    emit("🏷️ Identifying brand…")
     known = lookup_event_brand(raw_event)
     if known:
         brand_name       = known["brand_name"]
@@ -278,11 +306,13 @@ async def create_plan(req: PlanRequest):
             event_short_names  = list({e["event_short_name"] for e in brand_event_list})
             log.info(f"[PLAN] brand events for {short_brand_name!r}: {event_short_names}")
 
+            emit(f"📚 Searching HubSpot for past {brand_name or short_brand_name} campaigns…")
             candidates = hubspot_tools.get_brand_emails(
                 short_brand_name, brand_name,
                 event_short_names=event_short_names,
                 event_url=req.url,
             )
+            emit(f"📬 Found {len(candidates)} past campaign email(s) to learn from.")
 
             if candidates:
                 # Mandatory location filter: city → country → region fallback.
@@ -304,10 +334,13 @@ async def create_plan(req: PlanRequest):
 
                 log.info(f"[PLAN] AI select: {len(candidates)} total → location filter={filter_level!r} pool={len(ai_pool)}")
 
+                emit(f"🤖 AI reviewing {len(ai_pool)} candidate(s) to pick the best source email…")
                 selected = agent.ai_select_source_email(
                     event_name, event_short_name, location,
                     ai_pool, url=req.url,
                 )
+                if selected:
+                    emit(f"✅ Source email selected: {selected.get('name','(unnamed)')}")
                 if selected:
                     frm    = selected.get("from") or {}
                     to_obj = selected.get("to") or {}
@@ -347,9 +380,11 @@ async def create_plan(req: PlanRequest):
             log.warning(f"[PLAN] search_emails_for_event failed: {e}")
 
     # ── Step B: Stage detection ───────────────────────────────────────────────
+    emit("📅 Detecting campaign stage from the event timeline…")
     stage_info = detect_stage(url_data.get("event_dates", []))
     session.meta["stage_info"] = stage_info
     log.info(f"[PLAN] Stage: {stage_info['name']!r} ({stage_info['funnel']}, days={stage_info['days_to_event']})")
+    emit(f"🎯 Stage: {stage_info.get('name','?')} ({stage_info.get('funnel','')})")
 
     # ── Step B2: Find stage-specific content reference email ──────────────────
     # Look for the most recent sent email whose name contains the stage keyword
@@ -485,6 +520,7 @@ async def create_plan(req: PlanRequest):
         )
 
     # ── Step B: Call Claude to generate the plan text ──
+    emit("📝 Drafting the campaign plan…")
     combined_context = "\n\n".join(filter(None, [req.extra_context, brand_hint, stage_content_hint]))
     try:
         text, messages = agent.plan_turn(session, req.url, combined_context or None)
@@ -513,6 +549,7 @@ async def create_plan(req: PlanRequest):
         if eid:
             source_email = {"id": eid, "name": ename}
 
+    emit("✅ Campaign plan ready.")
     return {
         "session_id":   session.session_id,
         "message":      text,
@@ -521,6 +558,69 @@ async def create_plan(req: PlanRequest):
         "source_email": source_email,
         "stage":        stage_info,
     }
+
+
+# ── Plan endpoint (blocking) + streaming variant ─────────────────────────────
+
+@app.post("/api/plan")
+async def create_plan(req: PlanRequest):
+    """Blocking plan — runs the orchestration in a worker thread and returns the result."""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, lambda: _create_plan_impl(req))
+
+
+@app.post("/api/plan-start")
+async def start_plan_brief(req: PlanRequest):
+    """
+    Non-blocking plan — runs the orchestration in a background thread, emitting a live
+    brief to /api/progress/{token}. The final result arrives as a {type:'plan_done'}
+    event on the same channel. Returns the token immediately.
+    """
+    token = req.progress_token or json.dumps(id(req))  # client normally supplies one
+    _progress_channel(token)  # ensure the channel exists before work starts
+
+    def worker():
+        emit = lambda text, **ex: progress_emit(token, text, **ex)
+        try:
+            result = _create_plan_impl(req, emit)
+            _progress_channel(token).put({"type": "plan_done", "result": result})
+        except HTTPException as he:
+            _progress_channel(token).put({"type": "error", "text": str(he.detail)})
+        except Exception as exc:
+            log.error(f"[PLAN-START] failed: {exc}\n{traceback.format_exc()}")
+            _progress_channel(token).put({"type": "error", "text": str(exc)})
+
+    _threading.Thread(target=worker, daemon=True).start()
+    return {"token": token}
+
+
+@app.get("/api/progress/{token}")
+async def progress_stream(token: str):
+    """SSE stream of brief lines for a token. Stays open across the plan and content
+    phases; the client closes it when the tab's work is done."""
+    from fastapi.responses import StreamingResponse
+
+    q = _progress_channel(token)
+
+    async def gen():
+        loop = asyncio.get_running_loop()
+        idle = 0
+        try:
+            while True:
+                try:
+                    item = await loop.run_in_executor(None, lambda: q.get(timeout=5))
+                except Exception:
+                    idle += 1
+                    if idle > 120:          # ~10 min with no activity → give up
+                        break
+                    yield f"data: {json.dumps({'type': 'heartbeat'})}\n\n"
+                    continue
+                idle = 0
+                yield f"data: {json.dumps(item)}\n\n"
+        finally:
+            _progress.pop(token, None)
+
+    return StreamingResponse(gen(), media_type="text/event-stream")
 
 
 # ── Step 1b — Generate email content ─────────────────────────────────────────
@@ -537,6 +637,7 @@ async def generate_content(req: GenerateContentRequest):
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
+    token = req.progress_token or ""
     log.info(f"[GEN-CONTENT] session={session_id[:8]}")
     try:
         url_data      = session.meta.get("url_data", {})
@@ -548,6 +649,9 @@ async def generate_content(req: GenerateContentRequest):
 
         log.info(f"[GEN-CONTENT] source_ref={source_email_id!r} "
                  f"ref_name={session.meta.get('content_reference_name', '')!r}")
+
+        progress_emit(token, "✍️ Drafting subject, preview text & email body…"
+                      if not change_request else f"✍️ Revising content: {change_request[:80]}")
 
         loop = asyncio.get_running_loop()
         generated = await loop.run_in_executor(
@@ -570,15 +674,57 @@ async def generate_content(req: GenerateContentRequest):
 
         log.info(f"[GEN-CONTENT] done: subject={generated['subject']!r} "
                  f"html_len={len(generated['html'])} banner={'yes' if generated.get('banner_url') else 'no'}")
+        sections = generated.get("sections", []) or []
+        progress_emit(token, f"📧 Email drafted — {len(sections)} content section(s).", done=True)
         return {
             "session_id":        session_id,
             "generated_subject": generated["subject"],
             "generated_preview": generated["preview_text"],
             "generated_html":    generated["html"],
+            "sections":          sections,
+            "banner_url":        generated.get("banner_url", ""),
         }
     except Exception as exc:
         log.error(f"[GEN-CONTENT] failed: {exc}\n{traceback.format_exc()}")
+        progress_emit(token, f"⚠️ Content drafting failed: {exc}", error=True)
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+# ── Step 1c — Update content sections (user removed/reordered blocks) ─────────
+
+@app.post("/api/update-sections")
+async def update_sections(req: UpdateSectionsRequest):
+    """
+    Persist an edited (trimmed/reordered) sections array and rebuild the preview +
+    body HTML so the clone uses exactly what the user kept. Returns the new preview HTML.
+    """
+    session = session_store.get(req.session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    sections = req.sections or []
+    url_data = session.meta.get("url_data", {})
+    sponsors = session.meta.get("sponsors", []) or []
+
+    try:
+        body_html = agent._sections_to_html(sections, sponsors=sponsors)
+        preview_html = agent._build_email_preview(
+            session.meta.get("banner_url", ""),
+            body_html,
+            url_data.get("url", ""),
+            url_data.get("event_name", ""),
+        )
+    except Exception as exc:
+        log.error(f"[UPDATE-SECTIONS] rebuild failed: {exc}\n{traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    session.meta["sections"]       = sections
+    session.meta["body_html"]      = body_html
+    session.meta["generated_html"] = preview_html
+    session_store.update(session)
+    log.info(f"[UPDATE-SECTIONS] session={req.session_id[:8]} sections={len(sections)}")
+
+    return {"session_id": req.session_id, "generated_html": preview_html, "sections_count": len(sections)}
 
 
 # ── Step 2 — Clone email ─────────────────────────────────────────────────────
@@ -715,8 +861,11 @@ async def update_content(req: ContentRequest):
     session = session_store.get(req.session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-    if session.phase != "cloned":
-        raise HTTPException(status_code=400, detail=f"Expected phase 'cloned', got '{session.phase}'")
+    # Allow content customization both right after clone ('cloned') and after the
+    # AI body was auto-applied during clone ('complete') — the customize step on the
+    # email-only path lets the user replace/add/remove body copy in either case.
+    if session.phase not in ("cloned", "complete"):
+        raise HTTPException(status_code=400, detail=f"Expected phase 'cloned' or 'complete', got '{session.phase}'")
 
     log.info(f"[CONTENT] session={req.session_id[:8]} content_len={len(req.content)}")
     try:

@@ -1,6 +1,11 @@
 const API = "/api";
 let sessionId = null;
 let _generatedHtml = "";
+let _emailId = null;          // HubSpot email id of the cloned draft (set at implementation)
+let _draftUrl = "";           // HubSpot draft URL of the cloned email
+let _masterListId = "";       // master audience list id produced by the build step
+let _sections = [];           // editable email content blocks (removable on Email Preview)
+let _subLists = [];           // lists rolled into the master audience (built or selected)
 
 // ── Step navigation ──────────────────────────────────────────────────────────
 
@@ -47,7 +52,7 @@ function renderMessage(containerId, text) {
   if (!el) return;
   el.innerHTML = `
     <div class="claude-message">
-      <div class="claude-label">🤖 Claude</div>
+      <div class="claude-label">📋 Campaign Builder</div>
       ${markdownToHtml(text)}
     </div>`;
   el.classList.remove("hidden");
@@ -58,7 +63,7 @@ function appendMessage(containerId, text) {
   if (!el) return;
   const div = document.createElement("div");
   div.className = "claude-message";
-  div.innerHTML = `<div class="claude-label">🤖 Claude</div>${markdownToHtml(text)}`;
+  div.innerHTML = `<div class="claude-label">📋 Campaign Builder</div>${markdownToHtml(text)}`;
   el.appendChild(div);
   el.classList.remove("hidden");
 }
@@ -171,6 +176,90 @@ const STAGE_ICONS = {
   "FOLLOW-UP": "💌",
 };
 
+// ── Live brief helpers (real-time backend narration) ─────────────────────────
+let _briefES = null;
+
+function _newToken() {
+  return "tok-" + Math.random().toString(36).slice(2) + Date.now().toString(36);
+}
+function resetBrief() {
+  const log = document.getElementById("brief-log");
+  if (log) log.innerHTML = "";
+  const card = document.getElementById("brief-card");
+  if (card) card.classList.remove("hidden");
+}
+function appendBrief(text) {
+  const log = document.getElementById("brief-log");
+  if (!log) return;
+  const line = document.createElement("div");
+  line.className = "brief-line";
+  line.textContent = text;
+  log.appendChild(line);
+  log.scrollTop = log.scrollHeight;
+}
+function setBriefStatus(state) {
+  const el = document.getElementById("brief-status");
+  if (!el) return;
+  if (state === "running") { el.textContent = "● live"; el.style.color = "var(--blue)"; }
+  else if (state === "done") { el.textContent = "✓ done"; el.style.color = "#16a34a"; }
+  else if (state === "error") { el.textContent = "⚠ error"; el.style.color = "#dc2626"; }
+}
+function closeBriefStream() { if (_briefES) { try { _briefES.close(); } catch (_) {} _briefES = null; } }
+
+function openBriefStream(token, { onPlanDone } = {}) {
+  closeBriefStream();
+  _briefES = new EventSource(`${API}/progress/${encodeURIComponent(token)}`);
+  _briefES.onmessage = (e) => {
+    let m; try { m = JSON.parse(e.data); } catch { return; }
+    if (m.type === "heartbeat") return;
+    if (m.type === "brief") {
+      appendBrief(m.text);
+      if (m.error) setBriefStatus("error");
+    } else if (m.type === "plan_done") {
+      if (onPlanDone) onPlanDone(m.result);
+    } else if (m.type === "error") {
+      appendBrief("⚠️ " + (m.text || "error"));
+      setBriefStatus("error");
+    }
+  };
+  _briefES.onerror = () => { /* EventSource auto-reconnects; ignore transient drops */ };
+}
+
+function renderStageBadge(stage) {
+  const badge = document.getElementById("stage-badge");
+  if (!badge) return;
+  if (stage && stage.name && stage.name !== "Unknown") {
+    badge.style.background = FUNNEL_COLORS[stage.funnel] || "#6b7280";
+    const iconEl = document.getElementById("stage-icon");
+    const nameEl = document.getElementById("stage-name-label");
+    const funnelEl = document.getElementById("stage-funnel-label");
+    const daysEl = document.getElementById("stage-days-label");
+    if (iconEl)   iconEl.textContent   = STAGE_ICONS[stage.funnel] || "📅";
+    if (nameEl)   nameEl.textContent   = stage.name;
+    if (funnelEl) funnelEl.textContent = `· ${stage.funnel}`;
+    if (daysEl && stage.days_to_event != null) {
+      const d = stage.days_to_event;
+      daysEl.textContent = d > 0 ? `(${d}d to event)` : d === 0 ? "(today!)" : `(${Math.abs(d)}d post-event)`;
+    }
+    badge.classList.remove("hidden");
+  } else {
+    badge.classList.add("hidden");
+  }
+}
+
+function renderSourceChip(source) {
+  const chip = document.getElementById("source-email-chip");
+  const nameEl = document.getElementById("source-email-name");
+  if (!chip) return;
+  if (source && source.name) {
+    if (nameEl) nameEl.textContent = source.name;
+    chip.style.display = "flex";
+    chip.classList.remove("hidden");
+  } else {
+    chip.style.display = "none";
+  }
+}
+
 async function generatePlan() {
   const url = document.getElementById("event_url").value.trim();
   const extraContext = document.getElementById("extra_context").value.trim();
@@ -185,117 +274,77 @@ async function generatePlan() {
     return;
   }
 
-  setLoading("step1-status", "Claude is researching the event, detecting campaign stage, and generating email content…");
-  document.getElementById("plan-btn").disabled = true;
+  // Immediately advance to Email Preview; the backend work streams in below.
+  clearStatus("step1-status");
+  const token = _newToken();
+  showStep(2);
+  resetBrief();
+  setBriefStatus("running");
+  appendBrief("🚀 Starting campaign brief…");
+  try { renderMessage("plan-message", "_Building your campaign plan…_"); } catch (_) {}
+  try { _setContentLoading(true); } catch (_) {}
 
-  let planSessionId = null;
+  openBriefStream(token, {
+    onPlanDone: (result) => {
+      if (!result) return;
+      sessionId = result.session_id;
+      try { renderMessage("plan-message", result.message); } catch (_) {}
+      try { renderStageBadge(result.stage); } catch (_) {}
+      try { renderSourceChip(result.source_email); } catch (_) {}
+      // Draft the email content next — streams into the same brief, returns sections.
+      generateEmailContent(sessionId, "", token).finally(() => {
+        setBriefStatus("done");
+        closeBriefStream();
+      });
+    },
+  });
 
   try {
-    const resp = await fetch(`${API}/plan`, {
+    const resp = await fetch(`${API}/plan-start`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url, extra_context: extraContext || null, email_type: emailType || null }),
+      body: JSON.stringify({ url, extra_context: extraContext || null, email_type: emailType || null, progress_token: token }),
     });
     const data = await resp.json();
-    if (!resp.ok) throw new Error(data.detail || "Request failed");
-
-    planSessionId = data.session_id;
-    sessionId = planSessionId;
-    clearStatus("step1-status");
-    showStep(2);
-
-    // ── Render plan text (isolated so errors don't block content generation)
-    try { renderMessage("plan-message", data.message); } catch (_) {}
-
-    // ── Stage badge (isolated)
-    try {
-      const badge = document.getElementById("stage-badge");
-      if (badge && data.stage && data.stage.name && data.stage.name !== "Unknown") {
-        const s = data.stage;
-        badge.style.background = FUNNEL_COLORS[s.funnel] || "#6b7280";
-        const iconEl = document.getElementById("stage-icon");
-        const nameEl = document.getElementById("stage-name-label");
-        const funnelEl = document.getElementById("stage-funnel-label");
-        const daysEl = document.getElementById("stage-days-label");
-        if (iconEl)   iconEl.textContent   = STAGE_ICONS[s.funnel] || "📅";
-        if (nameEl)   nameEl.textContent   = s.name;
-        if (funnelEl) funnelEl.textContent = `· ${s.funnel}`;
-        if (daysEl && s.days_to_event != null) {
-          const d = s.days_to_event;
-          daysEl.textContent = d > 0 ? `(${d}d to event)` : d === 0 ? "(today!)" : `(${Math.abs(d)}d post-event)`;
-        }
-        badge.classList.remove("hidden");
-      } else if (badge) {
-        badge.classList.add("hidden");
-      }
-    } catch (_) {}
-
-    // ── Source email chip (isolated)
-    try {
-      const chip = document.getElementById("source-email-chip");
-      const nameEl = document.getElementById("source-email-name");
-      if (chip && data.source_email && data.source_email.name) {
-        if (nameEl) nameEl.textContent = data.source_email.name;
-        chip.style.display = "flex";
-        chip.classList.remove("hidden");
-      } else if (chip) {
-        chip.style.display = "none";
-      }
-    } catch (_) {}
-
-    // ── Set loading state (isolated so it never blocks content generation)
-    try { _setContentLoading(true); } catch (_) {}
-
+    if (!resp.ok) throw new Error(data.detail || "Failed to start campaign brief");
   } catch (err) {
-    if (!planSessionId) {
-      // Plan API call failed — show error on step 1
-      showError("step1-status", err.message);
-    }
-    // If planSessionId is set, plan succeeded but a rendering error occurred —
-    // fall through to finally so content generation still fires
-  } finally {
-    document.getElementById("plan-btn").disabled = false;
-    // Always fire content generation + audience build if the plan API returned a session
-    if (planSessionId) {
-      generateEmailContent(planSessionId);
-      buildAudience(planSessionId);  // auto-start audience build in background
-    }
+    appendBrief("⚠️ " + err.message);
+    setBriefStatus("error");
+    closeBriefStream();
   }
 }
 
 // ── Content generation helpers ───────────────────────────────────────────────
 
 function _setContentLoading(loading) {
-  const approveBtn = document.getElementById("approve-btn");
-  const updateBtn  = document.getElementById("update-btn");
-  const badge      = document.getElementById("content-status-badge");
-  const subjEl     = document.getElementById("subject-display");
-  const prevEl     = document.getElementById("preview-display");
-  const frame      = document.getElementById("email-preview-frame");
+  const audBtn    = document.getElementById("build-audience-btn");
+  const updateBtn = document.getElementById("update-btn");
+  const badge     = document.getElementById("content-status-badge");
+  const subjEl    = document.getElementById("subject-display");
+  const prevEl    = document.getElementById("preview-display");
+  const frame     = document.getElementById("email-preview-frame");
 
   if (loading) {
-    approveBtn.disabled    = true;
-    approveBtn.textContent = "⏳ Generating content…";
+    if (audBtn)    { audBtn.disabled = true; audBtn.textContent = "⏳ Drafting content…"; }
     if (updateBtn) updateBtn.disabled = true;
-    if (badge)  badge.textContent  = "⏳ Generating…";
-    if (subjEl) subjEl.textContent = "⏳ Generating…";
-    if (prevEl) prevEl.textContent = "⏳ Generating…";
+    if (badge)  badge.textContent  = "⏳ Drafting…";
+    if (subjEl) subjEl.textContent = "⏳ Drafting…";
+    if (prevEl) prevEl.textContent = "⏳ Drafting…";
     if (frame)  frame.srcdoc = `<html><body style="margin:48px 40px;font-family:Arial,sans-serif;color:#555;text-align:center">
       <div style="font-size:36px;margin-bottom:14px">⏳</div>
-      <div style="font-size:15px;font-weight:600;margin-bottom:8px">Generating email content…</div>
-      <div style="font-size:13px;color:#888">Claude is using the official LF Events stage template<br>to write a personalised email. Takes ~60 seconds.</div>
+      <div style="font-size:15px;font-weight:600;margin-bottom:8px">Drafting email content…</div>
+      <div style="font-size:13px;color:#888">Using the official LF Events stage template<br>to write a personalised email. Takes ~60 seconds.</div>
     </body></html>`;
   }
 }
 
 function _applyGeneratedContent(data) {
-  const approveBtn = document.getElementById("approve-btn");
+  const audBtn     = document.getElementById("build-audience-btn");
   const updateBtn  = document.getElementById("update-btn");
   const badge      = document.getElementById("content-status-badge");
   const subjEl     = document.getElementById("subject-display");
   const prevEl     = document.getElementById("preview-display");
   const frame      = document.getElementById("email-preview-frame");
-  const sendlistEl = document.getElementById("sendlist-display");
 
   // Fill display elements
   if (data.generated_subject) {
@@ -310,22 +359,21 @@ function _applyGeneratedContent(data) {
   _generatedHtml = data.generated_html || "";
   if (_generatedHtml) frame.srcdoc = _generatedHtml;
 
-  // Update send list display if brand history has one
-  if (data.send_list_name) {
-    sendlistEl.textContent = data.send_list_name;
-  }
+  // Removable content sections
+  _sections = Array.isArray(data.sections) ? data.sections : [];
+  renderSections();
 
-  badge.textContent      = "✅ Ready to approve";
-  badge.style.color      = "#16a34a";
-  approveBtn.disabled    = false;
-  approveBtn.textContent = "✓ Approve & Create Email";
+  badge.textContent = "✅ Ready";
+  badge.style.color = "#16a34a";
+  if (audBtn)    { audBtn.disabled = false; audBtn.textContent = "Build audience →"; }
   if (updateBtn) updateBtn.disabled = false;
 }
 
-async function generateEmailContent(sid, changeRequest = "") {
+async function generateEmailContent(sid, changeRequest = "", token = "") {
   try {
     const body = { session_id: sid };
     if (changeRequest) body.change_request = changeRequest;
+    if (token) body.progress_token = token;
 
     const resp = await fetch(`${API}/generate-content`, {
       method: "POST",
@@ -339,18 +387,17 @@ async function generateEmailContent(sid, changeRequest = "") {
     clearStatus("change-status");
 
   } catch (err) {
-    const frame      = document.getElementById("email-preview-frame");
-    const badge      = document.getElementById("content-status-badge");
-    const approveBtn = document.getElementById("approve-btn");
-    const updateBtn  = document.getElementById("update-btn");
+    const frame     = document.getElementById("email-preview-frame");
+    const badge     = document.getElementById("content-status-badge");
+    const audBtn    = document.getElementById("build-audience-btn");
+    const updateBtn = document.getElementById("update-btn");
 
     frame.srcdoc = `<html><body style="margin:48px 40px;font-family:Arial,sans-serif;color:#c00;font-size:13px">
-      <strong>⚠️ Content generation failed:</strong> ${escapeHtml(err.message)}<br><br>
-      Use the "Request Changes" box to try again, or approve without auto-content.</body></html>`;
-    badge.textContent      = "⚠️ Generation failed";
+      <strong>⚠️ Content drafting failed:</strong> ${escapeHtml(err.message)}<br><br>
+      Use the "Refine Content" box to try again, or continue to audience.</body></html>`;
+    badge.textContent      = "⚠️ Drafting failed";
     badge.style.color      = "#dc2626";
-    approveBtn.disabled    = false;
-    approveBtn.textContent = "✓ Approve & Create Email";
+    if (audBtn)    { audBtn.disabled = false; audBtn.textContent = "Build audience →"; }
     if (updateBtn) updateBtn.disabled = false;
     showError("change-status", err.message);
   }
@@ -364,24 +411,121 @@ async function requestContentChanges() {
   if (!changeText) return;
   if (!sessionId)  return;
 
-  setLoading("change-status", "Claude is updating the content…");
+  const token = _newToken();
+  resetBrief();
+  setBriefStatus("running");
+  appendBrief("🔄 Refining the email content…");
+  setLoading("change-status", "Refining the content…");
   _setContentLoading(true);
 
-  await generateEmailContent(sessionId, changeText);
+  openBriefStream(token, {});
+  await generateEmailContent(sessionId, changeText, token);
+  setBriefStatus("done");
+  closeBriefStream();
   // Keep the change request text so user can iterate
 }
 
-// ── Step 2: Approve plan ─────────────────────────────────────────────────────
+// ── Removable email content sections ──────────────────────────────────────────
 
-async function approvePlan() {
+const _TRASH_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>';
+
+function renderSections() {
+  const wrap = document.getElementById("sections-editor");
+  if (!wrap) return;
+  if (!_sections.length) { wrap.innerHTML = ""; return; }
+
+  wrap.innerHTML = _sections.map((sec, i) => {
+    const isBtn = sec.type === "button";
+    const label = isBtn ? "Button" : "Text block";
+    const body  = isBtn
+      ? `<div class="section-btn-chip">${escapeHtml(sec.text || "Button")}</div>`
+      : `<div class="section-html">${sec.html || ""}</div>`;
+    return `
+      <div class="section-row">
+        <div class="section-meta">
+          <span class="section-tag">${label}</span>
+        </div>
+        <div class="section-body">${body}</div>
+        <button class="section-remove" title="Remove this section" onclick="removeSection(${i})">${_TRASH_SVG}</button>
+      </div>`;
+  }).join("");
+}
+
+async function removeSection(index) {
+  if (index < 0 || index >= _sections.length) return;
+  _sections.splice(index, 1);
+  renderSections();
+  // Rebuild the live preview + persist the trimmed sections for the clone.
+  try {
+    const resp = await fetch(`${API}/update-sections`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: sessionId, sections: _sections }),
+    });
+    const data = await resp.json();
+    if (resp.ok && data.generated_html) {
+      _generatedHtml = data.generated_html;
+      const frame = document.getElementById("email-preview-frame");
+      if (frame) frame.srcdoc = _generatedHtml;
+    }
+  } catch (_) { /* preview will catch up on next change */ }
+}
+
+// ── Step 2 → 3: Build the campaign ───────────────────────────────────────────
+// Submit ONLY clones the email. The send list is attached later:
+//  • audience path  → after the segmented list is built (runAudienceBuild)
+//  • email-only path → immediately if a list was manually picked
+
+// ── Step 2 → 3: advance to Audience Preview (no auto-build) ─────────────────
+function goToAudience() {
+  showStep(3);
+  resetAudienceUI();
+}
+
+// Reset the Audience Preview tab to its initial "choose an option" state.
+function resetAudienceUI() {
+  _masterListId = "";
+  _subLists = [];
+  clearList();
+  const options = document.getElementById("audience-options");
+  if (options) options.style.display = "";
+  const startBuild = document.getElementById("start-build-btn");
+  if (startBuild) startBuild.disabled = false;
+  const ticker = document.getElementById("audience-ticker");
+  if (ticker) { ticker.textContent = ""; ticker.classList.add("hidden"); }
+  const wrap = document.getElementById("audience-sublists-wrap");
+  if (wrap) wrap.classList.add("hidden");
+  const subs = document.getElementById("audience-sublists");
+  if (subs) subs.innerHTML = "";
+  const status = document.getElementById("audience-status");
+  if (status) { status.innerHTML = ""; status.classList.add("hidden"); }
+  const badge = document.getElementById("audience-status-badge");
+  if (badge) { badge.textContent = "— choose how to set the send audience"; badge.style.color = "var(--gray-400)"; }
+  const startImpl = document.getElementById("start-impl-btn");
+  if (startImpl) { startImpl.disabled = true; startImpl.textContent = "Start Implementation →"; }
+}
+
+// Skip audience entirely — create the email only (no send list attached).
+function skipAudience() {
+  _masterListId = "";
+  startImplementation();
+}
+
+// ── Step 3 → 4: Start Implementation — clone the email, then attach the list ──
+async function startImplementation() {
   const subject     = document.getElementById("subject").value.trim();
   const previewText = document.getElementById("preview_text").value.trim();
-  const sendListId  = document.getElementById("send_list_id").value.trim();
 
-  setLoading("step2-status", "Creating email, applying settings and content…");
-  document.getElementById("approve-btn").disabled = true;
+  const startBtn = document.getElementById("start-impl-btn");
+  if (startBtn) { startBtn.disabled = true; startBtn.textContent = "⏳ Implementing…"; }
+
+  showStep(4);
+  const badge = document.getElementById("impl-status-badge");
+  if (badge) { badge.textContent = "Cloning email…"; badge.style.color = "var(--gray-500)"; }
+  setLoading("done-message", "Cloning the email to a HubSpot draft and applying the campaign content…");
 
   try {
+    // Submit = clone the email only. The audience list is attached right after.
     const resp = await fetch(`${API}/clone`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -390,93 +534,49 @@ async function approvePlan() {
         approved: true,
         subject: subject || null,
         preview_text: previewText || null,
-        send_list_id: sendListId || null,
+        send_list_id: null,
       }),
     });
     const data = await resp.json();
     if (!resp.ok) throw new Error(data.detail || "Request failed");
 
-    // ── Explicit, separate step: apply the send-to list to the cloned email ──
-    // Done as its own API call (not inside clone) so the assignment is visible
-    // and any failure is surfaced instead of leaving send-to silently empty.
-    let sendListNote = "";
-    if (sendListId && data.email_id) {
-      setLoading("step2-status", "Applying send-to list to the email…");
+    _emailId  = data.email_id || null;
+    _draftUrl = data.draft_url || "";
+    renderMessage("done-message", data.message);
+    if (_draftUrl) showDraftLink("done-draft-link", _draftUrl);
+
+    // Attach the built master audience list (the "later update" after clone).
+    if (_masterListId && _emailId) {
+      if (badge) badge.textContent = "Attaching audience…";
       try {
         const slResp = await fetch(`${API}/set-send-list`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            session_id: sessionId,
-            email_id: data.email_id,
-            send_list_id: sendListId,
-          }),
+          body: JSON.stringify({ session_id: sessionId, email_id: _emailId, send_list_id: _masterListId }),
         });
         const slData = await slResp.json();
         if (!slResp.ok) throw new Error(slData.detail || "Send list not applied");
-        sendListNote = `\n\n✅ Send-to list applied (List ID ${sendListId}${slData.list_type ? `, ${slData.list_type}` : ""}).`;
+        appendMessage("done-message", `✅ Master audience attached as send list (List ID ${_masterListId}${slData.list_type ? `, ${slData.list_type}` : ""}).`);
+        if (badge) { badge.textContent = "✓ Complete"; badge.style.color = "#166534"; }
       } catch (slErr) {
-        // Don't abort the whole flow — the email is cloned; just warn loudly.
-        sendListNote = `\n\n⚠️ Send-to list NOT applied: ${slErr.message}. Open the email and set it manually, or click Retry.`;
+        appendMessage("done-message", `⚠️ Audience list built (ID ${_masterListId}) but NOT attached: ${slErr.message}. Apply it manually in HubSpot.`);
+        if (badge) { badge.textContent = "⚠ Attach failed"; badge.style.color = "#dc2626"; }
       }
-    } else if (!sendListId) {
-      sendListNote = "\n\n⚠️ No send-to list selected — the email has no recipients yet.";
-    }
-
-    clearStatus("step2-status");
-
-    if (data.content_applied) {
-      // Content was auto-applied — go directly to Done
-      showStep(4);
-      renderMessage("done-message", data.message + sendListNote);
-      if (data.draft_url) showDraftLink("done-draft-link", data.draft_url);
     } else {
-      // No auto-content — show optional override step
-      showStep(3);
-      renderMessage("clone-message", data.message + sendListNote);
-      if (data.draft_url) showDraftLink("clone-draft-link", data.draft_url);
+      appendMessage("done-message", "ℹ️ No audience list attached — set a send list manually in HubSpot.");
+      if (badge) { badge.textContent = "✓ Complete"; badge.style.color = "#166534"; }
     }
   } catch (err) {
-    showError("step2-status", err.message);
-  } finally {
-    document.getElementById("approve-btn").disabled = false;
+    clearStatus("done-message");
+    if (badge) { badge.textContent = "⚠ Failed"; badge.style.color = "#dc2626"; }
+    renderMessage("done-message", `⚠️ Implementation failed: ${escapeHtml(err.message)}`);
+    showStep(3);
+    if (startBtn) { startBtn.disabled = false; startBtn.textContent = "Start Implementation →"; }
   }
 }
 
 function editPlan() {
   showStep(1);
-}
-
-// ── Step 3: Submit content ───────────────────────────────────────────────────
-
-async function submitContent() {
-  const content = document.getElementById("content").value.trim();
-  if (!content) {
-    showError("step3-status", "Please provide email content.");
-    return;
-  }
-
-  setLoading("step3-status", "Processing content and updating email body…");
-  document.getElementById("content-btn").disabled = true;
-
-  try {
-    const resp = await fetch(`${API}/content`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ session_id: sessionId, content }),
-    });
-    const data = await resp.json();
-    if (!resp.ok) throw new Error(data.detail || "Request failed");
-
-    clearStatus("step3-status");
-    showStep(4);
-    renderMessage("done-message", data.message);
-    if (data.draft_url) showDraftLink("done-draft-link", data.draft_url);
-  } catch (err) {
-    showError("step3-status", err.message);
-  } finally {
-    document.getElementById("content-btn").disabled = false;
-  }
 }
 
 // ── Chat (free-form follow-up, available on steps 2-4) ──────────────────────
@@ -488,7 +588,7 @@ async function sendChat(containerId, inputId) {
   input.value = "";
 
   const statusId = containerId + "-status";
-  setLoading(statusId, "Claude is thinking…");
+  setLoading(statusId, "Working on it…");
 
   try {
     const resp = await fetch(`${API}/chat`, {
@@ -517,12 +617,20 @@ function onChatKey(event, containerId, inputId) {
 function startOver() {
   sessionId = null;
   _generatedHtml = "";
+  _emailId = null;
+  _draftUrl = "";
+  _masterListId = "";
+  _sections = [];
+  closeBriefStream();
+  const briefLog = document.getElementById("brief-log");
+  if (briefLog) briefLog.innerHTML = "";
+  const sectionsEd = document.getElementById("sections-editor");
+  if (sectionsEd) sectionsEd.innerHTML = "";
   document.getElementById("event_url").value = "";
   document.getElementById("extra_context").value = "";
   document.getElementById("subject").value = "";
   document.getElementById("preview_text").value = "";
   clearList();
-  document.getElementById("content").value = "";
 
   // Reset stage badge, content displays
   document.getElementById("stage-badge").classList.add("hidden");
@@ -530,14 +638,21 @@ function startOver() {
   if (frame) frame.srcdoc = "";
   const subjEl = document.getElementById("subject-display");
   const prevEl = document.getElementById("preview-display");
-  if (subjEl) subjEl.textContent = "⏳ Generating…";
-  if (prevEl) prevEl.textContent = "⏳ Generating…";
+  if (subjEl) subjEl.textContent = "⏳ Drafting…";
+  if (prevEl) prevEl.textContent = "⏳ Drafting…";
   const badge = document.getElementById("content-status-badge");
-  if (badge) { badge.textContent = "⏳ Generating…"; badge.style.color = ""; }
+  if (badge) { badge.textContent = "⏳ Drafting…"; badge.style.color = ""; }
   const changeInput = document.getElementById("change-request-input");
   if (changeInput) changeInput.value = "";
 
-  ["step1-status","step2-status","step3-status","plan-message","clone-message",
+  // Reset step-2 advance button + step-3 audience UI + implementation badge
+  const audBtn = document.getElementById("build-audience-btn");
+  if (audBtn) { audBtn.disabled = true; audBtn.textContent = "⏳ Drafting content…"; }
+  resetAudienceUI();
+  const implBadge = document.getElementById("impl-status-badge");
+  if (implBadge) { implBadge.textContent = ""; implBadge.style.color = ""; }
+
+  ["step1-status","step2-status","plan-message","clone-message",
    "clone-draft-link","done-message","done-draft-link"].forEach(clearStatus);
   showStep(1);
 }
@@ -574,7 +689,8 @@ async function onListSearch(query) {
 
 function selectList(id, name, size) {
   document.getElementById("send_list_id").value = id;
-  document.getElementById("list-search-input").value = "";
+  const inp = document.getElementById("list-search-input");
+  if (inp) inp.value = "";
   document.getElementById("list-dropdown").classList.add("hidden");
   const sel = document.getElementById("list-selected");
   sel.innerHTML = `
@@ -582,28 +698,100 @@ function selectList(id, name, size) {
     <span style="color:var(--gray-600);font-size:12px">${size ? size.toLocaleString() + " contacts" : ""}</span>
     <span class="list-clear" onclick="clearList()" title="Remove">×</span>`;
   sel.classList.remove("hidden");
+
+  // An existing list becomes the send list directly (attached at implementation).
+  _masterListId = String(id);
+  _subLists = [{ name: name, id: String(id), kind: "selected" }];
+  renderSubLists();
+  const badge = document.getElementById("audience-status-badge");
+  if (badge) { badge.textContent = "✓ Existing list selected"; badge.style.color = "#166534"; }
+  const startImpl = document.getElementById("start-impl-btn");
+  if (startImpl) { startImpl.disabled = false; startImpl.textContent = "Start Implementation →"; }
 }
 
 function clearList() {
-  document.getElementById("send_list_id").value = "";
-  document.getElementById("list-search-input").value = "";
-  document.getElementById("list-selected").classList.add("hidden");
+  const idEl = document.getElementById("send_list_id");
+  if (idEl) idEl.value = "";
+  const inEl = document.getElementById("list-search-input");
+  if (inEl) inEl.value = "";
+  const selEl = document.getElementById("list-selected");
+  if (selEl) selEl.classList.add("hidden");
+  // If the cleared selection was the chosen send list (no build ran), reset it.
+  if (_subLists.length === 1 && _subLists[0].kind === "selected") {
+    _masterListId = "";
+    _subLists = [];
+    renderSubLists();
+    const startImpl = document.getElementById("start-impl-btn");
+    if (startImpl) startImpl.disabled = true;
+    const badge = document.getElementById("audience-status-badge");
+    if (badge) { badge.textContent = "— choose how to set the send audience"; badge.style.color = "var(--gray-400)"; }
+  }
 }
 
-// ── Build Audience Lists (auto-starts with plan; retry button shown on failure) ─
+// ── Sub-lists rolled into the master audience ─────────────────────────────────
 
-async function buildAudience(sid) {
-  const effectiveSid = sid || sessionId;
-  if (!effectiveSid) return;
+const _LIST_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>';
 
-  const badge      = document.getElementById("audience-status-badge");
-  const retryBtn   = document.getElementById("build-audience-retry-btn");
-  const ticker     = document.getElementById("audience-ticker");
-  const statusEl   = document.getElementById("audience-status");
-  const sendlistEl = document.getElementById("sendlist-display");
+function renderSubLists() {
+  const wrap = document.getElementById("audience-sublists-wrap");
+  const box  = document.getElementById("audience-sublists");
+  if (!box) return;
+  if (!_subLists.length) {
+    box.innerHTML = "";
+    if (wrap) wrap.classList.add("hidden");
+    return;
+  }
+  if (wrap) wrap.classList.remove("hidden");
+  box.innerHTML = _subLists.map(s => {
+    const tag = s.kind === "master"   ? '<span class="sublist-tag master">Master</span>'
+              : s.kind === "selected" ? '<span class="sublist-tag selected">Selected</span>'
+              : "";
+    return `<div class="sublist-row">
+      <span class="sublist-ico">${_LIST_SVG}</span>
+      <span class="sublist-name">${escapeHtml(s.name)}</span>
+      <span class="sublist-id">ID ${escapeHtml(s.id)}</span>
+      ${tag}
+    </div>`;
+  }).join("");
+}
 
-  if (badge)    { badge.textContent = "⏳ Building audience lists…"; badge.style.color = "var(--gray-500)"; }
-  if (retryBtn) retryBtn.style.display = "none";
+// Parse "✅ <name> created — ID: <id>" lines from the build log into sub-list rows.
+function _parseSubList(text) {
+  const m = String(text).match(/✅\s*(.+?)\s+created\s*[—\-:]+\s*ID:?\s*(\d{3,})/i);
+  if (!m) return;
+  const name = m[1].trim().replace(/^\[|\]$/g, "");
+  const id   = m[2];
+  if (_subLists.some(s => s.id === id)) return;
+  _subLists.push({ name, id, kind: "created" });
+  renderSubLists();
+}
+
+function _markMaster(id) {
+  id = String(id);
+  let found = false;
+  _subLists.forEach(s => { if (s.id === id) { s.kind = "master"; found = true; } });
+  if (!found) _subLists.push({ name: "Master Audience", id, kind: "master" });
+  renderSubLists();
+}
+
+// ── Step 3: Audience Preview — build the segmented list (attached at implementation) ──
+
+async function runAudienceBuild() {
+  if (!sessionId) return;
+  _masterListId = "";
+  _subLists = [];
+  renderSubLists();
+  clearList();  // drop any previously selected existing list
+
+  const badge     = document.getElementById("audience-status-badge");
+  const buildBtn  = document.getElementById("start-build-btn");
+  const ticker    = document.getElementById("audience-ticker");
+  const statusEl  = document.getElementById("audience-status");
+  const startImpl = document.getElementById("start-impl-btn");
+
+  if (badge)     { badge.textContent = "⏳ Segmenting audience…"; badge.style.color = "var(--gray-500)"; }
+  if (buildBtn)  { buildBtn.disabled = true; }
+  if (startImpl) { startImpl.disabled = true; startImpl.textContent = "⏳ Building audience…"; }
   ticker.textContent = "";
   ticker.classList.remove("hidden");
   statusEl.classList.add("hidden");
@@ -614,7 +802,7 @@ async function buildAudience(sid) {
     const resp = await fetch(`${API}/build-audience`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ session_id: effectiveSid, event_url: "" }),
+      body: JSON.stringify({ session_id: sessionId, event_url: "" }),
     });
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({ detail: resp.statusText }));
@@ -624,13 +812,14 @@ async function buildAudience(sid) {
     jobId = data.job_id;
   } catch (e) {
     ticker.classList.add("hidden");
-    if (badge)    { badge.textContent = "⚠ Build failed — " + escapeHtml(e.message); badge.style.color = "#dc2626"; }
-    if (retryBtn) retryBtn.style.display = "";
+    if (badge)     { badge.textContent = "⚠ Build failed — " + escapeHtml(e.message); badge.style.color = "#dc2626"; }
+    if (buildBtn)  buildBtn.disabled = false;
+    if (startImpl) { startImpl.disabled = true; startImpl.textContent = "Start Implementation →"; }
     return;
   }
 
   // Stream output via SSE
-  const es = new EventSource(`${API}/audience-stream/${jobId}?session_id=${encodeURIComponent(effectiveSid)}`);
+  const es = new EventSource(`${API}/audience-stream/${jobId}?session_id=${encodeURIComponent(sessionId)}`);
 
   es.onmessage = (event) => {
     let msg;
@@ -641,38 +830,40 @@ async function buildAudience(sid) {
     if (msg.type === "output" && msg.text) {
       ticker.textContent += msg.text + "\n";
       ticker.scrollTop = ticker.scrollHeight;
+      _parseSubList(msg.text);  // surface each created list below the log
     }
 
     if (msg.type === "complete") {
       es.close();
-      ticker.classList.add("hidden");  // collapse log when done
+      if (buildBtn) buildBtn.disabled = false;
       const mid = msg.master_list_id;
       if (mid) {
-        // Auto-select as send list
-        selectList(mid, "Master Audience (built)", 0);
-        // Update sendlist display chip
-        if (sendlistEl) sendlistEl.textContent = `Master Audience — List ID ${mid}`;
-        if (badge) { badge.textContent = `✓ Master audience ready (ID ${escapeHtml(mid)}) — auto-selected as send list`; badge.style.color = "#166534"; }
+        _masterListId = String(mid);
+        _markMaster(mid);
+        if (statusEl) {
+          statusEl.classList.remove("hidden");
+          statusEl.innerHTML = `<span style="color:#166534">✅ Master audience ready (List ID ${escapeHtml(mid)}). It is attached to the email when you start implementation.</span>`;
+        }
+        if (badge)     { badge.textContent = `✓ Audience ready (ID ${escapeHtml(mid)})`; badge.style.color = "#166534"; }
+        if (startImpl) { startImpl.disabled = false; startImpl.textContent = "Start Implementation →"; }
       } else {
-        if (badge) { badge.textContent = "⚠ Build finished but list ID not found — select manually"; badge.style.color = "#92400e"; }
-        if (retryBtn) retryBtn.style.display = "";
+        if (badge)     { badge.textContent = "⚠ Build finished but list ID not found — pick an existing list or skip"; badge.style.color = "#92400e"; }
+        if (startImpl) { startImpl.disabled = true; startImpl.textContent = "Start Implementation →"; }
       }
       return;
     }
 
     if (msg.type === "error") {
       es.close();
-      ticker.classList.add("hidden");
-      if (badge) { badge.textContent = `⚠ Build error: ${escapeHtml(msg.text || "unknown")} — click Retry`; badge.style.color = "#dc2626"; }
-      if (retryBtn) retryBtn.style.display = "";
+      if (badge)    { badge.textContent = `⚠ Build error: ${escapeHtml(msg.text || "unknown")}`; badge.style.color = "#dc2626"; }
+      if (buildBtn) buildBtn.disabled = false;
     }
   };
 
   es.onerror = () => {
     es.close();
-    ticker.classList.add("hidden");
-    if (badge) { badge.textContent = "⚠ Stream disconnected — click Retry"; badge.style.color = "#dc2626"; }
-    if (retryBtn) retryBtn.style.display = "";
+    if (badge)    { badge.textContent = "⚠ Stream disconnected — click Build again"; badge.style.color = "#dc2626"; }
+    if (buildBtn) buildBtn.disabled = false;
   };
 }
 
@@ -692,300 +883,10 @@ async function initMode() {
     const data = await resp.json();
     const banner = document.getElementById("mode-banner");
     if (!banner) return;
-    if (data.mode.includes("Claude Code")) {
-      banner.innerHTML = `🤖 Running in <strong>Claude AI Mode</strong> — using Claude Code`;
-      banner.className = "mode-banner mode-claude";
-    } else {
-      banner.innerHTML = `🤖 Running in <strong>Claude AI Mode</strong> — using Anthropic API`;
-      banner.className = "mode-banner mode-claude";
-    }
+    banner.innerHTML = `⚡ <strong>Marketing Automation</strong> — connected to HubSpot`;
+    banner.className = "mode-banner mode-claude";
     banner.classList.remove("hidden");
   } catch (_) {}
 }
 
 document.addEventListener("DOMContentLoaded", () => { showStep(1); initMode(); });
-
-// ════════════════════════════════════════════════════════════════════════════
-// FROM ASANA TASK TAB
-// ════════════════════════════════════════════════════════════════════════════
-
-let _asanaBriefData = null;
-
-// ── Tab switching ─────────────────────────────────────────────────────────────
-
-function switchTab(tab) {
-  const flowEvent = document.getElementById("flow-event");
-  const flowAsana = document.getElementById("flow-asana");
-  const tabEvent  = document.getElementById("tab-event");
-  const tabAsana  = document.getElementById("tab-asana");
-  if (tab === "asana") {
-    flowEvent.classList.add("hidden");
-    flowAsana.classList.remove("hidden");
-    tabEvent.classList.remove("active");
-    tabAsana.classList.add("active");
-  } else {
-    flowAsana.classList.add("hidden");
-    flowEvent.classList.remove("hidden");
-    tabAsana.classList.remove("active");
-    tabEvent.classList.add("active");
-  }
-  window.scrollTo({ top: 0, behavior: "smooth" });
-}
-
-// ── Asana step indicator ─────────────────────────────────────────────────────
-
-function showAsanaStep(n) {
-  document.querySelectorAll(".asana-panel").forEach(p => p.classList.add("hidden"));
-  const panel = document.getElementById(`asana-step-${n}`);
-  if (panel) panel.classList.remove("hidden");
-
-  document.querySelectorAll(".asana-step").forEach((el, i) => {
-    const num = i + 1;
-    el.classList.remove("active", "done");
-    if (num < n) el.classList.add("done");
-    if (num === n) el.classList.add("active");
-  });
-
-  window.scrollTo({ top: 0, behavior: "smooth" });
-}
-
-// ── Step 1: Fetch brief from Asana ───────────────────────────────────────────
-
-async function fetchAsanaBrief() {
-  const url = document.getElementById("asana_task_url").value.trim();
-  if (!url) {
-    showError("asana-step1-status", "Please enter an Asana task URL.");
-    return;
-  }
-  if (!url.includes("asana.com")) {
-    showError("asana-step1-status", "Please enter a valid Asana URL (app.asana.com/...).");
-    return;
-  }
-
-  setLoading("asana-step1-status", "Fetching task, subtasks, and brand history from HubSpot…");
-  document.getElementById("asana-fetch-btn").disabled = true;
-
-  try {
-    const resp = await fetch(`${API}/plan-from-asana`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ asana_url: url }),
-    });
-    const data = await resp.json();
-    if (!resp.ok) throw new Error(data.detail || "Request failed");
-
-    clearStatus("asana-step1-status");
-    _asanaBriefData = data;
-    _renderAsanaBriefForm(data);
-    showAsanaStep(2);
-  } catch (err) {
-    showError("asana-step1-status", err.message);
-  } finally {
-    document.getElementById("asana-fetch-btn").disabled = false;
-  }
-}
-
-function _renderAsanaBriefForm(data) {
-  // Form fields
-  document.getElementById("ab-email-name").value    = data.email_name    || "";
-  document.getElementById("ab-from-name").value     = data.from_name     || "";
-  document.getElementById("ab-from-address").value  = data.from_address  || "";
-  document.getElementById("ab-subject").value       = data.subject       || "";
-  document.getElementById("ab-preview").value       = data.preview_text  || "";
-  document.getElementById("ab-clone-base-id").value = data.clone_base_id || "";
-
-  const typeEl = document.getElementById("ab-email-type");
-  if (typeEl && data.email_type) typeEl.value = data.email_type;
-
-  // Clone base name hint
-  const nameHint = document.getElementById("ab-clone-base-name");
-  if (nameHint) {
-    nameHint.textContent = data.clone_base_name
-      ? `Matched: ${data.clone_base_name}`
-      : (data.clone_base_id ? "" : "No match found — enter ID manually");
-  }
-
-  // Suppression IDs
-  document.getElementById("ab-suppression-ids").value = (data.suppression_list_ids || []).join(", ");
-
-  // Send list (pre-filled if found)
-  if (data.send_list_id) {
-    document.getElementById("ab-send-list-id").value = data.send_list_id;
-    const sel = document.getElementById("ab-list-selected");
-    sel.innerHTML = `
-      <span>✓ <strong>Auto-detected list</strong></span>
-      <span style="color:var(--gray-600);font-size:12px">ID: ${escapeHtml(data.send_list_id)}</span>
-      <span class="list-clear" onclick="clearAsanaList()" title="Remove">×</span>`;
-    sel.classList.remove("hidden");
-  } else {
-    clearAsanaList();
-  }
-
-  // Content source indicator
-  const ind = document.getElementById("ab-content-indicator");
-  if (ind) {
-    if (data.doc_html && data.doc_html.length > 0) {
-      ind.innerHTML = `<span class="content-pill content-pill-doc">✅ Google Doc content ready (${data.doc_html.length.toLocaleString()} chars)</span>`;
-    } else if (data.event_url) {
-      ind.innerHTML = `<span class="content-pill content-pill-event">⚠ No Google Doc found — AI will generate from event URL</span>`;
-    } else {
-      ind.innerHTML = `<span class="content-pill content-pill-none">⚠ No content found — body will be empty after staging</span>`;
-    }
-  }
-
-  // Audience instructions
-  const audSection = document.getElementById("ab-audience-section");
-  const audText    = document.getElementById("ab-audience-text");
-  if (data.audience_instructions && audSection && audText) {
-    audText.textContent = data.audience_instructions;
-    audSection.classList.remove("hidden");
-  } else if (audSection) {
-    audSection.classList.add("hidden");
-  }
-
-  // Task chip
-  const chip      = document.getElementById("ab-task-chip");
-  const nameLabel = document.getElementById("ab-task-name-label");
-  const dueLabel  = document.getElementById("ab-due-label");
-  if (chip && nameLabel) {
-    nameLabel.textContent = data.task_name || "";
-    if (dueLabel) dueLabel.textContent = data.due_on ? `Due: ${data.due_on}` : "";
-    chip.classList.remove("hidden");
-  }
-
-  // Warnings
-  const warningsCard = document.getElementById("ab-warnings-card");
-  const warningsList = document.getElementById("ab-warnings-list");
-  if (warningsCard && warningsList) {
-    if (data.warnings && data.warnings.length > 0) {
-      warningsList.innerHTML = data.warnings
-        .map(w => `<div style="margin-bottom:4px">• ${escapeHtml(w)}</div>`)
-        .join("");
-      warningsCard.classList.remove("hidden");
-    } else {
-      warningsCard.classList.add("hidden");
-    }
-  }
-}
-
-// ── Step 2: Stage email from brief ───────────────────────────────────────────
-
-async function stageFromBrief() {
-  const emailName   = document.getElementById("ab-email-name").value.trim();
-  const cloneBaseId = document.getElementById("ab-clone-base-id").value.trim();
-
-  if (!emailName)   { showError("asana-step2-status", "Email Name is required."); return; }
-  if (!cloneBaseId) { showError("asana-step2-status", "Clone Base Email ID is required."); return; }
-
-  const suppressRaw = document.getElementById("ab-suppression-ids").value.trim();
-  const payload = {
-    internal_token:       "",
-    clone_base_id:        cloneBaseId,
-    email_name:           emailName,
-    from_name:            document.getElementById("ab-from-name").value.trim(),
-    from_address:         document.getElementById("ab-from-address").value.trim(),
-    subject:              document.getElementById("ab-subject").value.trim(),
-    preview_text:         document.getElementById("ab-preview").value.trim(),
-    email_type:           document.getElementById("ab-email-type").value,
-    send_list_id:         document.getElementById("ab-send-list-id").value.trim(),
-    suppression_list_ids: suppressRaw ? suppressRaw.split(",").map(s => s.trim()).filter(Boolean) : [],
-    raw_html:             (_asanaBriefData && _asanaBriefData.doc_html) || "",
-    event_url:            "",
-  };
-  // Only pass event_url if no doc HTML
-  if (!payload.raw_html && _asanaBriefData && _asanaBriefData.event_url) {
-    payload.event_url = _asanaBriefData.event_url;
-  }
-
-  setLoading("asana-step2-status", "Staging email — cloning, applying settings, injecting content…");
-  document.getElementById("asana-stage-btn").disabled = true;
-
-  try {
-    const resp = await fetch(`${API}/stage-from-brief`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    const data = await resp.json();
-    if (!resp.ok) throw new Error(data.detail || "Request failed");
-
-    clearStatus("asana-step2-status");
-
-    const sourceMap = { doc: "Google Doc content", ai: "AI-generated content", none: "settings only (no body)" };
-    const srcLabel  = sourceMap[data.content_source] || data.content_source;
-    renderMessage("asana-done-message",
-      `**${escapeHtml(data.email_name)}** staged successfully.\nContent: ${srcLabel}.`);
-    showDraftLink("asana-done-link", data.draft_url);
-    showAsanaStep(3);
-  } catch (err) {
-    showError("asana-step2-status", err.message);
-  } finally {
-    document.getElementById("asana-stage-btn").disabled = false;
-  }
-}
-
-function asanaBack() {
-  showAsanaStep(1);
-}
-
-function asanaStartOver() {
-  _asanaBriefData = null;
-  document.getElementById("asana_task_url").value = "";
-  clearStatus("asana-step1-status");
-  clearStatus("asana-step2-status");
-  clearAsanaList();
-  showAsanaStep(1);
-}
-
-// ── Asana list picker ────────────────────────────────────────────────────────
-
-let _asanaListTimer = null;
-
-async function onAsanaListSearch(query) {
-  const dropdown = document.getElementById("ab-list-dropdown");
-  if (!query || query.length < 2) { dropdown.classList.add("hidden"); return; }
-  clearTimeout(_asanaListTimer);
-  _asanaListTimer = setTimeout(async () => {
-    try {
-      const resp = await fetch(`${API}/lists/search?q=${encodeURIComponent(query)}`);
-      const data = await resp.json();
-      const lists = data.lists || [];
-      dropdown.innerHTML = lists.length
-        ? lists.map(l => `
-            <div class="list-dropdown-item" onclick="selectAsanaList('${l.id}','${escapeHtml(l.name)}',${l.size || 0})">
-              <span>${escapeHtml(l.name)}</span>
-              <span class="list-count">${l.size ? l.size.toLocaleString() + " contacts" : ""}</span>
-            </div>`).join("")
-        : `<div class="list-dropdown-item" style="color:var(--gray-400)">No lists found</div>`;
-      dropdown.classList.remove("hidden");
-    } catch (_) {}
-  }, 300);
-}
-
-function selectAsanaList(id, name, size) {
-  document.getElementById("ab-send-list-id").value = id;
-  document.getElementById("ab-list-search-input").value = "";
-  document.getElementById("ab-list-dropdown").classList.add("hidden");
-  const sel = document.getElementById("ab-list-selected");
-  sel.innerHTML = `
-    <span>✓ <strong>${escapeHtml(name)}</strong></span>
-    <span style="color:var(--gray-600);font-size:12px">${size ? size.toLocaleString() + " contacts" : ""}</span>
-    <span class="list-clear" onclick="clearAsanaList()" title="Remove">×</span>`;
-  sel.classList.remove("hidden");
-}
-
-function clearAsanaList() {
-  document.getElementById("ab-send-list-id").value = "";
-  const input = document.getElementById("ab-list-search-input");
-  if (input) input.value = "";
-  const sel = document.getElementById("ab-list-selected");
-  if (sel) sel.classList.add("hidden");
-}
-
-// Close asana list dropdown on outside click
-document.addEventListener("click", (e) => {
-  if (!e.target.closest("#ab-list-search-input") && !e.target.closest("#ab-list-dropdown")) {
-    const d = document.getElementById("ab-list-dropdown");
-    if (d) d.classList.add("hidden");
-  }
-});
