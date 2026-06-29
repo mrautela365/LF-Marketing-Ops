@@ -792,6 +792,16 @@ def update_email_content(
                 "align": "center",
                 "target": "_blank",
                 "max_width": 600,
+                # Full-bleed hero: disable the image module's DEFAULT wrapper padding.
+                # Without this HubSpot adds ~20px left/right, so a 600px image inside a
+                # 560px padded column overflows by 40px (the "hero going out" bug).
+                "hs_enable_module_padding": False,
+                "hs_wrapper_css": {
+                    "padding-top":    "0px",
+                    "padding-bottom": "0px",
+                    "padding-left":   "0px",
+                    "padding-right":  "0px",
+                },
             },
         }
         sections.append({
