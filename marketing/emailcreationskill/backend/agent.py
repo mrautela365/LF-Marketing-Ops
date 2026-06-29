@@ -723,10 +723,10 @@ def _build_email_preview(banner_url: str, body_html: str,
                          event_url: str = "", event_name: str = "") -> str:
     """Build a standalone preview HTML email for display in the browser iframe."""
     if banner_url:
-        link_open  = ('<a href="' + event_url + '" target="_blank">') if event_url else ""
+        link_open  = ('<a href="' + event_url + '" target="_blank" style="display:block;line-height:0;font-size:0;">') if event_url else ""
         link_close = "</a>" if event_url else ""
         banner_row = (
-            '<tr><td style="background-color:#003366;text-align:center;padding:0;">'
+            '<tr><td style="background-color:#003366;text-align:center;padding:0;line-height:0;font-size:0;">'
             + link_open
             + '<img src="' + banner_url + '" width="600" alt="' + event_name + '"'
             + ' style="display:block;width:100%;max-width:600px;height:auto;">'
@@ -740,6 +740,10 @@ def _build_email_preview(banner_url: str, body_html: str,
         "<!DOCTYPE html><html><head>"
         '<meta charset="UTF-8">'
         '<meta name="viewport" content="width=device-width,initial-scale=1.0">'
+        # Guard: any image (hero, inline body, reference) is capped to the column
+        # width so it can never overflow the preview. Inline styles (system hero,
+        # sponsor logos) still win for their own sizing.
+        "<style>img{max-width:100%;height:auto;} table{max-width:100%;}</style>"
         "</head>"
         '<body style="margin:0;padding:0;background-color:#F4F4F4;font-family:Arial,sans-serif;">'
         '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"'
