@@ -62,8 +62,8 @@ except ImportError:
     _SNOWFLAKE_AVAILABLE = False
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
-_BACKEND      = Path(__file__).parent
-SKILL_DIR     = _BACKEND.parent.parent / "LF-Marketing-Ops" / "marketing" / "hubspot-event-list-builder"
+_BACKEND        = Path(__file__).parent
+SKILL_DIR       = _BACKEND.parent / "skills" / "hubspot-event-list-builder"
 _REFERENCES_DIR = SKILL_DIR / "references"
 
 # ── In-memory job store ────────────────────────────────────────────────────────
@@ -982,10 +982,15 @@ def _cli_run(event_url: str, q: queue.Queue) -> None:
         q.put({"type": "output", "text": f"⚠ Skill directory not found: {SKILL_DIR}"})
 
     prompt = _CLI_PROMPT.format(url=event_url)
+    import sys as _sys
+    popen_kw = {}
+    if _sys.platform == "win32":
+        popen_kw["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
     try:
         proc = subprocess.Popen(
-            [claude_cmd, "-p", prompt, "--dangerously-skip-permissions"],
-            stdin=subprocess.DEVNULL,
+            [claude_cmd, "--print", "--output-format", "stream-json",
+             "--verbose", "--dangerously-skip-permissions"],
+            stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
@@ -993,11 +998,31 @@ def _cli_run(event_url: str, q: queue.Queue) -> None:
             errors="replace",
             bufsize=1,
             cwd=skill_dir,
+            **popen_kw,
         )
+        proc.stdin.write(prompt)
+        proc.stdin.close()
 
         def _reader():
             for line in proc.stdout:
-                q.put({"type": "output", "text": line.rstrip()})
+                line = line.rstrip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                    # extract visible text from stream-json events
+                    etype = event.get("type", "")
+                    if etype == "assistant":
+                        for block in event.get("message", {}).get("content", []):
+                            if block.get("type") == "text":
+                                q.put({"type": "output", "text": block["text"]})
+                    elif etype == "result":
+                        text = event.get("result", "")
+                        if text:
+                            q.put({"type": "output", "text": text})
+                except json.JSONDecodeError:
+                    # plain text line — forward as-is
+                    q.put({"type": "output", "text": line})
 
         reader = threading.Thread(target=_reader, daemon=True)
         reader.start()
@@ -1007,7 +1032,10 @@ def _cli_run(event_url: str, q: queue.Queue) -> None:
             reader.join(timeout=10)
             success = proc.returncode == 0
         except subprocess.TimeoutExpired:
-            proc.kill()
+            if _sys.platform == "win32":
+                subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True)
+            else:
+                proc.kill()
             proc.wait()
             reader.join(timeout=5)
             q.put({"type": "output", "text": f"\n⚠ Timed out after {_CLI_TIMEOUT // 60} min — process killed."})
