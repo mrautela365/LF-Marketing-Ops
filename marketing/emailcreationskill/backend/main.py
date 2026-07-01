@@ -768,20 +768,29 @@ async def clone_email(req: CloneRequest):
             detail="Email was not created in HubSpot — Claude did not call the clone tool. Please try again."
         )
 
-    content_applied = session.meta.get("content_applied", False)
-    session.phase = "complete" if content_applied else "cloned"
-    session.email_id = real_email_id
+    content_applied   = session.meta.get("content_applied", False)
+    validation_passed = session.meta.get("validation_passed", False)
+    validation_issues = session.meta.get("validation_issues", [])
+
+    session.phase     = "complete" if validation_passed else "cloned"
+    session.email_id  = real_email_id
     session.draft_url = f"https://app.hubspot.com/email/{HUBSPOT_PORTAL_ID}/edit/{real_email_id}/settings"
     session_store.update(session)
-    log.info(f"[CLONE] verified email_id={real_email_id} content_applied={content_applied}")
+    log.info(
+        f"[CLONE] verified email_id={real_email_id} "
+        f"content_applied={content_applied} validation_passed={validation_passed} "
+        f"issues={validation_issues}"
+    )
 
     return {
-        "session_id":      req.session_id,
-        "message":         text,
-        "phase":           session.phase,
-        "email_id":        session.email_id,
-        "draft_url":       session.draft_url,
-        "content_applied": content_applied,
+        "session_id":        req.session_id,
+        "message":           text,
+        "phase":             session.phase,
+        "email_id":          session.email_id,
+        "draft_url":         session.draft_url,   # always returned so frontend can show it
+        "content_applied":   content_applied,
+        "validation_passed": validation_passed,
+        "validation_issues": validation_issues,
     }
 
 

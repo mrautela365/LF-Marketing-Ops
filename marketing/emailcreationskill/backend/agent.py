@@ -657,6 +657,9 @@ _STRIP_PATTERNS = [
     # LF address footer
     r'<[^>]+>[^<]*2810 N Church[^<]*</[^>]+>',
     r'<[^>]+>[^<]*Wilmington, Delaware[^<]*</[^>]+>',
+    # "View in browser" header link — HubSpot adds this automatically; never put it in body content
+    r'<[^>]+>[^<]*[Vv]iew (?:this )?(?:email )?in (?:your )?[Bb]rowser[^<]*</[^>]+>',
+    r'<a[^>]*>[^<]*[Vv]iew in [Bb]rowser[^<]*</a>',
 ]
 _STRIP_RE = _re.compile("|".join(_STRIP_PATTERNS), _re.IGNORECASE)
 
@@ -689,33 +692,38 @@ def _sections_to_html(sections: list, btn_color: str = "#04c0da",
                 f'text-decoration:none;font-family:Arial,sans-serif;">{text}</a>'
                 f'</td></tr></table></div>'
             )
-    if sponsors:
-        _logo  = [s for s in sponsors if isinstance(s, dict) and s.get("logo_url")]
-        _names = [s for s in sponsors if isinstance(s, dict) and not s.get("logo_url") and s.get("name")]
-        if _logo or _names:
-            parts.append(
-                '<div style="padding:10px 40px;">'
-                '<hr style="border:none;border-top:1px solid #eee;margin:10px 0;">'
-                '</div>'
-                '<p style="font-weight:bold;text-align:center;font-size:18px;'
-                'padding:0 40px;margin:0 0 10px;">Thank You to Our Sponsors!</p>'
-            )
-        if _logo:
-            imgs = "".join(
-                f'<td style="padding:8px 16px;text-align:center;">'
+    _logo_sponsors = [s for s in (sponsors or []) if isinstance(s, dict) and s.get("logo_url")]
+    _tier1 = _logo_sponsors[:5]   # top tier — up to 5, larger
+    _tier2 = _logo_sponsors[5:8]  # next tier — up to 3, smaller
+    if _tier1:
+        parts.append(
+            '<div style="padding:10px 40px;">'
+            '<hr style="border:none;border-top:1px solid #eee;margin:10px 0;">'
+            '</div>'
+            '<p style="font-weight:bold;text-align:center;font-size:18px;'
+            'padding:0 40px;margin:0 0 10px;">Thank You to Our Sponsors!</p>'
+        )
+        imgs1 = "".join(
+            f'<td style="padding:8px 16px;text-align:center;">'
+            f'<img src="{s["logo_url"]}" alt="{s.get("name","Sponsor")}" '
+            f'height="60" style="max-width:180px;height:60px;object-fit:contain;"></td>'
+            for s in _tier1
+        )
+        parts.append(
+            f'<table cellpadding="0" cellspacing="0" border="0" style="margin:0 auto;">'
+            f'<tr>{imgs1}</tr></table>'
+        )
+        if _tier2:
+            imgs2 = "".join(
+                f'<td style="padding:6px 12px;text-align:center;">'
                 f'<img src="{s["logo_url"]}" alt="{s.get("name","Sponsor")}" '
-                f'height="60" style="max-width:180px;height:60px;object-fit:contain;"></td>'
-                for s in _logo
+                f'height="45" style="max-width:140px;height:45px;object-fit:contain;"></td>'
+                for s in _tier2
             )
             parts.append(
-                f'<table cellpadding="0" cellspacing="0" border="0" style="margin:0 auto;">'
-                f'<tr>{imgs}</tr></table>'
+                f'<table cellpadding="0" cellspacing="0" border="0" style="margin:4px auto 0;">'
+                f'<tr>{imgs2}</tr></table>'
             )
-        if _names:
-            names_html = " &nbsp;|&nbsp; ".join(
-                f'<strong>{s.get("name","")}</strong>' for s in _names
-            )
-            parts.append(f'<p style="text-align:center;font-size:14px;padding:0 40px;">{names_html}</p>')
     return "\n".join(parts)
 
 
@@ -850,7 +858,7 @@ def generate_email_content(
     logo_img      = event_details.get("logo_url", "")
     speakers      = event_details.get("speakers", [])
     topics        = event_details.get("topics", [])
-    sponsors      = event_details.get("sponsors", [])[:5]
+    sponsors      = event_details.get("sponsors", [])[:8]
     reg           = event_details.get("registration") or {}
 
     stage_name         = stage_info.get("name", "")
@@ -871,17 +879,19 @@ def generate_email_content(
         logo_img = _upload_img(logo_img) or logo_img
     banner_url = hero_img
 
-    # Upload sponsor logos to HubSpot CDN so they render reliably in email clients
+    # Upload sponsor logos to HubSpot CDN.
+    # Only keep sponsors whose logo successfully uploaded — text-only sponsors are excluded.
     uploaded_sponsors = []
     for sp in sponsors:
         if isinstance(sp, dict):
             raw_logo = sp.get("logo_url", "")
-            cdn_logo = (_upload_img(raw_logo) or raw_logo) if raw_logo else ""
-            uploaded_sponsors.append({"name": sp.get("name", ""), "logo_url": cdn_logo})
-        else:
-            uploaded_sponsors.append({"name": str(sp), "logo_url": ""})
+            if not raw_logo:
+                continue  # no logo URL at all — skip
+            cdn_logo = _upload_img(raw_logo) or raw_logo
+            if cdn_logo:
+                uploaded_sponsors.append({"name": sp.get("name", ""), "logo_url": cdn_logo})
     sponsors = uploaded_sponsors
-    _log.info(f"[GEN_EMAIL] sponsors uploaded: {len([s for s in sponsors if s['logo_url']])}/{len(sponsors)}")
+    _log.info(f"[GEN_EMAIL] sponsors with logos: {len(sponsors)} (text-only sponsors excluded)")
 
     # Build supplementary context lines
     reg_lines = []
@@ -1481,7 +1491,57 @@ def clone_turn(session, subject=None, preview_text=None, send_list_id=None) -> t
         except Exception as e:
             _log.warning(f"[CLONE] Content apply exception: {e}")
 
-    # Step 4: Apply send list LAST — after all content patches so nothing can
+    # Step 4: Validate the staged email content before surfacing the URL.
+    # Re-fetch from HubSpot and verify widgets, footer, and body sections are present.
+    # On failure, retry the content patch once before giving up.
+    validation_passed = False
+    validation_issues: list = []
+    if content_applied:
+        try:
+            val = hubspot_tools.validate_staged_email(
+                new_email_id,
+                expect_banner=bool(banner_url),
+                expect_sections=max(1, len([s for s in content_sections if s.get("type") == "rich_text"])) if content_sections else 1,
+            )
+            validation_passed = val.get("valid", False)
+            validation_issues = val.get("issues", [])
+            _log.info(f"[CLONE] validation={'PASS' if validation_passed else 'FAIL'} "
+                      f"summary={val.get('summary')} issues={validation_issues}")
+
+            if not validation_passed:
+                # Retry content patch once
+                _log.info("[CLONE] Retrying content patch after validation failure…")
+                try:
+                    retry_result = hubspot_tools.update_email_content(
+                        new_email_id,
+                        html_content=body_html if not content_sections else "",
+                        banner_url=banner_url,
+                        event_url=event_url,
+                        content_sections=content_sections or None,
+                        sponsors=sponsors_list or None,
+                    )
+                    if "error" not in retry_result:
+                        val2 = hubspot_tools.validate_staged_email(
+                            new_email_id,
+                            expect_banner=bool(banner_url),
+                            expect_sections=max(1, len([s for s in content_sections if s.get("type") == "rich_text"])) if content_sections else 1,
+                        )
+                        validation_passed = val2.get("valid", False)
+                        validation_issues = val2.get("issues", [])
+                        _log.info(f"[CLONE] retry validation={'PASS' if validation_passed else 'FAIL'} "
+                                  f"issues={validation_issues}")
+                    else:
+                        _log.warning(f"[CLONE] Retry patch failed: {retry_result.get('error')}")
+                except Exception as retry_exc:
+                    _log.warning(f"[CLONE] Retry patch exception: {retry_exc}")
+        except Exception as val_exc:
+            _log.warning(f"[CLONE] Validation exception: {val_exc}")
+            validation_passed = False
+            validation_issues = [str(val_exc)]
+    else:
+        validation_issues = ["Content was not applied to the email"]
+
+    # Step 5: Apply send list LAST — after all content patches so nothing can
     # overwrite the `to` field.  Uses set_email_send_list() which looks up the
     # list's processingType and uses the correct contactLists vs contactIlsLists
     # sub-field; mixing them in a single PATCH causes HubSpot to silently reject
@@ -1493,24 +1553,33 @@ def clone_turn(session, subject=None, preview_text=None, send_list_id=None) -> t
         except Exception as exc:
             _log.warning(f"[CLONE] set_email_send_list exception: {exc}")
 
-    # Store flag so main.py can include it in the response
-    session.meta["content_applied"] = content_applied
+    # Store flags so main.py can gate the draft URL
+    session.meta["content_applied"]   = content_applied
+    session.meta["validation_passed"]  = validation_passed
+    session.meta["validation_issues"]  = validation_issues
 
-    if content_applied:
+    if validation_passed:
         text = (
-            f"Email staged successfully with AI-generated content!\n\n"
+            f"Email staged and validated successfully!\n\n"
             f"**Email Name:** {email_name}\n"
             f"**Subject:** {effective_subject}\n"
             f"**Preview Text:** {effective_preview_text}\n"
             f"**Draft URL:** {draft_url}\n\n"
-            "The email body has been populated with AI-generated content. "
-            "Review it in HubSpot and make any edits before scheduling."
+            "All content sections, banner, and footer were confirmed in HubSpot. "
+            "Review it and schedule when ready."
+        )
+    elif content_applied:
+        issues_str = "\n".join(f"- {i}" for i in validation_issues)
+        text = (
+            f"Email was created but validation found issues:\n\n"
+            f"**Email Name:** {email_name}\n\n"
+            f"Issues detected:\n{issues_str}\n\n"
+            "A retry was attempted. Please check the email in HubSpot and verify the content manually."
         )
     else:
         text = (
             f"Email staged successfully!\n\n"
-            f"**Email Name:** {email_name}\n"
-            f"**Draft URL:** {draft_url}\n\n"
+            f"**Email Name:** {email_name}\n\n"
             "Please provide the email content (Google Doc URL, raw HTML, or plain text) "
             "and I'll update the email body."
         )
