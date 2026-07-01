@@ -289,7 +289,7 @@ def scrape_event_full(url: str) -> dict:
             "logo_url": logo_url,
             "speakers": speakers[:8],
             "topics": topics[:6],
-            "sponsors": sponsors[:5],
+            "sponsors": sponsors[:8],
             "registration": reg_details,
         }
 

@@ -3,6 +3,7 @@ HubSpot API functions exposed as Claude tools.
 All functions return dicts that Claude can reason about.
 """
 import json
+import logging
 import re
 import requests
 from config import HUBSPOT_ACCESS_TOKEN, HUBSPOT_PORTAL_ID
@@ -28,7 +29,12 @@ def _post(path: str, payload: dict) -> dict:
 
 
 def _patch(path: str, payload: dict) -> dict:
+    import logging as _logging
     resp = requests.patch(f"https://api.hubapi.com{path}", headers=_headers(), json=payload)
+    if not resp.ok:
+        _logging.getLogger("email-staging").error(
+            f"[HS PATCH] {path} → HTTP {resp.status_code}: {resp.text[:500]}"
+        )
     resp.raise_for_status()
     return resp.json()
 
@@ -643,6 +649,16 @@ def get_email_content_text(email_id: str) -> dict:
                         # ── Rich text ────────────────────────────────────────
                         html = body.get("html", "")
                         if html and html.strip():
+                            # Skip HubSpot system widgets that appear in reference emails
+                            # but must never be replicated in generated content.
+                            _lower = html.lower()
+                            if any(p in _lower for p in (
+                                "view in browser", "view this email in", "view email in browser",
+                                "unsubscribe", "subscription center",
+                                "2810 n church", "wilmington, delaware",
+                                "this email was sent by",
+                            )):
+                                continue
                             html_parts.append(html)
                             sections_out.append({"type": "rich_text", "html": html})
                             continue
@@ -774,27 +790,42 @@ def update_email_content(
         "breakpointStyles": {"default": {"backgroundType": "CONTENT"}},
     }
 
-    # Banner image — uses HubSpot's dedicated image module so it is NEVER stripped
+    def _col_widths(n: int) -> list:
+        """Return column widths that sum to exactly 12 for HubSpot's grid."""
+        if n <= 0:
+            return []
+        base = 12 // n
+        rem  = 12 % n
+        # Distribute remainder across the first `rem` columns
+        return [base + (1 if i < rem else 0) for i in range(n)]
+
+    def _make_section(section_id: str, col_defs: list) -> dict:
+        """Build a section dict. col_defs: list of (col_id, widget_key, width)."""
+        return {
+            "id":      section_id,
+            "columns": [
+                {"id": cid, "widgets": [wkey], "width": w}
+                for cid, wkey, w in col_defs
+            ],
+            "style": _section_style,
+        }
+
+    # Banner image — uses the same custom image module (1367093) as real LF emails.
+    # Structure reverse-engineered from published emails (e.g. 215778339847).
     if banner_url:
         BANNER = "staging_banner"
         widgets[BANNER] = {
-            "type": "module",
+            "type":      "module",
+            "module_id": 1367093,
             "body": {
-                "path": "@hubspot/image",
-                "schema_version": 2,
+                "module_id":              1367093,
                 "img": {
-                    "src": banner_url,
-                    "alt": "Email Banner",
+                    "src":   banner_url,
+                    "alt":   "Email Banner",
                     "width": 600,
-                    "loading": "lazy",
                 },
-                "href": event_url or "",
-                "align": "center",
-                "target": "_blank",
-                "max_width": 600,
-                # Full-bleed hero: disable the image module's DEFAULT wrapper padding.
-                # Without this HubSpot adds ~20px left/right, so a 600px image inside a
-                # 560px padded column overflows by 40px (the "hero going out" bug).
+                "link":              event_url or "",
+                "stretch_on_mobile": True,
                 "hs_enable_module_padding": False,
                 "hs_wrapper_css": {
                     "padding-top":    "0px",
@@ -807,8 +838,16 @@ def update_email_content(
         sections.append({
             "id":      "section-staging-banner",
             "columns": [{"id": "col-banner-0", "widgets": [BANNER], "width": 12}],
-            "path":    None,
-            "style":   _section_style,
+            "style": {
+                "backgroundImageType": "REPEAT",
+                "backgroundType":      "CONTENT",
+                "breakpointStyles": {
+                    "default": {"backgroundImageType": "REPEAT", "backgroundType": "CONTENT"},
+                    "mobile":  {},
+                },
+                "paddingBottom": "0px",
+                "paddingTop":    "0px",
+            },
         })
         log.info(f"[CONTENT] banner widget added: {banner_url!r}")
 
@@ -836,8 +875,7 @@ def update_email_content(
                 sections.append({
                     "id":      f"section-sec-{_idx}",
                     "columns": [{"id": f"col-sec-{_idx}-0", "widgets": [_wid], "width": 12}],
-                    "path":    None,
-                    "style":   _section_style,
+                            "style":   _section_style,
                 })
             elif _stype == "button":
                 _btn_color = _sec.get("color") or "#04c0da"
@@ -872,12 +910,18 @@ def update_email_content(
                 sections.append({
                     "id":      f"section-btn-{_idx}",
                     "columns": [{"id": f"col-btn-{_idx}-0", "widgets": [_wid], "width": 12}],
-                    "path":    None,
-                    "style":   _section_style,
+                            "style":   _section_style,
                 })
 
-        # Sponsors as native @hubspot/image modules (visible in DnD editor)
-        if sponsors:
+        # Sponsors as native @hubspot/image modules — only logo sponsors, two tiers.
+        # Tier 1: first 5 (larger, height 60) — top billing sponsors
+        # Tier 2: next 3 (smaller, height 45) — secondary sponsors
+        # Text-only sponsors (no logo_url) are excluded entirely.
+        _logo_sp = [s for s in sponsors if isinstance(s, dict) and s.get("logo_url")]
+        _tier1   = _logo_sp[:5]
+        _tier2   = _logo_sp[5:8]
+
+        if _tier1:
             _SPON_HDR = "staging_sponsor_header"
             widgets[_SPON_HDR] = {
                 "type": "module",
@@ -897,74 +941,76 @@ def update_email_content(
             sections.append({
                 "id":      "section-sponsor-header",
                 "columns": [{"id": "col-sph-0", "widgets": [_SPON_HDR], "width": 12}],
-                "path":    None,
+                    "style":   _section_style,
+            })
+
+            # Tier 1 row — larger logos, widths must sum to 12
+            _t1_widths = _col_widths(len(_tier1))
+            _cols1 = []
+            for _j, _sp in enumerate(_tier1):
+                _wid = f"staging_sponsor_t1_{_j}"
+                widgets[_wid] = {
+                    "type": "module",
+                    "body": {
+                        "module_id": 1367093,
+                        "img": {
+                            "alt":     _sp.get("name", "Sponsor"),
+                            "height":  60,
+                            "loading": "disabled",
+                            "src":     _sp["logo_url"],
+                            "width":   180,
+                        },
+                        "link": "",
+                        "hs_enable_module_padding": True,
+                        "hs_wrapper_css": {
+                            "padding-bottom": "15px",
+                            "padding-left":   "15px",
+                            "padding-right":  "15px",
+                            "padding-top":    "15px",
+                        },
+                    },
+                }
+                _cols1.append({"id": f"col-sp-t1-{_j}", "widgets": [_wid], "width": _t1_widths[_j]})
+            sections.append({
+                "id":      "section-sponsor-tier1",
+                "columns": _cols1,
                 "style":   _section_style,
             })
 
-            _logo_sp = [s for s in sponsors if isinstance(s, dict) and s.get("logo_url")]
-            _name_sp = [s for s in sponsors if isinstance(s, dict) and not s.get("logo_url") and s.get("name")]
-
-            if _logo_sp:
-                _n     = len(_logo_sp)
-                _col_w = max(2, 12 // _n)
-                _cols  = []
-                for _j, _sp in enumerate(_logo_sp):
-                    _img_wid = f"staging_sponsor_img_{_j}"
-                    widgets[_img_wid] = {
+            # Tier 2 row — smaller logos, widths must sum to 12
+            if _tier2:
+                _t2_widths = _col_widths(len(_tier2))
+                _cols2 = []
+                for _j, _sp in enumerate(_tier2):
+                    _wid = f"staging_sponsor_t2_{_j}"
+                    widgets[_wid] = {
                         "type": "module",
                         "body": {
                             "module_id": 1367093,
                             "img": {
                                 "alt":     _sp.get("name", "Sponsor"),
-                                "height":  60,
+                                "height":  45,
                                 "loading": "disabled",
                                 "src":     _sp["logo_url"],
-                                "width":   180,
+                                "width":   140,
                             },
                             "link": "",
                             "hs_enable_module_padding": True,
                             "hs_wrapper_css": {
-                                "padding-bottom": "20px",
-                                "padding-left":   "20px",
-                                "padding-right":  "20px",
-                                "padding-top":    "20px",
+                                "padding-bottom": "10px",
+                                "padding-left":   "12px",
+                                "padding-right":  "12px",
+                                "padding-top":    "10px",
                             },
                         },
                     }
-                    _cols.append({"id": f"col-sp-{_j}", "widgets": [_img_wid], "width": _col_w})
+                    _cols2.append({"id": f"col-sp-t2-{_j}", "widgets": [_wid], "width": _t2_widths[_j]})
                 sections.append({
-                    "id":      "section-sponsor-row",
-                    "columns": _cols,
-                    "path":    None,
+                    "id":      "section-sponsor-tier2",
+                    "columns": _cols2,
                     "style":   _section_style,
                 })
 
-            if _name_sp:
-                _names_html = " &nbsp;|&nbsp; ".join(
-                    f'<strong>{s.get("name", "")}</strong>' for s in _name_sp
-                )
-                _SPON_NAMES = "staging_sponsor_names"
-                widgets[_SPON_NAMES] = {
-                    "type": "module",
-                    "body": {
-                        "path":      "@hubspot/rich_text",
-                        "module_id": 1155639,
-                        "html":      f'<p style="text-align:center;font-size:14px;">{_names_html}</p>',
-                        "hs_enable_module_padding": True,
-                        "hs_wrapper_css": {
-                            "padding-bottom": "10px",
-                            "padding-left":   "20px",
-                            "padding-right":  "20px",
-                            "padding-top":    "10px",
-                        },
-                    },
-                }
-                sections.append({
-                    "id":      "section-sponsor-names",
-                    "columns": [{"id": "col-spn-0", "widgets": [_SPON_NAMES], "width": 12}],
-                    "path":    None,
-                    "style":   _section_style,
-                })
     else:
         # Fallback: monolithic rich_text (used when no structured sections available)
         BODY = "staging_body"
@@ -979,7 +1025,6 @@ def update_email_content(
         sections.append({
             "id":      "section-staging-body",
             "columns": [{"id": "col-body-0", "widgets": [BODY], "width": 12}],
-            "path":    None,
             "style":   _section_style,
         })
 
@@ -1011,7 +1056,6 @@ def update_email_content(
     sections.append({
         "id":      "section-footer-divider",
         "columns": [{"id": "col-footer-div-0", "widgets": [FOOTER_DIV], "width": 12}],
-        "path":    None,
         "style":   _section_style,
     })
 
@@ -1030,7 +1074,6 @@ def update_email_content(
     sections.append({
         "id":      "section-footer-follow-header",
         "columns": [{"id": "col-footer-fhdr-0", "widgets": [FOOTER_FOLLOW_HDR], "width": 12}],
-        "path":    None,
         "style":   _section_style,
     })
 
@@ -1079,7 +1122,6 @@ def update_email_content(
     sections.append({
         "id":      "section-footer-social",
         "columns": [{"id": "col-footer-soc-0", "widgets": [FOOTER_SOCIAL], "width": 12}],
-        "path":    None,
         "style":   _section_style,
     })
 
@@ -1109,7 +1151,6 @@ def update_email_content(
     sections.append({
         "id":      "section-footer-body",
         "columns": [{"id": "col-footer-body-0", "widgets": [FOOTER_BODY], "width": 12}],
-        "path":    None,
         "style":   _section_style,
     })
 
@@ -1141,7 +1182,6 @@ def update_email_content(
     sections.append({
         "id":      "section-footer-hs",
         "columns": [{"id": "col-footer-hs-0", "widgets": [FOOTER_HS], "width": 12}],
-        "path":    None,
         "style":   _section_style,
     })
 
@@ -1150,29 +1190,178 @@ def update_email_content(
 
     flex_areas: dict = {
         flex_area_name: {
-            "boxFirstElementIndex": None,
-            "boxLastElementIndex":  None,
             "boxed":                False,
             "isSingleColumnFullWidth": False,
             "sections": sections,
         }
     }
 
+    # Always force Start_from_scratch so HubSpot honours our free flexAreas.
+    # Custom brand templates restrict which slots can be patched via API; using
+    # Start_from_scratch gives us full DnD control and avoids silent reverts.
     new_content: dict = {
-        "templatePath": template_path,
+        "templatePath": "@hubspot/email/dnd/Start_from_scratch.html",
         "widgets":      widgets,
         "flexAreas":    flex_areas,
     }
     if style_settings:
         new_content["styleSettings"] = style_settings
 
-    _patch(f"/marketing/v3/emails/{email_id}", {"content": new_content})
+    patch_resp = _patch(f"/marketing/v3/emails/{email_id}", {"content": new_content})
+    log.info(f"[CONTENT] PATCH resp keys={list((patch_resp or {}).get('content', {}).keys())}")
+
+    # Verify HubSpot actually persisted our widgets (not a silent revert)
+    verify = _get(f"/marketing/v3/emails/{email_id}")
+    saved_flex = (verify.get("content") or {}).get("flexAreas") or {}
+    saved_area = saved_flex.get(flex_area_name) or {}
+    saved_sections = saved_area.get("sections") or []
+    saved_widget_keys = set()
+    for sec in saved_sections:
+        for col in sec.get("columns") or []:
+            saved_widget_keys.update(col.get("widgets") or [])
+
+    our_widget_keys = set(widgets.keys()) - {"preview_text"}
+    overlap = our_widget_keys & saved_widget_keys
+    if our_widget_keys and not overlap:
+        log.warning(
+            f"[CONTENT] verification FAILED — our widgets {sorted(our_widget_keys)} "
+            f"not found in saved email. HubSpot may have silently reverted the patch. "
+            f"saved_widget_keys={sorted(saved_widget_keys)}"
+        )
+        return {
+            "error": (
+                "HubSpot accepted the PATCH but did not save our widgets. "
+                "The email template may not support dynamic flex areas. "
+                f"Expected widgets: {sorted(our_widget_keys)[:3]}, "
+                f"found: {sorted(saved_widget_keys)[:3]}"
+            )
+        }
+    log.info(f"[CONTENT] verified OK — {len(overlap)}/{len(our_widget_keys)} widgets confirmed in HubSpot")
+
     if content_sections:
         method = f"structured({len(content_sections)} sections, {len(sponsors or [])} sponsors)"
     else:
         method = "image+rich_text" if banner_url else "rich_text_only"
     log.info(f"[CONTENT] patched OK method={method!r} widgets={len(sections)}")
     return {"success": True, "email_id": email_id, "method": method}
+
+
+# ── Post-update email validator ──────────────────────────────────────────────
+
+def validate_staged_email(
+    email_id: str,
+    expect_banner: bool = False,
+    expect_sections: int = 1,
+) -> dict:
+    """
+    Re-fetch the staged email from HubSpot and verify the content was actually saved.
+
+    Checks:
+      - Subject and from address are set
+      - flexAreas contain at least `expect_sections` rich_text or button widgets
+      - Banner widget present if expect_banner is True
+      - Footer widgets (divider, social, HS footer) are present
+      - No "View in browser" or unsubscribe text leaked into body sections
+      - No empty rich_text sections (blank HTML)
+
+    Returns:
+      {"valid": True, "issues": [], "summary": "..."} on success
+      {"valid": False, "issues": [...], "summary": "..."} on failure
+    """
+    import re as _re
+    log = logging.getLogger("email-staging")
+    issues: list[str] = []
+
+    try:
+        email   = _get(f"/marketing/v3/emails/{email_id}")
+        content = email.get("content") or {}
+    except Exception as exc:
+        return {"valid": False, "issues": [f"Failed to fetch email: {exc}"], "summary": str(exc)}
+
+    # ── Basic settings ────────────────────────────────────────────────────────
+    subject     = (email.get("subject") or "").strip()
+    from_addr   = (email.get("fromEmail") or (email.get("rssData") or {}).get("fromEmail") or "").strip()
+    if not subject:
+        issues.append("Subject line is empty")
+    if not from_addr:
+        issues.append("From address is missing")
+
+    # ── Widget inventory ──────────────────────────────────────────────────────
+    top_widgets = content.get("widgets") or {}
+    flex_areas  = content.get("flexAreas") or {}
+
+    # Collect all widget keys referenced in flexAreas (in section order)
+    referenced: list[str] = []
+    for area in flex_areas.values():
+        for sec in (area.get("sections") or []):
+            for col in (sec.get("columns") or []):
+                referenced.extend(w for w in (col.get("widgets") or []) if isinstance(w, str))
+
+    if not referenced:
+        issues.append("flexAreas contain no widget references — content was not saved")
+        return {"valid": False, "issues": issues, "summary": "; ".join(issues)}
+
+    # ── Banner check ──────────────────────────────────────────────────────────
+    if expect_banner:
+        banner_wids = [
+            w for w in referenced
+            if w in top_widgets
+            and (top_widgets[w].get("body") or {}).get("img")
+        ]
+        if not banner_wids:
+            issues.append("Banner image widget is missing from email")
+
+    # ── Body content checks ───────────────────────────────────────────────────
+    rich_text_count = 0
+    _system_phrases = (
+        "view in browser", "view this email", "unsubscribe",
+        "subscription center", "2810 n church", "wilmington, delaware",
+    )
+    for wid in referenced:
+        body = (top_widgets.get(wid) or {}).get("body") or {}
+        html = body.get("html", "")
+        if not html:
+            continue
+        lower = html.lower()
+        for phrase in _system_phrases:
+            if phrase in lower:
+                issues.append(f'Widget "{wid}" contains system text: "{phrase}"')
+                break
+        stripped = _re.sub(r"<[^>]+>", "", html).strip()
+        if stripped:
+            rich_text_count += 1
+
+    if rich_text_count < expect_sections:
+        issues.append(
+            f"Expected at least {expect_sections} content section(s) with text, "
+            f"found {rich_text_count}"
+        )
+
+    # ── Footer checks ─────────────────────────────────────────────────────────
+    widget_paths = {
+        w: (top_widgets.get(w) or {}).get("body", {}).get("path", "")
+        for w in referenced
+        if w in top_widgets
+    }
+    has_hs_footer  = any("email_footer"  in p for p in widget_paths.values())
+    has_social     = any("follow_me"     in p for p in widget_paths.values())
+    has_divider    = any("email_divider" in p for p in widget_paths.values())
+    if not has_hs_footer:
+        issues.append("HubSpot email footer module (unsubscribe/address) is missing")
+    if not has_social:
+        issues.append("Social icons footer is missing")
+    if not has_divider:
+        issues.append("Footer divider is missing")
+
+    valid   = len(issues) == 0
+    summary = (
+        f"Validated {len(referenced)} widget(s): "
+        f"{rich_text_count} text section(s), "
+        f"banner={'yes' if expect_banner else 'n/a'}, "
+        f"footer={'ok' if has_hs_footer else 'MISSING'}"
+    )
+    log.info(f"[VALIDATE] email={email_id} valid={valid} issues={issues} {summary}")
+    return {"valid": valid, "issues": issues, "summary": summary}
 
 
 # ── Image upload helper ──────────────────────────────────────────────────────

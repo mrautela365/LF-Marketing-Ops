@@ -330,11 +330,7 @@ def expand_location_words(location: str) -> set:
 
 
 _STOP = {"the", "a", "an", "and", "or", "of", "in", "at", "for", "on", "to", "is",
-         "lf", "linux", "foundation", "events",
-         # Generic directional/regional terms — appear in too many event names
-         # to be meaningful discriminators on their own
-         "north", "south", "east", "west", "central",
-         "america", "europe", "asia", "africa"}
+         "lf", "linux", "foundation", "events"}
 
 
 def _keywords(text: str) -> set:
