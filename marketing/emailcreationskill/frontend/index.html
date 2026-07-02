@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LF Email Automation — Campaign Builder</title>
+  <link rel="stylesheet" href="/static/style.css?v=7" />
+</head>
+<body>
+
+<header>
+  <span class="logo">LF Email Automation</span>
+  <span class="subtitle">Campaign Builder</span>
+</header>
+
+<div id="mode-banner" class="hidden"></div>
+<div class="container">
+
+  <!-- ══════════════════════════════════════════════════════════════════
+       Campaign flow: From Event / Campaign URL
+       ══════════════════════════════════════════════════════════════════ -->
+  <div id="flow-event">
+
+    <!-- Steps indicator -->
+    <div class="steps">
+      <div class="step active" id="s1">
+        <div class="step-circle"><svg viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/></svg></div>
+        <span class="step-label">Planning</span>
+      </div>
+      <div class="step" id="s2">
+        <div class="step-circle"><svg viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/><polyline points="22,6 12,13 2,6"/></svg></div>
+        <span class="step-label">Email Preview</span>
+      </div>
+      <div class="step" id="s3">
+        <div class="step-circle"><svg viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></div>
+        <span class="step-label">Audience Preview</span>
+      </div>
+      <div class="step" id="s4">
+        <div class="step-circle"><svg viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22,2 15,22 11,13 2,9 22,2"/></svg></div>
+        <span class="step-label">Implementation</span>
+      </div>
+    </div>
+
+    <!-- ── Step 1: Configure ── -->
+    <div id="step-1" class="step-panel">
+      <div class="card">
+        <div class="card-title">Start Campaign Request</div>
+        <div class="card-desc">
+          Paste the event or campaign URL. The Campaign Builder researches the page, identifies the brand,
+          pulls HubSpot send history, and drafts a complete campaign plan for you to review.
+        </div>
+
+        <div class="field">
+          <label>Event / Campaign URL <span style="color:red">*</span></label>
+          <input id="event_url" type="url"
+            placeholder="https://events.linuxfoundation.org/kubecon-europe/" />
+          <div class="hint">Any LF event, registration, or campaign page URL.</div>
+        </div>
+
+        <div class="field-row">
+          <div class="field">
+            <label>Email Type <span style="color:var(--gray-400)">(optional)</span></label>
+            <select id="email_type">
+              <option value="">— Auto-detect —</option>
+              <option value="Newsletter">Newsletter</option>
+              <option value="Invite">Invite</option>
+              <option value="Reminder">Reminder</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Additional context <span style="color:var(--gray-400)">(optional)</span></label>
+            <input id="extra_context" type="text"
+              placeholder="e.g. EMEA audience, transactional" />
+          </div>
+        </div>
+
+        <div id="step1-status" class="hidden"></div>
+
+        <div class="btn-row">
+          <button class="btn btn-primary" id="plan-btn" onclick="generatePlan()">
+            Campaign brief →
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Step 2: Review Everything ── -->
+    <div id="step-2" class="step-panel hidden">
+
+      <!-- Live brief — real-time narration of backend AI activity -->
+      <div class="card" id="brief-card">
+        <div style="display:flex;align-items:center;gap:8px">
+          <div class="card-title" style="margin:0;font-size:15px">Live brief</div>
+          <span id="brief-status" style="font-size:12px;font-weight:600;color:var(--gray-400)"></span>
+        </div>
+        <div class="card-desc" style="margin:6px 0 0">What the automation engine is doing right now.</div>
+        <div id="brief-log"></div>
+      </div>
+
+      <!-- Plan summary card -->
+      <div class="card">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap">
+          <div class="card-title" style="margin:0">Campaign Plan</div>
+          <div id="stage-badge" class="hidden" style="
+            display:inline-flex;align-items:center;gap:6px;
+            padding:4px 12px;border-radius:20px;font-size:12px;font-weight:600;color:#fff;
+          ">
+            <span id="stage-icon">📅</span>
+            <span id="stage-name-label"></span>
+            <span id="stage-funnel-label" style="opacity:0.8;font-weight:400"></span>
+            <span id="stage-days-label" style="opacity:0.7;font-weight:400;font-size:11px"></span>
+          </div>
+        </div>
+
+        <div id="plan-message" class="hidden"></div>
+
+        <div id="source-email-chip" class="hidden" style="
+          display:flex;align-items:center;gap:6px;margin-top:8px;padding:7px 11px;
+          background:var(--yellow-light);border:1px solid #fcd34d;border-radius:6px;
+          font-size:12px;color:var(--gray-700);
+        ">
+          <span style="font-size:14px">📋</span>
+          <span><strong>Cloning from:</strong> <span id="source-email-name" style="font-family:monospace"></span></span>
+        </div>
+      </div>
+
+      <!-- Generated content card — shows subject, preview, and full email HTML -->
+      <div class="card" id="content-review-card">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+          <div class="card-title" style="margin:0">Email Content</div>
+          <span id="content-status-badge" style="font-size:12px;color:var(--gray-500)">⏳ Drafting…</span>
+        </div>
+
+        <!-- Subject display -->
+        <div style="margin-bottom:12px">
+          <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--gray-500);margin-bottom:4px">Subject Line</div>
+          <div id="subject-display" style="
+            padding:10px 14px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;
+            font-size:15px;font-weight:500;color:var(--gray-800);min-height:38px;
+          ">⏳ Drafting…</div>
+        </div>
+
+        <!-- Preview text display -->
+        <div style="margin-bottom:16px">
+          <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--gray-500);margin-bottom:4px">Preview Text</div>
+          <div id="preview-display" style="
+            padding:10px 14px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;
+            font-size:13px;color:var(--gray-600);min-height:34px;
+          ">⏳ Drafting…</div>
+        </div>
+
+        <!-- Editable content sections — each can be removed -->
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+          <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--gray-500)">Content Sections</div>
+          <span style="font-size:11px;color:var(--gray-400)">Remove any block with the 🗑 icon</span>
+        </div>
+        <div id="sections-editor"></div>
+
+        <!-- Full email preview iframe -->
+        <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--gray-500);margin:16px 0 6px">Full Email Preview</div>
+        <iframe id="email-preview-frame"
+          sandbox="allow-same-origin allow-popups"
+          style="width:100%;height:500px;border:1px solid #e2e8f0;border-radius:6px;background:#f9fafb"
+        ></iframe>
+      </div>
+
+      <!-- Refine content card -->
+      <div class="card">
+        <div class="card-title" style="font-size:15px">Refine Content</div>
+        <div class="card-desc">
+          Add or remove copy, tighten the subject, or adjust the tone. The Campaign Builder regenerates the content above.
+        </div>
+        <div class="field">
+          <textarea id="change-request-input" rows="3"
+            placeholder="e.g. Make the subject more urgent and shorter&#10;Add more detail about the Mumbai venue&#10;Change the tone to be more casual"></textarea>
+        </div>
+        <div id="change-status" class="hidden"></div>
+        <div class="btn-row">
+          <button class="btn btn-outline" id="update-btn" onclick="requestContentChanges()">
+            🔄 Refine Content
+          </button>
+        </div>
+      </div>
+
+      <!-- Advance to audience -->
+      <div class="card">
+        <div id="step2-status" class="hidden"></div>
+        <div class="btn-row">
+          <button class="btn btn-primary" id="build-audience-btn" onclick="goToAudience()" disabled>
+            ⏳ Drafting content…
+          </button>
+          <button class="btn btn-outline" onclick="editPlan()">← Edit Inputs</button>
+        </div>
+      </div>
+
+      <!-- Hidden inputs used by startImplementation() -->
+      <input type="hidden" id="subject" />
+      <input type="hidden" id="preview_text" />
+    </div>
+
+    <!-- ── Step 3: Audience Preview ── -->
+    <div id="step-3" class="step-panel hidden">
+      <div class="card">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px">
+          <div class="card-title" style="margin:0">Audience Preview</div>
+          <span id="audience-status-badge" style="font-size:12px;color:var(--gray-400)">— choose how to set the send audience</span>
+        </div>
+        <div class="card-desc">
+          Build a segmented audience list from event activity, reuse an existing HubSpot list,
+          or skip and create the email only. Your choice is attached as the email’s send list at implementation.
+        </div>
+
+        <!-- Choice buttons -->
+        <div class="btn-row" id="audience-options" style="margin-top:2px">
+          <button class="btn btn-primary" id="start-build-btn" onclick="runAudienceBuild()">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+            Build audience list
+          </button>
+          <button class="btn btn-outline" id="skip-audience-btn" onclick="skipAudience()">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><line x1="5.6" y1="5.6" x2="18.4" y2="18.4"/></svg>
+            Skip — create email only
+          </button>
+        </div>
+
+        <!-- Use an existing list -->
+        <div style="margin-top:20px">
+          <div class="section-subhead">Or use an existing list</div>
+          <div class="list-picker">
+            <input id="list-search-input" type="text" placeholder="Search HubSpot lists…"
+              oninput="onListSearch(this.value)" autocomplete="off" />
+            <div id="list-dropdown" class="list-dropdown hidden"></div>
+          </div>
+          <div id="list-selected" class="hidden"></div>
+          <input type="hidden" id="send_list_id" />
+        </div>
+
+        <!-- Live build log -->
+        <div id="audience-ticker" class="hidden" style="margin-top:18px;padding:10px;background:#0f172a;border-radius:8px;font-family:ui-monospace,monospace;font-size:11px;color:#e2e8f0;max-height:340px;overflow-y:auto;white-space:pre-wrap;word-break:break-all"></div>
+
+        <!-- Lists rolled up into the master audience -->
+        <div id="audience-sublists-wrap" class="hidden" style="margin-top:14px">
+          <div class="section-subhead">Lists in the master audience</div>
+          <div id="audience-sublists"></div>
+        </div>
+
+        <div id="audience-status" class="hidden" style="margin-top:10px;font-size:13px"></div>
+
+        <div class="btn-row">
+          <button class="btn btn-success" id="start-impl-btn" onclick="startImplementation()" disabled>
+            Start Implementation →
+          </button>
+          <button class="btn btn-outline" onclick="showStep(2)">← Back to Email Preview</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Step 4: Implementation ── -->
+    <div id="step-4" class="step-panel hidden">
+      <div class="card">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px">
+          <div class="card-title" style="margin:0">Implementation</div>
+          <span id="impl-status-badge" style="font-size:12px;color:var(--gray-400)"></span>
+        </div>
+        <div class="card-desc">
+          Cloning the email to a HubSpot draft and attaching the master audience as its send list.
+          The email is saved as a DRAFT — review it in HubSpot before scheduling.
+        </div>
+
+        <div id="done-message" class="hidden"></div>
+        <div id="done-draft-link" class="hidden"></div>
+
+        <!-- Final chat -->
+        <div style="margin-top:12px">
+          <div style="font-size:12px;color:var(--gray-600);margin-bottom:6px">
+            Any final questions about this campaign?
+          </div>
+          <div class="chat-row">
+            <input id="done-chat-input" type="text" placeholder="e.g. How many suppression lists were applied?"
+              onkeydown="onChatKey(event,'done-message','done-chat-input')" />
+            <button class="btn btn-outline" onclick="sendChat('done-message','done-chat-input')">Ask</button>
+          </div>
+          <div id="done-message-status" class="hidden" style="margin-top:8px"></div>
+        </div>
+
+        <div class="btn-row">
+          <button class="btn btn-outline" onclick="startOver()">+ Stage Another Email</button>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /flow-event -->
+</div><!-- /container -->
+
+<script src="/static/app.js?v=6"></script>
+</body>
+</html>

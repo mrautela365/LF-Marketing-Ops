@@ -1,0 +1,21 @@
+# Keep secrets, VCS, caches, and docs out of the build context / image layers.
+.env
+.env.*
+!.env.example
+*.pem
+*service-account*.json
+
+.git/
+.gitignore
+.dockerignore
+.claude/
+
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+backend/python
+*.log
+*.md
