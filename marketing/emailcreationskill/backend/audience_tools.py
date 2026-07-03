@@ -29,6 +29,7 @@ from config import (
     LITELLM_BASE_URL, LITELLM_API_KEY,
     HUBSPOT_ACCESS_TOKEN, HUBSPOT_PORTAL_ID,
 )
+import llm_gateway   # ALL AI calls route through this single deterministic gateway
 
 log = logging.getLogger("audience-builder")
 log.setLevel(logging.INFO)
@@ -357,6 +358,32 @@ TOOL_HANDLERS: dict = {
     "snowflake_query":             lambda i: snowflake_query(i["sql"]),
     "read_reference_file":         lambda i: read_reference_file(i["filename"]),
 }
+
+# ── Gateway integration ───────────────────────────────────────────────────────
+# The same 9 tools in the canonical (Anthropic) format the gateway consumes, plus a
+# single executor adapter. This is the ONLY audience AI path now — SDK and CLI both
+# run through llm_gateway.run_agent, so results are deterministic and identical in
+# shape regardless of backend (and the CLI path no longer needs Chrome/HubSpot MCP —
+# it drives these Python tools directly).
+AUDIENCE_TOOLS = llm_gateway.openai_tools_to_anthropic(TOOL_DEFS_OPENAI)
+
+AUDIENCE_SYSTEM = (
+    "You are an LF email audience-list building agent operating in EXECUTION MODE. "
+    "Use the provided tools directly to query Snowflake and create HubSpot lists. "
+    "Do NOT ask for confirmation and do NOT enter plan mode. Narrate each step."
+)
+
+
+def _audience_execute(name: str, tool_input: dict) -> str:
+    """Execute one audience tool by name. Returns a JSON-encoded result string."""
+    handler = TOOL_HANDLERS.get(name)
+    if not handler:
+        return json.dumps({"error": f"Unknown tool: {name}"})
+    try:
+        return json.dumps(handler(tool_input))
+    except Exception as exc:
+        log.warning(f"[AGENT] tool {name} raised: {exc}")
+        return json.dumps({"error": str(exc)})
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -779,273 +806,50 @@ Then print:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# OpenAI / LiteLLM agent loop (ported verbatim from lf-event-studio/app/agent.py)
+# Agent loop — routed entirely through llm_gateway (single deterministic path).
+# The former OpenAI-SDK client + model helpers were removed; the gateway owns the
+# backend choice, model, and sampling params.
 # ══════════════════════════════════════════════════════════════════════════════
 
-_openai_client = None
-
-
-def _get_openai_client():
-    global _openai_client
-    if _openai_client is None:
-        from openai import OpenAI
-        base_url = LITELLM_BASE_URL.rstrip("/")
-        api_key  = LITELLM_API_KEY
-        if not base_url or not api_key:
-            raise RuntimeError("LITELLM_BASE_URL and LITELLM_API_KEY must be set in .env")
-        log.info(f"[AGENT] Creating OpenAI client → base_url={base_url!r}")
-        _openai_client = OpenAI(base_url=base_url, api_key=api_key)
-    return _openai_client
-
-
-def _litellm_model() -> str:
-    return os.environ.get("LITELLM_MODEL", os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-6"))
-
-
 def _run_agent(prompt: str, q: queue.Queue) -> None:
-    """Agentic loop using the OpenAI-compatible LiteLLM proxy (matches lf-event-studio)."""
-    model = _litellm_model()
-    turn = 0
-    log.info(f"[AGENT] starting — model={model!r} prompt_len={len(prompt)}")
+    """Agentic loop via the unified deterministic gateway. Streams output to `q`
+    in the same shape the SSE consumer expects; identical behavior on any backend."""
+    log.info(f"[AGENT] starting — backend={llm_gateway.backend_name()!r} "
+             f"model={llm_gateway.resolve_model()!r} prompt_len={len(prompt)}")
+
+    def _on_event(ev: dict) -> None:
+        etype = ev.get("type")
+        if etype == "output":
+            for line in (ev.get("text") or "").splitlines():
+                if line.strip():
+                    q.put({"type": "output", "text": line})
+        elif etype == "tool":
+            q.put({"type": "output",
+                   "text": f"🔧 {ev.get('name')}({json.dumps(ev.get('input', {}))[:100]})"})
+        elif etype == "tool_result":
+            q.put({"type": "output", "text": f"   ↳ {str(ev.get('text',''))[:200]}"})
+
     try:
-        client = _get_openai_client()
-        messages = [{"role": "user", "content": prompt}]
-
-        while True:
-            turn += 1
-            collected_text  = ""
-            pending_text    = ""
-            collected_calls = {}
-            finish_reason   = None
-
-            log.info(f"[AGENT] turn {turn} — calling LiteLLM (messages={len(messages)})")
-            stream = client.chat.completions.create(
-                model=model,
-                messages=messages,
-                tools=TOOL_DEFS_OPENAI,
-                tool_choice="auto",
-                stream=True,
-                max_tokens=32000,
-            )
-            log.info(f"[AGENT] turn {turn} — stream open, reading chunks")
-
-            for chunk in stream:
-                if not chunk.choices:
-                    continue
-                choice = chunk.choices[0]
-                finish_reason = choice.finish_reason or finish_reason
-                delta = choice.delta
-
-                if delta.content:
-                    collected_text += delta.content
-                    pending_text   += delta.content
-                    while "\n" in pending_text:
-                        line, pending_text = pending_text.split("\n", 1)
-                        if line.strip():
-                            q.put({"type": "output", "text": line})
-
-                if delta.tool_calls:
-                    for tc in delta.tool_calls:
-                        idx = tc.index
-                        if idx not in collected_calls:
-                            collected_calls[idx] = {
-                                "id": "",
-                                "type": "function",
-                                "function": {"name": "", "arguments": ""},
-                            }
-                        if tc.id:
-                            collected_calls[idx]["id"] = tc.id
-                        if tc.function:
-                            if tc.function.name:
-                                collected_calls[idx]["function"]["name"] += tc.function.name
-                            if tc.function.arguments:
-                                collected_calls[idx]["function"]["arguments"] += tc.function.arguments
-
-            if pending_text.strip():
-                q.put({"type": "output", "text": pending_text})
-
-            log.info(f"[AGENT] turn {turn} — finish_reason={finish_reason!r} text_len={len(collected_text)} tool_calls={len(collected_calls)}")
-
-            if finish_reason == "stop":
-                log.info("[AGENT] done (stop)")
-                q.put({"type": "done", "done": True, "success": True})
-                break
-
-            if finish_reason == "tool_calls":
-                tool_call_list = [collected_calls[i] for i in sorted(collected_calls)]
-
-                messages.append({
-                    "role": "assistant",
-                    "content": collected_text or None,
-                    "tool_calls": tool_call_list,
-                })
-
-                for tc in tool_call_list:
-                    name = tc["function"]["name"]
-                    try:
-                        args = json.loads(tc["function"]["arguments"] or "{}")
-                    except json.JSONDecodeError:
-                        args = {}
-
-                    brief = json.dumps(args)[:120]
-                    log.info(f"[AGENT] → tool call: {name}({brief})")
-                    q.put({"type": "output", "text": f"🔧 {name}({json.dumps(args)[:100]})"})
-
-                    handler = TOOL_HANDLERS.get(name)
-                    if handler:
-                        try:
-                            result = handler(args)
-                        except Exception as exc:
-                            log.warning(f"[AGENT] tool {name} raised: {exc}")
-                            result = {"error": str(exc)}
-                    else:
-                        result = {"error": f"Unknown tool: {name}"}
-
-                    result_preview = json.dumps(result)[:200]
-                    log.info(f"[AGENT] ← tool result: {name} → {result_preview}")
-                    q.put({"type": "output", "text": f"   ↳ {result_preview}"})
-
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": tc["id"],
-                        "content": json.dumps(result),
-                    })
-
-            else:
-                log.info(f"[AGENT] done (finish_reason={finish_reason!r})")
-                q.put({"type": "done", "done": True, "success": True})
-                break
-
+        llm_gateway.run_agent(
+            [{"role": "user", "content": prompt}],
+            system=AUDIENCE_SYSTEM,
+            tools=AUDIENCE_TOOLS,
+            execute_tool=_audience_execute,
+            max_tokens=32000,
+            max_steps=40,        # audience builds issue many tool calls (snowflake + N lists)
+            on_event=_on_event,
+        )
+        log.info("[AGENT] done")
+        q.put({"type": "done", "done": True, "success": True})
     except Exception as exc:
         log.error(f"[AGENT] fatal error: {exc}", exc_info=True)
         q.put({"type": "output", "text": f"❌ Agent error: {exc}"})
         q.put({"type": "done", "done": True, "success": False})
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# CLI fallback (used when LITELLM_BASE_URL is not configured)
-# ══════════════════════════════════════════════════════════════════════════════
-
-_CLI_PROMPT = """\
-Build the HubSpot event audience lists for this Linux Foundation event:
-
-{url}
-
-Follow the hubspot-event-list-builder skill instructions in SKILL.md exactly, \
-working through all 6 steps:
-1. Scrape the event page to extract name, edition, brand key, and Snowflake search terms
-2. Query Snowflake for all past editions (excluding the current year)
-3. Look up the brand master list ID from references/brand-master-lists.md
-4. Clone the reference list and build List 1 — All Past Registrants
-5. Build List 2 — Registrants + Web Visitors
-6. Confirm and report both list IDs, names, and filter counts
-
-After all individual lists are created, build one final Master Audience list:
-- Name: "[Event Name] [Year] — Master Audience"
-- Combines ALL lists using OR logic
-
-Narrate what you are doing at every sub-step.
-
-IMPORTANT: At the very end output exactly this line (substitute the real numeric ID):
-MASTER_LIST_ID: <numeric_hubspot_list_id>
-"""
-
-_CLAUDE_CLI: str | None = None
-
-
-def _get_claude_cli() -> str:
-    global _CLAUDE_CLI
-    if _CLAUDE_CLI:
-        return _CLAUDE_CLI
-    found = shutil.which("claude")
-    if found:
-        _CLAUDE_CLI = found
-        return found
-    fallback = r"C:\Users\VinayU\AppData\Roaming\npm\claude.cmd"
-    if os.path.exists(fallback):
-        _CLAUDE_CLI = fallback
-        return fallback
-    raise RuntimeError("claude CLI not found — install with: npm install -g @anthropic-ai/claude-code")
-
-
-def _cli_run(event_url: str, q: queue.Queue) -> None:
-    """Fallback: spawn claude CLI subprocess (uses local Claude Code session auth)."""
-    try:
-        claude_cmd = _get_claude_cli()
-    except RuntimeError as exc:
-        q.put({"type": "output", "text": f"Error: {exc}"})
-        q.put({"type": "done", "done": True, "success": False})
-        return
-
-    skill_dir = str(SKILL_DIR) if SKILL_DIR.is_dir() else None
-    if not skill_dir:
-        q.put({"type": "output", "text": f"⚠ Skill directory not found: {SKILL_DIR}"})
-
-    prompt = _CLI_PROMPT.format(url=event_url)
-    import sys as _sys
-    popen_kw = {}
-    if _sys.platform == "win32":
-        popen_kw["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
-    try:
-        proc = subprocess.Popen(
-            [claude_cmd, "--print", "--output-format", "stream-json",
-             "--verbose", "--dangerously-skip-permissions"],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            bufsize=1,
-            cwd=skill_dir,
-            **popen_kw,
-        )
-        proc.stdin.write(prompt)
-        proc.stdin.close()
-
-        def _reader():
-            for line in proc.stdout:
-                line = line.rstrip()
-                if not line:
-                    continue
-                try:
-                    event = json.loads(line)
-                    # extract visible text from stream-json events
-                    etype = event.get("type", "")
-                    if etype == "assistant":
-                        for block in event.get("message", {}).get("content", []):
-                            if block.get("type") == "text":
-                                q.put({"type": "output", "text": block["text"]})
-                    elif etype == "result":
-                        text = event.get("result", "")
-                        if text:
-                            q.put({"type": "output", "text": text})
-                except json.JSONDecodeError:
-                    # plain text line — forward as-is
-                    q.put({"type": "output", "text": line})
-
-        reader = threading.Thread(target=_reader, daemon=True)
-        reader.start()
-
-        try:
-            proc.wait(timeout=_CLI_TIMEOUT)
-            reader.join(timeout=10)
-            success = proc.returncode == 0
-        except subprocess.TimeoutExpired:
-            if _sys.platform == "win32":
-                subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True)
-            else:
-                proc.kill()
-            proc.wait()
-            reader.join(timeout=5)
-            q.put({"type": "output", "text": f"\n⚠ Timed out after {_CLI_TIMEOUT // 60} min — process killed."})
-            success = False
-
-        q.put({"type": "done", "done": True, "success": success})
-
-    except Exception as exc:
-        q.put({"type": "output", "text": f"Error: {exc}"})
-        q.put({"type": "done", "done": True, "success": False})
+# The former SKILL.md/Chrome CLI fallback (_cli_run) was removed. In CLI mode the
+# gateway now drives the local Python tools (snowflake_query, hubspot_create_list)
+# via the tool protocol — so it needs neither a browser nor the HubSpot MCP.
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1053,23 +857,21 @@ def _cli_run(event_url: str, q: queue.Queue) -> None:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def start_plan_job(event_url: str) -> str:
-    """Phase 1 — start segment planning job. Returns job_id for SSE polling."""
+    """Phase 1 — start segment planning job. Returns job_id for SSE polling.
+    Always routes through the deterministic gateway (SDK or CLI, chosen inside it)."""
     job_id = str(uuid.uuid4())
     q: queue.Queue = queue.Queue()
     _jobs[job_id] = q
-    if LITELLM_BASE_URL and LITELLM_API_KEY:
-        log.info(f"[AUDIENCE] plan job {job_id[:8]} — LiteLLM mode — url={event_url!r}")
-        prompt = PLANNING_PROMPT.format(url=event_url)
-        threading.Thread(target=_run_agent, args=(prompt, q), daemon=True).start()
-    else:
-        log.info(f"[AUDIENCE] plan job {job_id[:8]} — CLI fallback (no LiteLLM) — url={event_url!r}")
-        threading.Thread(target=_cli_run, args=(event_url, q), daemon=True).start()
+    log.info(f"[AUDIENCE] plan job {job_id[:8]} — backend={llm_gateway.backend_name()!r} — url={event_url!r}")
+    prompt = PLANNING_PROMPT.format(url=event_url)
+    threading.Thread(target=_run_agent, args=(prompt, q), daemon=True).start()
     return job_id
 
 
 def start_build_job(event_url: str, plan: str = "", qa: str = "") -> str:
     """
     Start audience list building. Returns job_id for SSE polling.
+    Always routes through the deterministic gateway (SDK or CLI, chosen inside it).
 
     - plan provided  → Phase 2 only (building from existing plan)
     - plan empty     → Phase 1 + Phase 2 chained automatically in one job
@@ -1077,18 +879,16 @@ def start_build_job(event_url: str, plan: str = "", qa: str = "") -> str:
     job_id = str(uuid.uuid4())
     q: queue.Queue = queue.Queue()
     _jobs[job_id] = q
-    if LITELLM_BASE_URL and LITELLM_API_KEY:
-        if plan:
-            log.info(f"[AUDIENCE] build job {job_id[:8]} — Phase 2 only (plan provided, {len(plan)} chars)")
-            qa_section = f"\nUser answers to clarifying questions:\n{qa}\n" if qa else ""
-            prompt = BUILDING_PROMPT.format(url=event_url, plan=plan, qa_section=qa_section)
-            threading.Thread(target=_run_agent, args=(prompt, q), daemon=True).start()
-        else:
-            log.info(f"[AUDIENCE] build job {job_id[:8]} — two-phase (no plan provided) — url={event_url!r}")
-            threading.Thread(target=_run_two_phase, args=(event_url, qa, q), daemon=True).start()
+    if plan:
+        log.info(f"[AUDIENCE] build job {job_id[:8]} — Phase 2 only (plan provided, {len(plan)} chars) "
+                 f"— backend={llm_gateway.backend_name()!r}")
+        qa_section = f"\nUser answers to clarifying questions:\n{qa}\n" if qa else ""
+        prompt = BUILDING_PROMPT.format(url=event_url, plan=plan, qa_section=qa_section)
+        threading.Thread(target=_run_agent, args=(prompt, q), daemon=True).start()
     else:
-        log.info(f"[AUDIENCE] build job {job_id[:8]} — CLI fallback (no LiteLLM) — url={event_url!r}")
-        threading.Thread(target=_cli_run, args=(event_url, q), daemon=True).start()
+        log.info(f"[AUDIENCE] build job {job_id[:8]} — two-phase (no plan provided) — url={event_url!r} "
+                 f"— backend={llm_gateway.backend_name()!r}")
+        threading.Thread(target=_run_two_phase, args=(event_url, qa, q), daemon=True).start()
     return job_id
 
 

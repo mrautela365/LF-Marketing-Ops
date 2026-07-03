@@ -386,6 +386,26 @@ def _create_plan_impl(req: PlanRequest, emit=lambda *a, **k: None):
     log.info(f"[PLAN] Stage: {stage_info['name']!r} ({stage_info['funnel']}, days={stage_info['days_to_event']})")
     emit(f"🎯 Stage: {stage_info.get('name','?')} ({stage_info.get('funnel','')})")
 
+    # ── Deterministic email name (do NOT rely on Claude's prose + regex) ───────
+    # Format: "<YY>Q<N> - <ShortBrand> - <EventName> - <Suffix>"
+    def _build_email_name() -> str:
+        yyq = ""
+        for _ds in (url_data.get("event_dates") or []):
+            _m = _re.match(r"(\d{4})-(\d{2})-(\d{2})", str(_ds))
+            if _m:
+                yyq = f"{int(_m.group(1)) % 100:02d}Q{(int(_m.group(2)) - 1) // 3 + 1}"
+                break
+        _code   = short_brand_name or brand_name or ""
+        _suffix = email_type or stage_info.get("email_type", "") or "Invite"
+        _parts  = [p for p in (_code, event_name, _suffix) if p]
+        _body   = " - ".join(_parts)
+        return f"{yyq} - {_body}" if (yyq and _body) else _body
+
+    _det_name = _build_email_name()
+    if _det_name:
+        session.meta["email_name"] = _det_name
+        log.info(f"[PLAN] email_name (deterministic): {_det_name!r}")
+
     # ── Step B2: Find stage-specific content reference email ──────────────────
     # Look for the most recent sent email whose name contains the stage keyword
     # (e.g. "Last Chance" for a Last Chance stage). This email's actual HTML will
@@ -415,37 +435,47 @@ def _create_plan_impl(req: PlanRequest, emit=lambda *a, **k: None):
         "Reminder":                         ["reminder"],
         "Save the Date":                    ["save the date", "save-the-date"],
     }
-    _stage_ref_id = ""
-    _stage_ref_name = ""
     _stage_keywords = _STAGE_KW_MAP.get(stage_info.get("name", ""), [])
 
     # Re-use `candidates` already fetched for AI selection — it now includes URL-slug results.
     _ref_candidates = candidates
 
+    # Build a RANKED top-3 reference list (best first). The content generator reads
+    # each one's actual body, picks the richest as the structural template, and learns
+    # the house style/tone from all of them.
+    #   1) stage-keyword matches (in candidate/recency order)
+    #   2) then most-recent candidates (fill remaining slots)
+    #   3) then the AI-selected clone source
+    _ranked_refs: list = []   # list of (id, name), de-duplicated, max 3
+
+    def _add_ref(_id, _name):
+        _id = str(_id or "")
+        if _id and _id not in {r[0] for r in _ranked_refs}:
+            _ranked_refs.append((_id, _name or ""))
+
     if _stage_keywords and _ref_candidates:
         for _cand in _ref_candidates:
             _cname = (_cand.get("name") or "").lower()
             if any(_kw in _cname for _kw in _stage_keywords):
-                _stage_ref_id   = str(_cand["id"])
-                _stage_ref_name = _cand.get("name", "")
-                log.info(f"[PLAN] stage-match ref: {_stage_ref_name!r} (keyword in name)")
+                _add_ref(_cand.get("id"), _cand.get("name"))
+            if len(_ranked_refs) >= 3:
                 break
 
-    # Fall back: most-recent candidate for this event (any stage keyword match fails)
-    if not _stage_ref_id and _ref_candidates:
-        _stage_ref_id   = str(_ref_candidates[0]["id"])
-        _stage_ref_name = _ref_candidates[0].get("name", "")
-        log.info(f"[PLAN] stage-match fallback → most recent: {_stage_ref_name!r}")
+    for _cand in _ref_candidates:      # fill remaining slots with most-recent candidates
+        if len(_ranked_refs) >= 3:
+            break
+        _add_ref(_cand.get("id"), _cand.get("name"))
 
-    # Final fall back: AI-selected clone source
-    if not _stage_ref_id:
-        _bh = session.meta.get("brand_history") or {}
-        _stage_ref_id   = str(_bh.get("matched_email_id") or "")
-        _stage_ref_name = _bh.get("matched_email_name", "")
-    if _stage_ref_id:
-        session.meta["content_reference_id"]   = _stage_ref_id
-        session.meta["content_reference_name"] = _stage_ref_name
-        log.info(f"[PLAN] content reference: {_stage_ref_name!r} (id={_stage_ref_id})")
+    _bh = session.meta.get("brand_history") or {}   # final fallback: AI-selected clone source
+    _add_ref(_bh.get("matched_email_id"), _bh.get("matched_email_name"))
+
+    _ranked_refs = _ranked_refs[:3]
+    if _ranked_refs:
+        session.meta["content_reference_ids"]  = [r[0] for r in _ranked_refs]
+        session.meta["content_reference_id"]   = _ranked_refs[0][0]   # primary (compat)
+        session.meta["content_reference_name"] = _ranked_refs[0][1]
+        log.info(f"[PLAN] top-{len(_ranked_refs)} content references: "
+                 + "; ".join(f"{n!r}({i})" for i, n in _ranked_refs))
 
     # Content generation happens separately via /api/generate-content
     # (keeps /api/plan fast; frontend calls it automatically after plan loads)
@@ -532,11 +562,13 @@ def _create_plan_impl(req: PlanRequest, emit=lambda *a, **k: None):
     session.phase = "planning"
     session.plan = {"url": req.url}
 
-    # Parse email name from Claude's plan text (backtick-formatted: `26Q2 - Brand - Event - Suffix`)
-    name_match = _re.search(r"`(2\dQ\d[^`]+)`", text)
-    if name_match:
-        session.meta["email_name"] = name_match.group(1).strip()
-        log.info(f"[PLAN] email_name parsed: {session.meta['email_name']!r}")
+    # Fallback ONLY: if the deterministic name couldn't be built above, try to parse
+    # a backtick-formatted name from Claude's plan text (`26Q2 - Brand - Event - Suffix`).
+    if not session.meta.get("email_name"):
+        name_match = _re.search(r"`(2\dQ\d[^`]+)`", text)
+        if name_match:
+            session.meta["email_name"] = name_match.group(1).strip()
+            log.info(f"[PLAN] email_name parsed from plan text: {session.meta['email_name']!r}")
 
     session_store.update(session)
 
@@ -646,9 +678,10 @@ async def generate_content(req: GenerateContentRequest):
 
         change_request  = req.change_request or ""
         source_email_id = session.meta.get("content_reference_id", "")
+        reference_ids   = session.meta.get("content_reference_ids") or ([source_email_id] if source_email_id else [])
 
-        log.info(f"[GEN-CONTENT] source_ref={source_email_id!r} "
-                 f"ref_name={session.meta.get('content_reference_name', '')!r}")
+        log.info(f"[GEN-CONTENT] refs={reference_ids} "
+                 f"primary_name={session.meta.get('content_reference_name', '')!r}")
 
         progress_emit(token, "✍️ Drafting subject, preview text & email body…"
                       if not change_request else f"✍️ Revising content: {change_request[:80]}")
@@ -660,6 +693,7 @@ async def generate_content(req: GenerateContentRequest):
                 url_data, stage_info, brand_history,
                 change_request=change_request,
                 source_email_id=source_email_id,
+                reference_ids=reference_ids,
             )
         )
 

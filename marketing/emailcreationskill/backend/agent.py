@@ -1,12 +1,11 @@
 """
-Claude agentic loop.
+Email-staging agent — plan / clone / content / chat turns.
 
-Three modes — same interface, same tools:
-  • LiteLLM proxy mode  (LITELLM_BASE_URL + LITELLM_API_KEY set) → Anthropic SDK → LF LiteLLM cluster
-  • Anthropic SDK mode  (ANTHROPIC_API_KEY set)                  → Anthropic SDK → api.anthropic.com
-  • Claude Code mode    (neither key set)                        → claude CLI subprocess
-
-Priority: LiteLLM → Anthropic → Claude Code CLI
+All AI calls in this module go through `llm_gateway`, which owns the backend choice
+(LiteLLM → Anthropic → Claude CLI) and enforces determinism (same model on every
+backend, temperature=0, identical output shape). Do not call the Anthropic SDK or
+the `claude` CLI directly here — add or change AI behavior via the gateway so it
+stays consistent across all three backends.
 """
 import json
 import os
@@ -18,32 +17,7 @@ from datetime import datetime
 from config import ANTHROPIC_API_KEY, CLAUDE_MODEL, LITELLM_BASE_URL, LITELLM_API_KEY
 import hubspot_tools
 import content_tools
-
-import shutil
-
-# ── SDK client factory ────────────────────────────────────────────────────────
-
-def _has_sdk_key() -> bool:
-    """True when an API key is available for direct SDK calls."""
-    return bool(LITELLM_API_KEY or ANTHROPIC_API_KEY)
-
-def _make_client():
-    """Return an Anthropic SDK client pointed at the right endpoint."""
-    import anthropic
-    if LITELLM_BASE_URL and LITELLM_API_KEY:
-        return anthropic.Anthropic(api_key=LITELLM_API_KEY, base_url=LITELLM_BASE_URL)
-    return anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-
-# ── Find the claude CLI — explicit Windows path as fallback ───────────────────
-def _find_claude_cli() -> str:
-    if found := shutil.which("claude"):
-        return found
-    fallback = r"C:\Users\VinayU\AppData\Roaming\npm\claude.cmd"
-    if os.path.exists(fallback):
-        return fallback
-    raise RuntimeError("claude CLI not found. Install with: npm install -g @anthropic-ai/claude-code")
-
-CLAUDE_CLI = os.getenv("CLAUDE_CLI_PATH") or _find_claude_cli()
+import llm_gateway   # ALL AI calls route through this single deterministic gateway
 
 # ── Shared system prompt ─────────────────────────────────────────────────────
 
@@ -290,276 +264,17 @@ def _execute_tool(name: str, inputs: dict, session_email_id: str | None = None) 
     return json.dumps(result)
 
 
-# ── Mode 1: Anthropic SDK (API key available) ─────────────────────────────────
-
-def _sdk_run_turn(messages: list, user_message: str) -> tuple[str, list]:
-    client = _make_client()
-    system = SYSTEM_PROMPT.format(date=datetime.now().strftime("%Y-%m-%d"))
-    messages = messages + [{"role": "user", "content": user_message}]
-
-    while True:
-        response = client.messages.create(
-            model=CLAUDE_MODEL,
-            max_tokens=4096,
-            system=system,
-            tools=TOOLS,
-            messages=messages,
-        )
-        serialized = [b.model_dump() if hasattr(b, "model_dump") else b for b in response.content]
-        messages = messages + [{"role": "assistant", "content": serialized}]
-
-        if response.stop_reason == "end_turn":
-            text = "".join(b.text for b in response.content if hasattr(b, "text"))
-            return text, messages
-
-        tool_results = []
-        for block in response.content:
-            if hasattr(block, "type") and block.type == "tool_use":
-                tool_results.append({
-                    "type": "tool_result",
-                    "tool_use_id": block.id,
-                    "content": _execute_tool(block.name, dict(block.input)),
-                })
-        messages = messages + [{"role": "user", "content": tool_results}]
-
-
-# ── Mode 2: Claude Code SDK (no API key — uses Claude Code's own auth) ────────
-
-_TOOL_INSTRUCTIONS = """
-IMPORTANT: You are operating in EXECUTION MODE. Do NOT enter plan mode. Do NOT ask for approval.
-Execute tool calls immediately and directly.
-
-To call a tool output EXACTLY this on its own line (nothing else on that line):
-  TOOL_CALL: {"name": "<tool>", "input": {<params>}}
-
-Available tools:
-  fetch_url(url)                                          — scrape event URL: event_name, brand_name, location, event_dates
-  search_emails_for_event(brand_name, event_name, location?) — find last sent email for this brand+event, returns all settings
-  lookup_brand_history(brand_name, email_type_hint?)      — fallback: most recent brand email (use search_emails_for_event first)
-  clone_email(source_email_id, clone_name)
-  update_email_settings(email_id, subject?, preview_text?, from_name?, from_address?, suppression_list_ids?, send_list_id?, email_type?)
-  update_email_content(email_id, html_content)
-  fetch_content(content_input)
-  search_hubspot_lists(search_term)
-
-Tool results are returned as:
-  TOOL_RESULT: {<json>}
-
-Rules:
-- Call tools immediately without asking for confirmation
-- Do NOT say "I'll now...", "Let me...", or "I plan to..." — just output the TOOL_CALL line
-- When all tools are done, write your final response to the user
-"""
-
-def _sdk_run_turn_cc(messages: list, user_message: str) -> tuple[str, list]:
-    """
-    Run one turn using the claude CLI via stdin pipe.
-
-    Auth chain: FastAPI → subprocess (stdin) → claude CLI → ~/.claude/ token → Anthropic
-    No ANTHROPIC_API_KEY needed. Avoids all Windows .cmd argument mangling by
-    sending the prompt through stdin instead of as a command-line argument.
-    """
-    system = SYSTEM_PROMPT.format(date=datetime.now().strftime("%Y-%m-%d"))
-
-    # Build conversation history (last 6 messages for context, skip internal __tool_log__ entries)
-    history = ""
-    visible_msgs = [m for m in messages if m.get("role") not in ("__tool_log__",)]
-    for msg in visible_msgs[-6:]:
-        role = "User" if msg.get("role") == "user" else "Assistant"
-        content = msg.get("content", "")
-        if isinstance(content, list):
-            content = json.dumps(content)[:400]
-        history += f"{role}: {content}\n\n"
-
-    # Embed system context in stdin — avoids --system-prompt arg escaping issues
-    prompt = (
-        f"<system>\n{system}\n</system>\n\n"
-        f"{_TOOL_INSTRUCTIONS}\n\n"
-        f"Conversation history:\n{history}"
-        f"User: {user_message}"
-    )
-
-    def _call_claude(stdin_text: str) -> str:
-        """Call claude --print with prompt via stdin. Returns stdout text."""
-        import sys as _sys
-        popen_kw = {}
-        if _sys.platform == "win32":
-            popen_kw["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
-
-        proc = subprocess.Popen(
-            [CLAUDE_CLI, "--print", "--dangerously-skip-permissions"],
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            **popen_kw,
-        )
-        try:
-            stdout_b, stderr_b = proc.communicate(
-                input=stdin_text.encode("utf-8", errors="replace"), timeout=90
-            )
-        except subprocess.TimeoutExpired:
-            if _sys.platform == "win32":
-                subprocess.run(
-                    ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
-                    capture_output=True,
-                )
-            else:
-                proc.kill()
-            try:
-                proc.communicate(timeout=5)
-            except Exception:
-                pass
-            raise RuntimeError("Claude CLI timed out after 90s")
-
-        if proc.returncode != 0:
-            stderr_text = stderr_b.decode("utf-8", errors="replace").strip()
-            stdout_text = stdout_b.decode("utf-8", errors="replace").strip()
-            detail = stderr_text or stdout_text or f"exit code {proc.returncode}"
-            raise RuntimeError(f"Claude CLI error: {detail}")
-        return stdout_b.decode("utf-8", errors="replace").strip()
-
-    # Pull session email ID from conversation history (set during clone step)
-    session_email_id: str | None = _session_email_id
-
-    # Collect tool results so they can be stored in messages and read by later turns
-    collected_tool_results: list[dict] = []
-
-    # Agentic loop — Claude calls tools until it has a final answer
-    max_steps = 8
-    full_response = ""
-    # Track the richest plan content seen across all responses.
-    # Claude sometimes writes the plan table in an intermediate response (before
-    # calling the last tool) and then says "presented above" in the final response.
-    # We use best_plan_response as a fallback when the final response is thin.
-    best_plan_response = ""
-
-    for _ in range(max_steps):
-        response = _call_claude(prompt)
-
-        # Detect a TOOL_CALL line
-        tool_line = next(
-            (line.strip()[len("TOOL_CALL:"):].strip()
-             for line in response.splitlines()
-             if line.strip().startswith("TOOL_CALL:")),
-            None,
-        )
-
-        if tool_line:
-            try:
-                call = json.loads(tool_line)
-                tool_result = _execute_tool(
-                    call["name"],
-                    call.get("input", {}),
-                    session_email_id=session_email_id,
-                )
-                # Store result for later phases to read
-                try:
-                    result_data = json.loads(tool_result)
-                    collected_tool_results.append({
-                        "type": "tool_result",
-                        "tool": call["name"],
-                        "content": tool_result,
-                    })
-                    if "email_id" in result_data:
-                        session_email_id = result_data["email_id"]
-                except Exception:
-                    pass
-            except Exception as e:
-                tool_result = json.dumps({"error": str(e)})
-            prompt += f"\n{response}\nTOOL_RESULT: {tool_result}\n"
-            full_response += response + "\n"
-            # If this intermediate response contains a plan table, remember it
-            non_tool = "\n".join(
-                l for l in response.splitlines() if not l.strip().startswith("TOOL_CALL:")
-            ).strip()
-            if ("##" in non_tool or "|---|" in non_tool) and len(non_tool) > len(best_plan_response):
-                best_plan_response = non_tool
-        else:
-            # Final response — use it if it contains plan content, otherwise fall
-            # back to the richest intermediate response seen (avoids "above" problem)
-            has_plan = "##" in response or "|---|" in response or len(response) > 400
-            if has_plan:
-                full_response = response
-            elif best_plan_response:
-                _log.warning("[CC] Final response is thin ('above' pattern) — using best intermediate plan")
-                full_response = best_plan_response
-            else:
-                full_response = response
-            break
-
-    # Store tool results in messages so subsequent turns (clone, content) can read them
-    # This bridges the gap: Claude Code mode doesn't use structured tool_use blocks,
-    # so we inject the results as a special message that extract_brand_history_from_messages can find.
-    # Strip TOOL_CALL / TOOL_RESULT lines — they are protocol markers, not UX text
-    clean_lines = [
-        l for l in full_response.splitlines()
-        if not l.strip().startswith("TOOL_CALL:") and not l.strip().startswith("TOOL_RESULT:")
-    ]
-    full_response = "\n".join(clean_lines).strip()
-
-    tool_msg = []
-    for tr in collected_tool_results:
-        tool_msg.append({
-            "type": "tool_result",
-            "tool": tr["tool"],
-            "content": tr["content"],
-        })
-
-    updated_messages = messages + [
-        {"role": "user", "content": user_message},
-        {"role": "assistant", "content": full_response},
-    ]
-    if tool_msg:
-        updated_messages.append({"role": "__tool_log__", "content": tool_msg})
-
-    return full_response, updated_messages
+# ── Agentic turns now run through llm_gateway.run_agent (see run_turn below) ──
+# The former _sdk_run_turn (Anthropic SDK loop) and _sdk_run_turn_cc (Claude CLI
+# text-protocol loop) were removed. Both backends are handled identically by the
+# gateway, which pins model + temperature=0 and normalizes the output shape.
 
 
 # ── Single-turn Claude helper (no tools, plain text) ─────────────────────────
 
 def _claude_text(prompt: str, max_tokens: int = 100, timeout: int = 60) -> str:
-    """Ask Claude a simple question and return plain text. No tools, no history."""
-    if _has_sdk_key():
-        client = _make_client()
-        resp = client.messages.create(
-            model=CLAUDE_MODEL,
-            max_tokens=max_tokens,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        return "".join(b.text for b in resp.content if hasattr(b, "text")).strip()
-    else:
-        import sys as _sys
-        popen_kw = {}
-        if _sys.platform == "win32":
-            popen_kw["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
-
-        proc = subprocess.Popen(
-            [CLAUDE_CLI, "--print", "--dangerously-skip-permissions"],
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            **popen_kw,
-        )
-        try:
-            stdout_b, stderr_b = proc.communicate(
-                input=prompt.encode("utf-8", errors="replace"), timeout=timeout
-            )
-        except subprocess.TimeoutExpired:
-            if _sys.platform == "win32":
-                subprocess.run(
-                    ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
-                    capture_output=True,
-                )
-            else:
-                proc.kill()
-            try:
-                proc.communicate(timeout=5)
-            except Exception:
-                pass
-            raise RuntimeError(f"Claude CLI timed out after {timeout}s generating content")
-
-        if proc.returncode != 0:
-            stderr_text = stderr_b.decode("utf-8", errors="replace").strip()
-            stdout_text = stdout_b.decode("utf-8", errors="replace").strip()
-            detail = stderr_text or stdout_text or f"exit code {proc.returncode}"
-            raise RuntimeError(f"Claude CLI: {detail}")
-        return stdout_b.decode("utf-8", errors="replace").strip()
+    """Single-shot text (no tools). Deterministic on every backend via the gateway."""
+    return llm_gateway.complete_text(prompt, max_tokens=max_tokens, timeout=timeout)
 
 
 def fetch_asana_task_via_mcp(task_url: str) -> dict:
@@ -592,40 +307,11 @@ Return ONLY this JSON (no markdown fences, no explanation — raw JSON only):
   "subtask_names": ["subtask name 1", "subtask name 2"]
 }}"""
 
-    # Always use CLI subprocess — MCP tools are only available via Claude Code,
-    # not through the Anthropic SDK even if ANTHROPIC_API_KEY is set.
-    import sys as _sys
-    popen_kw = {}
-    if _sys.platform == "win32":
-        popen_kw["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
-
-    proc = subprocess.Popen(
-        [CLAUDE_CLI, "--print", "--dangerously-skip-permissions"],
-        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        **popen_kw,
-    )
-    try:
-        stdout_b, stderr_b = proc.communicate(
-            input=prompt.encode("utf-8", errors="replace"), timeout=180
-        )
-    except subprocess.TimeoutExpired:
-        if _sys.platform == "win32":
-            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True)
-        else:
-            proc.kill()
-        try:
-            proc.communicate(timeout=5)
-        except Exception:
-            pass
-        raise RuntimeError("Asana MCP fetch timed out after 180s")
-
-    if proc.returncode != 0:
-        stderr_text = stderr_b.decode("utf-8", errors="replace").strip()
-        stdout_text = stdout_b.decode("utf-8", errors="replace").strip()
-        detail = stderr_text or stdout_text or f"exit code {proc.returncode}"
-        raise RuntimeError(f"Claude CLI error: {detail}")
-
-    raw = stdout_b.decode("utf-8", errors="replace").strip()
+    # MCP tools are only reachable via the Claude Code CLI (not the SDK backends),
+    # so this always uses the CLI path — still model-pinned by the gateway.
+    raw, success = llm_gateway.run_cli_skill(prompt, timeout=180)
+    if not success:
+        raise RuntimeError("Asana MCP fetch failed (Claude CLI returned non-zero).")
 
     # Strip markdown code fences if present
     if raw.startswith("```"):
@@ -692,9 +378,34 @@ def _sections_to_html(sections: list, btn_color: str = "#04c0da",
                 f'text-decoration:none;font-family:Arial,sans-serif;">{text}</a>'
                 f'</td></tr></table></div>'
             )
+    # Sponsors — each tier shows up to 5 logos as 3 in the first row + 2 in the
+    # second. Tier 1 larger, Tier 2 smaller. Only sponsors with a logo are shown.
+    _per_tier = 5
     _logo_sponsors = [s for s in (sponsors or []) if isinstance(s, dict) and s.get("logo_url")]
-    _tier1 = _logo_sponsors[:5]   # top tier — up to 5, larger
-    _tier2 = _logo_sponsors[5:8]  # next tier — up to 3, smaller
+    _tier1 = _logo_sponsors[:_per_tier]                 # top tier — larger
+    _tier2 = _logo_sponsors[_per_tier:_per_tier * 2]    # next tier — smaller
+
+    def _sponsor_rows_html(items, height, max_w, cell_pad):
+        """Render a tier as centered rows: 3 in the first row, 2 in the second."""
+        rows_html = []
+        items = items[:_per_tier]
+        _rows = [items[:3], items[3:5]] if len(items) > 3 else [items]
+        for row in _rows:
+            if not row:
+                continue
+            cells = "".join(
+                f'<td style="padding:{cell_pad};text-align:center;vertical-align:middle;">'
+                f'<img src="{s["logo_url"]}" alt="{s.get("name","Sponsor")}" '
+                f'height="{height}" style="max-width:{max_w}px;max-height:{height}px;'
+                f'height:auto;width:auto;object-fit:contain;display:inline-block;"></td>'
+                for s in row
+            )
+            rows_html.append(
+                f'<table cellpadding="0" cellspacing="0" border="0" '
+                f'style="margin:6px auto 0;"><tr>{cells}</tr></table>'
+            )
+        return "\n".join(rows_html)
+
     if _tier1:
         parts.append(
             '<div style="padding:10px 40px;">'
@@ -703,27 +414,9 @@ def _sections_to_html(sections: list, btn_color: str = "#04c0da",
             '<p style="font-weight:bold;text-align:center;font-size:18px;'
             'padding:0 40px;margin:0 0 10px;">Thank You to Our Sponsors!</p>'
         )
-        imgs1 = "".join(
-            f'<td style="padding:8px 16px;text-align:center;">'
-            f'<img src="{s["logo_url"]}" alt="{s.get("name","Sponsor")}" '
-            f'height="60" style="max-width:180px;height:60px;object-fit:contain;"></td>'
-            for s in _tier1
-        )
-        parts.append(
-            f'<table cellpadding="0" cellspacing="0" border="0" style="margin:0 auto;">'
-            f'<tr>{imgs1}</tr></table>'
-        )
+        parts.append(_sponsor_rows_html(_tier1, 60, 180, "8px 16px"))
         if _tier2:
-            imgs2 = "".join(
-                f'<td style="padding:6px 12px;text-align:center;">'
-                f'<img src="{s["logo_url"]}" alt="{s.get("name","Sponsor")}" '
-                f'height="45" style="max-width:140px;height:45px;object-fit:contain;"></td>'
-                for s in _tier2
-            )
-            parts.append(
-                f'<table cellpadding="0" cellspacing="0" border="0" style="margin:4px auto 0;">'
-                f'<tr>{imgs2}</tr></table>'
-            )
+            parts.append(_sponsor_rows_html(_tier2, 45, 140, "6px 12px"))
     return "\n".join(parts)
 
 
@@ -831,14 +524,21 @@ def generate_email_content(
     brand_history: dict | None,
     change_request: str = "",
     source_email_id: str = "",
+    reference_ids: list = None,
 ) -> dict:  # noqa: C901
     """
     Generate subject, preview text, and full HTML email body.
 
-    Primary mode: fetches the reference email's actual content (the most recent
-    sent email for this brand/stage) and asks Claude to produce a similar email
-    for the new event — same structure, tone, and style; all event-specific
+    Primary mode: reads the ACTUAL CONTENT of the top reference emails (up to 3)
+    for this brand/stage, picks the richest one as the structural template, and
+    learns the house STYLE & TONE from all of them. Claude then produces a similar
+    email for the new event — same structure, voice, and style; all event-specific
     content (name, dates, speakers, sponsors) substituted.
+
+    reference_ids: ranked list (best first) of candidate reference email IDs. The
+      function reads each, chooses the primary by content richness, and uses the
+      rest as additional style/tone references. Falls back to [source_email_id]
+      when reference_ids is not supplied (skill path / backward compatibility).
 
     Fallback: if no reference email is available, falls back to the official
     Marketing Journey stage template.
@@ -858,7 +558,7 @@ def generate_email_content(
     logo_img      = event_details.get("logo_url", "")
     speakers      = event_details.get("speakers", [])
     topics        = event_details.get("topics", [])
-    sponsors      = event_details.get("sponsors", [])[:8]
+    sponsors      = event_details.get("sponsors", [])[:10]   # 2 tiers × 5 (3+2 each)
     reg           = event_details.get("registration") or {}
 
     stage_name         = stage_info.get("name", "")
@@ -869,6 +569,23 @@ def generate_email_content(
     dates_display      = event_dates[0] if event_dates else event_date
     marketing_strategy = stage_info.get("marketing_strategy", "")
     content_ideas      = stage_info.get("content_ideas", [])
+
+    # Date awareness — the email is written NOW, so any expired pricing window or
+    # past deadline (often copied verbatim from the reference email / event page)
+    # must be dropped. Give Claude today's date and an explicit exclusion rule.
+    _today_str = datetime.now().strftime("%B %d, %Y")
+    date_rule = (
+        "━━━ CRITICAL — DATE AWARENESS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"Today's date is {_today_str}. "
+        f"The event takes place on {event_date or dates_display or 'the date above'}.\n"
+        "- NEVER include any registration tier, early-bird price, deadline, or date that\n"
+        "  has ALREADY PASSED relative to today — even if it appears in the reference\n"
+        "  email or event details. Drop expired windows entirely; do not copy them.\n"
+        "- Only mention the registration window / pricing that is currently open or\n"
+        "  still upcoming. If early-bird has ended, reference the current (e.g. standard)\n"
+        "  tier instead, or omit pricing rather than advertising an expired deal.\n"
+        "- Do not invent dates. If unsure whether a date is still valid, omit it."
+    )
 
     # Upload hero / logo / sponsor images to HubSpot CDN for reliable rendering
     from hubspot_tools import upload_image_to_hubspot as _upload_img
@@ -903,6 +620,30 @@ def generate_email_content(
         reg_lines.append(f"Register at: {reg['url']}")
     reg_info = "\n".join(reg_lines)
 
+    # Named action links — each CTA must point to the RIGHT sub-page, not the main URL.
+    links = event_details.get("links", {}) or {}
+    _link_labels = {
+        "register": "Registration page",
+        "sponsor":  "Sponsorship page",
+        "cfp":      "Call for Proposals / submit a talk or poster",
+        "schedule": "Schedule / agenda page",
+        "venue":    "Venue & travel page",
+    }
+    _link_lines = [f"  • {_link_labels[k]}: {links[k]}" for k in _link_labels if links.get(k)]
+    links_block = (
+        "━━━ EVENT LINKS — point each CTA at the CORRECT page ━━━━━━━━━━━━━━━━━━━━━\n"
+        + ("\n".join(_link_lines) if _link_lines else "  (only the main event page is available)")
+        + f"\n  • Main event page: {url}\n\n"
+        "RULE — set each button's url to the link matching its purpose:\n"
+        "  Register / Save the Date / Attend  → Registration page (else main page)\n"
+        "  Become a Sponsor / Sponsorship     → Sponsorship page\n"
+        "  Submit a Proposal / Talk / Poster / CFP → Call for Proposals link\n"
+        "  View Schedule / Agenda             → Schedule page\n"
+        "  Venue / Travel / Hotel             → Venue & travel page\n"
+        "  Fall back to the main event page ONLY when the specific link is missing.\n"
+        "  Do NOT point every button at the same URL when specific links exist."
+    )
+
     speakers_str = "\n".join(f"  • {s}" for s in speakers) if speakers else "  (to be announced)"
 
     def _sponsor_line(s) -> str:
@@ -919,67 +660,101 @@ def generate_email_content(
     hs_firstname = "{{ contact.firstname }}"
     hs_company   = "{{ contact.company }}"
 
-    # ── Fetch reference email from HubSpot (primary mode) ─────────────────────
-    ref_block = ""
-    ref_name  = ""
-    ref       = {}   # keep in scope for task_instructions block below
-    if source_email_id:
+    # ── Read the TOP reference emails (up to 3) and choose the best ───────────
+    # We read the ACTUAL CONTENT of each candidate — not just names — then use the
+    # richest one as the structural template and ALL of them to learn the house
+    # style/tone. reference_ids is ranked (best first); fall back to source_email_id.
+    ref_block   = ""
+    style_block = ""
+    ref_name    = ""
+    ref         = {}   # primary reference (kept in scope for button-color derivation)
+
+    _ref_ids = [r for r in (reference_ids or []) if r][:3] or ([source_email_id] if source_email_id else [])
+    refs_read: list = []
+    if _ref_ids:
         try:
             import hubspot_tools as _ht
-            ref = _ht.get_email_content_text(source_email_id)
-            ref_sections  = ref.get("sections", [])
-            ref_body_html = ref.get("body_html", "")
-            ref_body_text = ref.get("body_text", "")
-
-            if ref.get("success") and (ref_sections or ref_body_html):
-                ref_name = ref.get("email_name", source_email_id)
-                ref_subj = ref.get("subject", "")
-                ref_prev = ref.get("preview_text", "")
-
-                # Build a component-by-component layout description so Claude
-                # knows the exact sequence: image → rich_text → button → divider…
-                layout_lines = []
-                for i, comp in enumerate(ref_sections):
-                    ctype = comp.get("type", "")
-                    if ctype == "image":
-                        layout_lines.append(f"  [{i+1}] IMAGE — hero banner (full-width event graphic)")
-                    elif ctype == "image_row":
-                        imgs = comp.get("images", [])
-                        alts = ", ".join(im.get("alt", "?") for im in imgs)
-                        layout_lines.append(f"  [{i+1}] IMAGE ROW ({len(imgs)} columns) — sponsor logos: {alts}")
-                    elif ctype == "rich_text":
-                        preview = _re.sub(r"<[^>]+>", "", comp.get("html", ""))[:80].strip()
-                        layout_lines.append(f"  [{i+1}] RICH TEXT — \"{preview}…\"")
-                    elif ctype == "button":
-                        layout_lines.append(
-                            f"  [{i+1}] BUTTON — \"{comp.get('text','')}\" "
-                            f"bg={comp.get('background_color','#04c0da')}"
-                        )
-                    elif ctype == "divider":
-                        layout_lines.append(f"  [{i+1}] DIVIDER — {comp.get('style','solid')} {comp.get('height',1)}px")
-                    elif ctype == "social_icons":
-                        layout_lines.append(f"  [{i+1}] SOCIAL ICONS — {comp.get('networks', [])}")
-
-                layout_desc = "\n".join(layout_lines)
-
-                ref_block = (
-                    f"━━━ REFERENCE EMAIL ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                    f"Name    : {ref_name}\n"
-                    f"Subject : {ref_subj}\n"
-                    f"Preview : {ref_prev}\n\n"
-                    f"COMPONENT LAYOUT (replicate this exact sequence):\n"
-                    f"{layout_desc}\n\n"
-                    f"RICH TEXT HTML (actual HTML from each text block, in order):\n"
-                    f"{ref_body_html}\n"
-                )
-                _log.info(
-                    f"[GEN_EMAIL] reference loaded: {ref_name!r} "
-                    f"components={len(ref_sections)} html={len(ref_body_html)} chars"
-                )
-            else:
-                _log.warning(f"[GEN_EMAIL] reference fetch failed: {ref.get('error')}")
+            for _rid in _ref_ids:
+                try:
+                    r = _ht.get_email_content_text(_rid)
+                    if r.get("success") and (r.get("sections") or r.get("body_html")):
+                        refs_read.append(r)
+                except Exception as _e:
+                    _log.warning(f"[GEN_EMAIL] reference {_rid} read failed: {_e}")
         except Exception as exc:
-            _log.warning(f"[GEN_EMAIL] reference email exception: {exc}")
+            _log.warning(f"[GEN_EMAIL] reference read exception: {exc}")
+
+    if refs_read:
+        # Primary = the richest reference (most rich_text blocks) → best template.
+        def _richness(r: dict) -> int:
+            return sum(1 for s in (r.get("sections") or []) if s.get("type") == "rich_text")
+        ref = max(refs_read, key=_richness)
+        ref_sections  = ref.get("sections", [])
+        ref_body_html = ref.get("body_html", "")
+        ref_name = ref.get("email_name", "")
+        ref_subj = ref.get("subject", "")
+        ref_prev = ref.get("preview_text", "")
+
+        layout_lines = []
+        for i, comp in enumerate(ref_sections):
+            ctype = comp.get("type", "")
+            if ctype == "image":
+                layout_lines.append(f"  [{i+1}] IMAGE — hero banner (full-width event graphic)")
+            elif ctype == "image_row":
+                imgs = comp.get("images", [])
+                alts = ", ".join(im.get("alt", "?") for im in imgs)
+                layout_lines.append(f"  [{i+1}] IMAGE ROW ({len(imgs)} columns) — sponsor logos: {alts}")
+            elif ctype == "rich_text":
+                preview = _re.sub(r"<[^>]+>", "", comp.get("html", ""))[:80].strip()
+                layout_lines.append(f"  [{i+1}] RICH TEXT — \"{preview}…\"")
+            elif ctype == "button":
+                layout_lines.append(
+                    f"  [{i+1}] BUTTON — \"{comp.get('text','')}\" "
+                    f"bg={comp.get('background_color','#04c0da')}"
+                )
+            elif ctype == "divider":
+                layout_lines.append(f"  [{i+1}] DIVIDER — {comp.get('style','solid')} {comp.get('height',1)}px")
+            elif ctype == "social_icons":
+                layout_lines.append(f"  [{i+1}] SOCIAL ICONS — {comp.get('networks', [])}")
+
+        ref_block = (
+            f"━━━ PRIMARY REFERENCE EMAIL (mirror THIS structure) ━━━━━━━━━━━━━━━━━━━━━\n"
+            f"Name    : {ref_name}\n"
+            f"Subject : {ref_subj}\n"
+            f"Preview : {ref_prev}\n\n"
+            f"COMPONENT LAYOUT (replicate this exact sequence):\n"
+            f"{chr(10).join(layout_lines)}\n\n"
+            f"RICH TEXT HTML (actual HTML from each text block, in order):\n"
+            f"{ref_body_html}\n"
+        )
+
+        # Style/tone corpus — text from ALL read references (incl. primary) so Claude
+        # learns the brand's voice, greeting/sign-off, phrasing, emoji & CTA style.
+        style_parts = []
+        for k, r in enumerate(refs_read, 1):
+            txt = _re.sub(r"<[^>]+>", " ", r.get("body_html", "") or "")
+            txt = _re.sub(r"\s+", " ", txt).strip()[:900]
+            if txt:
+                style_parts.append(
+                    f"[Ref {k}] {r.get('email_name','')}\n"
+                    f"  Subject: {r.get('subject','')}\n"
+                    f"  Body voice sample: {txt}"
+                )
+        if style_parts:
+            style_block = (
+                "━━━ STYLE & TONE REFERENCES (learn the house voice from ALL of these) ━━━\n"
+                "These are real past emails for this brand. Match their tone, voice, greeting\n"
+                "and sign-off style, sentence rhythm, emoji usage, and CTA phrasing. Do NOT\n"
+                "copy their event-specific facts (names, dates, prices) — only the STYLE.\n\n"
+                + "\n\n".join(style_parts) + "\n"
+            )
+
+        _log.info(
+            f"[GEN_EMAIL] read {len(refs_read)} reference(s); primary={ref_name!r} "
+            f"(richness={_richness(ref)}); style corpus from {len(style_parts)} email(s)"
+        )
+    else:
+        _log.warning("[GEN_EMAIL] no readable reference emails — will use stage template")
 
     # ── Fallback to official marketing stage template ──────────────────────────
     template_block = ""
@@ -1115,6 +890,7 @@ the real event details above and produce an ordered sections array.
     prompt = f"""You are a senior email marketer for Linux Foundation open source events.
 
 {ref_block or template_block}
+{style_block}
 ━━━ NEW EVENT ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Event Name  : {event_name}
 Date        : {dates_display}
@@ -1131,6 +907,10 @@ Sponsors / Partners:
 
 Topics      : {topics_str}
 {reg_info}
+
+{links_block}
+
+{date_rule}
 
 {task_instructions}
 
@@ -1328,10 +1108,17 @@ def ai_select_source_email(
 # ── Public interface — called by main.py ──────────────────────────────────────
 
 def run_turn(messages: list, user_message: str) -> tuple[str, list]:
-    """Route: LiteLLM/Anthropic SDK if any key available, else Claude Code CLI."""
-    if _has_sdk_key():
-        return _sdk_run_turn(messages, user_message)
-    return _sdk_run_turn_cc(messages, user_message)
+    """One agentic turn through the deterministic gateway (same on every backend)."""
+    system = SYSTEM_PROMPT.format(date=datetime.now().strftime("%Y-%m-%d"))
+    convo = messages + [{"role": "user", "content": user_message}]
+    return llm_gateway.run_agent(
+        convo,
+        system=system,
+        tools=TOOLS,
+        execute_tool=lambda name, inp: _execute_tool(name, inp),
+        max_tokens=4096,
+        max_steps=8,
+    )
 
 
 def plan_turn(session, url: str, extra_context: str = None) -> tuple[str, list]:
@@ -1409,7 +1196,24 @@ def clone_turn(session, subject=None, preview_text=None, send_list_id=None) -> t
     suppression = brand.get("suppression_list_ids", [])
     email_type  = brand.get("email_type", "BATCH_EMAIL")
 
-    email_name = session.meta.get("email_name") or f"{brand.get('brand_name', 'Brand')} - Email"
+    # email_name is set deterministically during the plan step. Last-resort fallback
+    # builds a sensible name from event context (never the bare "Brand - Email").
+    email_name = session.meta.get("email_name")
+    if not email_name:
+        _ud     = session.meta.get("url_data", {}) or {}
+        _si     = session.meta.get("stage_info", {}) or {}
+        _code   = session.meta.get("short_brand_name") or brand.get("brand_name", "")
+        _evt    = _ud.get("event_name", "")
+        _suffix = _si.get("email_type", "") or "Invite"
+        _yyq    = ""
+        import re as __re
+        for _ds in (_ud.get("event_dates") or []):
+            _m = __re.match(r"(\d{4})-(\d{2})-(\d{2})", str(_ds))
+            if _m:
+                _yyq = f"{int(_m.group(1)) % 100:02d}Q{(int(_m.group(2)) - 1) // 3 + 1}"
+                break
+        _parts = [p for p in (_code, _evt, _suffix) if p]
+        email_name = (f"{_yyq} - " if _yyq else "") + " - ".join(_parts) if _parts else (_evt or "Email Campaign")
 
     _log.info(f"[CLONE] brand_history keys: {list((brand or {}).keys())}")
     _log.info(f"[CLONE] source_id={source_id!r} from_name={from_name!r} from_addr={from_addr!r}")

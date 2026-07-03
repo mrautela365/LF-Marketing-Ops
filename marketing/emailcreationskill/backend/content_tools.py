@@ -3,8 +3,73 @@ Content preparation — Google Doc → HTML, raw HTML validation, plain text wra
 Also: URL scraping for event detail extraction.
 """
 import re
+import json
 import requests
 from config import GOOGLE_SERVICE_ACCOUNT_FILE
+
+
+def _format_jsonld_location(loc) -> str:
+    """Build a compact 'City, Region' (or 'City, Country') from schema.org location."""
+    if isinstance(loc, list):
+        loc = loc[0] if loc else None
+    if isinstance(loc, str):
+        return loc.strip()
+    if not isinstance(loc, dict):
+        return ""
+    addr = loc.get("address")
+    if isinstance(addr, str):
+        return addr.strip()
+    if isinstance(addr, dict):
+        city    = (addr.get("addressLocality") or "").strip()
+        region  = (addr.get("addressRegion") or "").strip()
+        country = (addr.get("addressCountry") or "").strip()
+        if city and region:
+            return f"{city}, {region}"
+        if city and country:
+            return f"{city}, {country}"
+        return city or country or region or ""
+    return (loc.get("name") or "").strip()
+
+
+def _extract_jsonld_event(soup) -> dict:
+    """Extract authoritative event fields from schema.org Event JSON-LD.
+
+    JSON-LD lives in <script type="application/ld+json"> and is present even on
+    JS-rendered pages, so it is far more reliable than regex/CSS-class guessing for
+    name, dates, location, description, and the event image.
+
+    Returns: {name, dates:[ISO...], location, description, image} — any field may be "".
+    """
+    out = {"name": "", "dates": [], "location": "", "description": "", "image": ""}
+    for tag in soup.find_all("script", type="application/ld+json"):
+        try:
+            data = json.loads(tag.string or "{}")
+        except Exception:
+            continue
+        for obj in (data if isinstance(data, list) else [data]):
+            if not isinstance(obj, dict) or "Event" not in str(obj.get("@type", "")):
+                continue
+            if not out["name"] and isinstance(obj.get("name"), str):
+                out["name"] = obj["name"].strip()
+            for key in ("startDate", "endDate"):
+                val = obj.get(key)
+                if isinstance(val, str) and re.match(r"\d{4}-\d{2}-\d{2}", val):
+                    iso = val[:10]
+                    if iso not in out["dates"]:
+                        out["dates"].append(iso)
+            if not out["description"] and isinstance(obj.get("description"), str):
+                out["description"] = obj["description"].strip()
+            if not out["location"]:
+                out["location"] = _format_jsonld_location(obj.get("location"))
+            if not out["image"]:
+                img = obj.get("image")
+                if isinstance(img, list):
+                    img = img[0] if img else ""
+                if isinstance(img, dict):
+                    img = img.get("url", "")
+                if isinstance(img, str):
+                    out["image"] = img.strip()
+    return out
 
 
 def fetch_url(url: str) -> dict:
@@ -20,14 +85,21 @@ def fetch_url(url: str) -> dict:
         from bs4 import BeautifulSoup
         soup = BeautifulSoup(resp.text, "html.parser")
 
+        # Extract JSON-LD (name/dates/location/description/image) BEFORE stripping
+        # <script> tags below — schema.org data lives in <script type="ld+json"> and
+        # would otherwise be decomposed away. This is the authoritative source.
+        jsonld = _extract_jsonld_event(soup)
+        jsonld_dates = jsonld.get("dates", [])
+
         for tag in soup(["script", "style", "nav", "footer", "header"]):
             tag.decompose()
 
         # ── Event name ──────────────────────────────────────────────────────
+        # JSON-LD name is cleanest (no "| Site Name" suffix); fall back to og/title/h1.
         og_title   = soup.find("meta", property="og:title")
         title_tag  = soup.find("title")
-        event_name = ""
-        if og_title and og_title.get("content"):
+        event_name = jsonld.get("name", "")
+        if not event_name and og_title and og_title.get("content"):
             event_name = og_title["content"].strip()
         if not event_name and title_tag:
             event_name = title_tag.text.strip().split("|")[0].split("-")[0].strip()
@@ -54,6 +126,8 @@ def fetch_url(url: str) -> dict:
                 description = (meta.get("content") or "").strip()
                 if description:
                     break
+        if not description:
+            description = jsonld.get("description", "")
 
         body_text = soup.get_text(separator=" ", strip=True)
 
@@ -81,20 +155,30 @@ def fetch_url(url: str) -> dict:
             return f"{m.group(2)} {m.group(1)}, {m.group(3)}" if m else s
 
         normalized_day_first = [_normalize_day_first(d) for d in day_first]
-        all_dates = list(dict.fromkeys(date_patterns + normalized_day_first))[:3]
+
+        # schema.org Event JSON-LD (captured above, before scripts were stripped) is the
+        # authoritative event date — when present it is used ALONE (avoids stage detection
+        # mistaking a pricing/early-bird date for the event date, and works on JS-rendered
+        # pages where the visible date isn't in the scraped text). Falls back to prose dates.
+        if jsonld_dates:
+            all_dates = jsonld_dates[:3]
+        else:
+            all_dates = list(dict.fromkeys(date_patterns + normalized_day_first))[:3]
 
         # ── Location ─────────────────────────────────────────────────────────
-        location = ""
-        # Look for "in <City>" or "<City>, <Country>" near heading areas
-        loc_patterns = [
-            r"\bin\s+([A-Z][a-zA-Z\s]+,\s*[A-Z][a-zA-Z]+)\b",
-            r"\b([A-Z][a-zA-Z]+,\s*(?:Japan|Germany|USA|UK|France|Spain|India|Canada|Australia))\b",
-        ]
-        for pat in loc_patterns:
-            m = re.search(pat, body_text)
-            if m:
-                location = m.group(1).strip()
-                break
+        # JSON-LD location (City, Region/Country) is authoritative; fall back to
+        # prose regex, then URL-slug hints.
+        location = jsonld.get("location", "")
+        if not location:
+            loc_patterns = [
+                r"\bin\s+([A-Z][a-zA-Z\s]+,\s*[A-Z][a-zA-Z]+)\b",
+                r"\b([A-Z][a-zA-Z]+,\s*(?:Japan|Germany|USA|UK|France|Spain|India|Canada|Australia))\b",
+            ]
+            for pat in loc_patterns:
+                m = re.search(pat, body_text)
+                if m:
+                    location = m.group(1).strip()
+                    break
         # Fallback: check URL slug for city hints
         if not location:
             slug = url.lower()
@@ -148,9 +232,11 @@ def scrape_event_full(url: str) -> dict:
         parsed_url = urlparse(url)
         base_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
 
-        # ── Hero image (OG image is most reliable) ───────────────────────────
+        # ── Hero image (OG image is most reliable; JSON-LD image as fallback) ──
         og_image = soup.find("meta", property="og:image")
         hero_image_url = og_image["content"].strip() if og_image and og_image.get("content") else ""
+        if not hero_image_url:
+            hero_image_url = _extract_jsonld_event(soup).get("image", "")
 
         # ── Logo ─────────────────────────────────────────────────────────────
         logo_url = ""
@@ -248,14 +334,39 @@ def scrape_event_full(url: str) -> dict:
                 if alt and 3 < len(alt) < 80:
                     _add_sponsor(alt, logo_url)
 
-        # ── Registration URL ──────────────────────────────────────────────────
-        reg_url = ""
+        # ── Named action links (register / sponsor / cfp / schedule / venue) ──
+        # Collect the event's real sub-pages so each email CTA can point to the
+        # RIGHT page instead of everything defaulting to the main event URL.
+        # Matches on both the link text AND the href path; same-host links only.
+        from urllib.parse import urlparse as _urlparse
+        _event_host = _urlparse(url).netloc.lower()
+        _LINK_PURPOSES = [
+            ("register", ("register", "registration", "get ticket", "buy ticket", "attend")),
+            ("sponsor",  ("sponsor", "sponsorship", "exhibit", "become a sponsor")),
+            ("cfp",      ("call for proposal", "cfp", "submit a proposal", "submit a talk",
+                          "submit a poster", "poster", "propose", "speak")),
+            ("schedule", ("schedule", "agenda", "view sessions")),
+            ("venue",    ("venue", "travel", "hotel", "getting here")),
+        ]
+        links: dict = {}
         for a in soup.find_all("a", href=True):
-            link_text = a.get_text(strip=True).lower()
             href = a["href"]
-            if any(kw in link_text for kw in ("register", "get ticket", "buy ticket", "attend")):
-                reg_url = urljoin(url, href)
-                break
+            if href.startswith("#") or href.startswith("mailto:") or href.startswith("tel:"):
+                continue
+            absu = urljoin(url, href)
+            if _urlparse(absu).netloc.lower() != _event_host:   # same-host only
+                continue
+            low_txt  = a.get_text(strip=True).lower()
+            low_href = absu.lower()
+            if not low_txt:
+                continue
+            for _key, _kws in _LINK_PURPOSES:
+                if _key in links:
+                    continue
+                if any(kw in low_txt for kw in _kws) or any(kw in low_href for kw in _kws):
+                    links[_key] = absu
+
+        reg_url = links.get("register", "")
 
         # ── Scrape registration page ─────────────────────────────────────────
         reg_details: dict = {}
@@ -289,8 +400,9 @@ def scrape_event_full(url: str) -> dict:
             "logo_url": logo_url,
             "speakers": speakers[:8],
             "topics": topics[:6],
-            "sponsors": sponsors[:8],
+            "sponsors": sponsors[:10],
             "registration": reg_details,
+            "links": links,          # {register, sponsor, cfp, schedule, venue}
         }
 
     except Exception:
@@ -302,6 +414,7 @@ def scrape_event_full(url: str) -> dict:
             "topics": [],
             "sponsors": [],
             "registration": {},
+            "links": {},
         }
 
 
