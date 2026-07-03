@@ -913,13 +913,55 @@ def update_email_content(
                             "style":   _section_style,
                 })
 
-        # Sponsors as native @hubspot/image modules — only logo sponsors, two tiers.
-        # Tier 1: first 5 (larger, height 60) — top billing sponsors
-        # Tier 2: next 3 (smaller, height 45) — secondary sponsors
+        # Sponsors as native @hubspot/image modules — logo sponsors only, two tiers.
+        # Each tier shows up to 5 logos arranged as 3 in the first row + 2 in the
+        # second row. Tier 1 = larger (height 60), Tier 2 = smaller (height 45).
         # Text-only sponsors (no logo_url) are excluded entirely.
-        _logo_sp = [s for s in sponsors if isinstance(s, dict) and s.get("logo_url")]
-        _tier1   = _logo_sp[:5]
-        _tier2   = _logo_sp[5:8]
+        _per_tier = 5                                     # 3 + 2 layout
+        _logo_sp  = [s for s in sponsors if isinstance(s, dict) and s.get("logo_url")]
+        _tier1    = _logo_sp[:_per_tier]
+        _tier2    = _logo_sp[_per_tier:_per_tier * 2]
+
+        def _chunk_rows(items):
+            """Split a tier into rows: 3 in the first row, 2 in the second (max 5)."""
+            items = items[:_per_tier]
+            return [items[:3], items[3:5]] if len(items) > 3 else [items]
+
+        def _add_sponsor_tier(tier_items, tier_key, height, width, pad):
+            """Append one balanced section per row; each row's column widths sum to 12."""
+            for _r, _row in enumerate(_chunk_rows(tier_items)):
+                _widths = _col_widths(len(_row))
+                _cols = []
+                for _j, _sp in enumerate(_row):
+                    _wid = f"staging_sponsor_{tier_key}_{_r}_{_j}"
+                    widgets[_wid] = {
+                        "type": "module",
+                        "body": {
+                            "module_id": 1367093,
+                            "img": {
+                                "alt":     _sp.get("name", "Sponsor"),
+                                "height":  height,
+                                "loading": "disabled",
+                                "src":     _sp["logo_url"],
+                                "width":   width,
+                            },
+                            "link": "",
+                            "hs_enable_module_padding": True,
+                            "hs_wrapper_css": {
+                                "padding-bottom": pad,
+                                "padding-left":   pad,
+                                "padding-right":  pad,
+                                "padding-top":    pad,
+                            },
+                        },
+                    }
+                    _cols.append({"id": f"col-sp-{tier_key}-{_r}-{_j}",
+                                  "widgets": [_wid], "width": _widths[_j]})
+                sections.append({
+                    "id":      f"section-sponsor-{tier_key}-row{_r}",
+                    "columns": _cols,
+                    "style":   _section_style,
+                })
 
         if _tier1:
             _SPON_HDR = "staging_sponsor_header"
@@ -941,75 +983,11 @@ def update_email_content(
             sections.append({
                 "id":      "section-sponsor-header",
                 "columns": [{"id": "col-sph-0", "widgets": [_SPON_HDR], "width": 12}],
-                    "style":   _section_style,
-            })
-
-            # Tier 1 row — larger logos, widths must sum to 12
-            _t1_widths = _col_widths(len(_tier1))
-            _cols1 = []
-            for _j, _sp in enumerate(_tier1):
-                _wid = f"staging_sponsor_t1_{_j}"
-                widgets[_wid] = {
-                    "type": "module",
-                    "body": {
-                        "module_id": 1367093,
-                        "img": {
-                            "alt":     _sp.get("name", "Sponsor"),
-                            "height":  60,
-                            "loading": "disabled",
-                            "src":     _sp["logo_url"],
-                            "width":   180,
-                        },
-                        "link": "",
-                        "hs_enable_module_padding": True,
-                        "hs_wrapper_css": {
-                            "padding-bottom": "15px",
-                            "padding-left":   "15px",
-                            "padding-right":  "15px",
-                            "padding-top":    "15px",
-                        },
-                    },
-                }
-                _cols1.append({"id": f"col-sp-t1-{_j}", "widgets": [_wid], "width": _t1_widths[_j]})
-            sections.append({
-                "id":      "section-sponsor-tier1",
-                "columns": _cols1,
                 "style":   _section_style,
             })
 
-            # Tier 2 row — smaller logos, widths must sum to 12
-            if _tier2:
-                _t2_widths = _col_widths(len(_tier2))
-                _cols2 = []
-                for _j, _sp in enumerate(_tier2):
-                    _wid = f"staging_sponsor_t2_{_j}"
-                    widgets[_wid] = {
-                        "type": "module",
-                        "body": {
-                            "module_id": 1367093,
-                            "img": {
-                                "alt":     _sp.get("name", "Sponsor"),
-                                "height":  45,
-                                "loading": "disabled",
-                                "src":     _sp["logo_url"],
-                                "width":   140,
-                            },
-                            "link": "",
-                            "hs_enable_module_padding": True,
-                            "hs_wrapper_css": {
-                                "padding-bottom": "10px",
-                                "padding-left":   "12px",
-                                "padding-right":  "12px",
-                                "padding-top":    "10px",
-                            },
-                        },
-                    }
-                    _cols2.append({"id": f"col-sp-t2-{_j}", "widgets": [_wid], "width": _t2_widths[_j]})
-                sections.append({
-                    "id":      "section-sponsor-tier2",
-                    "columns": _cols2,
-                    "style":   _section_style,
-                })
+            _add_sponsor_tier(_tier1, "t1", 60, 180, "15px")   # larger, up to 2 rows of 5
+            _add_sponsor_tier(_tier2, "t2", 45, 140, "10px")   # smaller, up to 2 rows of 5
 
     else:
         # Fallback: monolithic rich_text (used when no structured sections available)

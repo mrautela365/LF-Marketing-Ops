@@ -240,6 +240,17 @@ def parse_event_date(date_strings: list) -> date | None:
         return None
     parsed = []
     for ds in date_strings:
+        ds = (ds or "").strip()
+        # ISO / slash formats first (e.g. schema.org startDate "2026-09-07",
+        # "2026/09/07"). Take the leading date token if a time/offset follows.
+        iso_m = re.match(r"(\d{4})[-/](\d{1,2})[-/](\d{1,2})", ds)
+        if iso_m:
+            try:
+                y, mo, d = (int(g) for g in iso_m.groups())
+                parsed.append(date(y, mo, d))
+                continue
+            except ValueError:
+                pass
         # Normalize ranges like "June 15-16, 2026" → "June 15, 2026"
         ds_clean = re.sub(r"(\b\w+ \d+)[-–]\d+", r"\1", ds).strip()
         # Remove ordinal suffixes: 1st, 2nd, 3rd, 15th → 1, 2, 3, 15
