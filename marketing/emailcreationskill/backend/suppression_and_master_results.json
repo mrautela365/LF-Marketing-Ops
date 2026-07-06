@@ -1,0 +1,123 @@
+{
+  "timestamp": "2026-07-07T00:11:10.331515",
+  "inclusion_search": [
+    {
+      "list_num": 1,
+      "expected_id": "29446",
+      "name": "",
+      "listId": "29446",
+      "size": "unknown",
+      "status": "FOUND_BY_ID"
+    },
+    {
+      "list_num": 2,
+      "expected_id": "29447",
+      "name": "",
+      "listId": "29447",
+      "size": "unknown",
+      "status": "FOUND_BY_ID"
+    },
+    {
+      "list_num": 3,
+      "expected_id": "29448",
+      "name": "",
+      "listId": "29448",
+      "size": "unknown",
+      "status": "FOUND_BY_ID"
+    }
+  ],
+  "suppression_search": [
+    {
+      "search_key": "26Q1 LF Events GDPR",
+      "notes": "Newer than 24Q1 (ID 13340)",
+      "status": "NOT_FOUND"
+    },
+    {
+      "search_key": "25Q4 LF Events GDPR",
+      "notes": "Newer than 24Q1 (ID 13340)",
+      "status": "NOT_FOUND"
+    },
+    {
+      "search_key": "25Q3 LF Events GDPR",
+      "notes": "Newer than 24Q1 (ID 13340)",
+      "status": "NOT_FOUND"
+    },
+    {
+      "search_key": "26Q1 LF Events Suppression",
+      "notes": "Newer than 23Q3 (ID 9501)",
+      "status": "NOT_FOUND"
+    },
+    {
+      "search_key": "25Q4 LF Events Suppression",
+      "notes": "Newer than 23Q3 (ID 9501)",
+      "status": "NOT_FOUND"
+    },
+    {
+      "search_key": "25Q3 LF Events Suppression",
+      "notes": "Newer than 23Q3 (ID 9501)",
+      "status": "FOUND",
+      "listId": "21721",
+      "name": "25Q3 - Events - LF EU - Roadshow in Ghent - Suppressions",
+      "size": null,
+      "alternatives": []
+    },
+    {
+      "search_key": "26Q2 LF events global opt out",
+      "notes": "Verify list 13337 exists",
+      "status": "FOUND",
+      "listId": "13337",
+      "name": "26Q2 LF events global opt out",
+      "size": null,
+      "alternatives": []
+    }
+  ],
+  "combined_suppression": {
+    "name": "26Q3 - LF Events - PyTorch Conf NA 2026 - Combined Suppression",
+    "listId": "29453",
+    "size": null,
+    "hubspot_url": "https://app.hubspot.com/contacts/8112310/lists/29453",
+    "status": "SUCCESS",
+    "suppression_ids": [
+      "888",
+      "21558",
+      "13340",
+      "20420",
+      "3732",
+      "21721",
+      "13404",
+      "13337"
+    ]
+  },
+  "master_list": {
+    "name": "Q3 2026 - LF Events \u2013 PyTorch Conference North America 2026 Master (With Opt-In and Filters)",
+    "listId": "29454",
+    "size": null,
+    "hubspot_url": "https://app.hubspot.com/contacts/8112310/lists/29454",
+    "status": "SUCCESS",
+    "inclusion_ids": [
+      "29446",
+      "29447",
+      "29448",
+      "29449",
+      "29450",
+      "29451",
+      "29452"
+    ],
+    "combined_suppression_id": "29453",
+    "opt_in_id": "26793"
+  },
+  "suppression_ids_used": [
+    "888",
+    "21558",
+    "13340",
+    "20420",
+    "3732",
+    "21721",
+    "13404",
+    "13337"
+  ],
+  "summary": {
+    "combined_suppression_status": "SUCCESS",
+    "master_list_status": "SUCCESS"
+  }
+}

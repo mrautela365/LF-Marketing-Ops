@@ -1332,6 +1332,7 @@ def clone_turn(session, subject=None, preview_text=None, send_list_id=None) -> t
     body_html          = session.meta.get("body_html") or session.meta.get("generated_html", "")
     banner_url         = session.meta.get("banner_url", "")
     event_url          = (session.meta.get("url_data") or {}).get("url", "")
+    utm_params         = session.meta.get("utm_params")
     if content_sections or body_html:
         try:
             content_result = hubspot_tools.update_email_content(
@@ -1341,6 +1342,7 @@ def clone_turn(session, subject=None, preview_text=None, send_list_id=None) -> t
                 event_url=event_url,
                 content_sections=content_sections or None,
                 sponsors=sponsors_list or None,
+                utm_params=utm_params,
             )
             if "error" not in content_result:
                 content_applied = True
@@ -1381,6 +1383,7 @@ def clone_turn(session, subject=None, preview_text=None, send_list_id=None) -> t
                         event_url=event_url,
                         content_sections=content_sections or None,
                         sponsors=sponsors_list or None,
+                        utm_params=utm_params,
                     )
                     if "error" not in retry_result:
                         val2 = hubspot_tools.validate_staged_email(

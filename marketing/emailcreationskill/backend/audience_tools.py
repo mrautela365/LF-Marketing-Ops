@@ -908,6 +908,24 @@ def _run_agent(prompt: str, q: queue.Queue) -> None:
              f"model={llm_gateway.resolve_model()!r} prompt_len={len(prompt)}")
     q.put({"type": "output", "text": f"🚀 Starting agent (backend={llm_gateway.backend_name()})…"})
 
+    # Ground-truth list IDs, captured directly from each hubspot_create_list
+    # tool result — not parsed from the model's free-text narration, which can
+    # misreport the ID it just printed. RULE 4 in the building prompt guarantees
+    # the master list is always the LAST list created, so the last entry here
+    # is unambiguously the master list.
+    created_lists: list[dict] = []
+
+    def _execute_and_track(name: str, tool_input: dict) -> str:
+        result_json = _audience_execute(name, tool_input)
+        if name == "hubspot_create_list":
+            try:
+                parsed = json.loads(result_json)
+                if parsed.get("listId"):
+                    created_lists.append(parsed)
+            except Exception:
+                pass
+        return result_json
+
     def _on_event(ev: dict) -> None:
         etype = ev.get("type")
         if etype == "output":
@@ -931,17 +949,19 @@ def _run_agent(prompt: str, q: queue.Queue) -> None:
             [{"role": "user", "content": prompt}],
             system=AUDIENCE_SYSTEM,
             tools=AUDIENCE_TOOLS,
-            execute_tool=_audience_execute,
+            execute_tool=_execute_and_track,
             max_tokens=32000,
             max_steps=40,        # audience builds issue many tool calls (snowflake + N lists)
             on_event=_on_event,
         )
         log.info("[AGENT] done")
-        q.put({"type": "done", "done": True, "success": True})
+        master_list_id = created_lists[-1]["listId"] if created_lists else None
+        q.put({"type": "done", "done": True, "success": True, "master_list_id": master_list_id})
     except Exception as exc:
         log.error(f"[AGENT] fatal error: {exc}", exc_info=True)
         q.put({"type": "output", "text": f"❌ Agent error: {exc}"})
-        q.put({"type": "done", "done": True, "success": False})
+        master_list_id = created_lists[-1]["listId"] if created_lists else None
+        q.put({"type": "done", "done": True, "success": False, "master_list_id": master_list_id})
 
 
 # The former SKILL.md/Chrome CLI fallback (_cli_run) was removed. In CLI mode the
