@@ -657,6 +657,8 @@ def get_email_content_text(email_id: str) -> dict:
                                 "unsubscribe", "subscription center",
                                 "2810 n church", "wilmington, delaware",
                                 "this email was sent by",
+                                "thank you to our sponsors", "check out all our sponsors",
+                                "follow us",
                             )):
                                 continue
                             html_parts.append(html)

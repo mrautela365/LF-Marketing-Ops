@@ -355,6 +355,63 @@ def _strip_system_content(html: str) -> str:
     return _STRIP_RE.sub("", html).strip()
 
 
+# Whole rich_text sections to drop outright rather than try to patch in place.
+# Reference emails used for style-learning are themselves past outputs of this
+# same pipeline, so their stored content already contains these system-injected
+# blocks (sponsor thank-you/tier callouts, "FOLLOW US", footer text) — the model
+# has no way to tell they're system-injected and will copy them as ordinary body
+# content. _STRIP_RE above tries to excise these via tag-matching regex, but that
+# only touches the throwaway UI preview HTML and is fragile against the nested
+# <span>/<br> markup Claude actually emits (it silently fails to match). This
+# check instead strips all tags to plain text before matching, and drops the
+# whole section — applied to the real `sections` array (not just the preview),
+# since that array is what's sent to HubSpot via content_sections.
+_SECTION_FORBIDDEN_PHRASES = (
+    "thank you to our sponsors", "check out all our sponsors", "follow us",
+    "view in browser", "view this email in", "view email in browser",
+    "unsubscribe", "subscription center",
+    "2810 n church", "wilmington, delaware",
+    "this email was sent by",
+)
+
+# Sponsor tier labels — "gold"/"silver" are too generic for a substring match
+# (would false-positive on legitimate copy like "gold standard support"), so
+# these only match when they're the section's ENTIRE content — i.e. a bare
+# tier heading with nothing else, which is unambiguously a sponsor-tier artifact.
+_SECTION_FORBIDDEN_EXACT = {
+    "platinum", "gold", "silver", "bronze",
+    "platinum sponsors", "gold sponsors", "silver sponsors", "bronze sponsors",
+}
+
+
+def _drop_system_sections(sections: list, sponsors: list = None) -> list:
+    """Drop rich_text sections that duplicate system-injected content (sponsors,
+    follow-us, footer). See _SECTION_FORBIDDEN_PHRASES for why this is needed.
+
+    Also drops any section that names a known sponsor — "Do NOT include sponsor
+    names" is already an explicit instruction to the model, so a section naming
+    one is always a violation of that rule, not a legitimate edge case to keep.
+    """
+    sponsor_names = tuple(
+        s["name"].strip().lower()
+        for s in (sponsors or [])
+        if isinstance(s, dict) and s.get("name", "").strip()
+    )
+    out = []
+    for sec in sections:
+        if sec.get("type") == "rich_text":
+            plain = _re.sub(r"<[^>]+>", " ", sec.get("html", "") or "").lower()
+            stripped = plain.strip()
+            if any(p in plain for p in _SECTION_FORBIDDEN_PHRASES):
+                continue
+            if stripped in _SECTION_FORBIDDEN_EXACT:
+                continue
+            if any(name in plain for name in sponsor_names):
+                continue
+        out.append(sec)
+    return out
+
+
 def _sections_to_html(sections: list, btn_color: str = "#04c0da",
                       sponsors: list = None) -> str:
     """Convert structured sections array to flat HTML for the UI iframe preview."""
@@ -955,6 +1012,7 @@ sections: ordered array of content blocks. The system automatically adds the her
                     # Backwards compat: if Claude returned "html" instead of "sections"
                     if not sections_list and data.get("html"):
                         sections_list = [{"type": "rich_text", "html": str(data["html"])}]
+                    sections_list = _drop_system_sections(sections_list, sponsors)
                     body_html    = _sections_to_html(sections_list, ref_btn_color, sponsors)
                     preview_html = _build_email_preview(
                         banner_url, body_html, url, event_name
