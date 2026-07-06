@@ -6,7 +6,7 @@ import json
 import logging
 import re
 import requests
-from config import HUBSPOT_ACCESS_TOKEN, HUBSPOT_PORTAL_ID
+from config import HUBSPOT_ACCESS_TOKEN, HUBSPOT_PORTAL_ID, tag_asset_name
 
 
 def _headers() -> dict:
@@ -354,7 +354,7 @@ def clone_email(source_email_id: str, clone_name: str) -> dict:
     """Clone a HubSpot email. Returns new email ID and draft URL. Verifies creation."""
     email = _post("/marketing/v3/emails/clone", {
         "id": source_email_id,
-        "cloneName": clone_name,
+        "cloneName": tag_asset_name(clone_name),
         "language": "en",
     })
     email_id = email.get("id")

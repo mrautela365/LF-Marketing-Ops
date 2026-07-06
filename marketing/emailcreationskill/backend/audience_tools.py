@@ -28,6 +28,7 @@ from bs4 import BeautifulSoup
 from config import (
     LITELLM_BASE_URL, LITELLM_API_KEY,
     HUBSPOT_ACCESS_TOKEN, HUBSPOT_PORTAL_ID,
+    tag_asset_name,
 )
 import llm_gateway   # ALL AI calls route through this single deterministic gateway
 
@@ -160,7 +161,7 @@ def hubspot_create_list(name: str, filter_branch: dict) -> dict:
     """Create a new dynamic HubSpot contact list."""
     url = f"{_HS_BASE}/crm/v3/lists/"
     payload = {
-        "name": name,
+        "name": tag_asset_name(name),
         "objectTypeId": "0-1",
         "processingType": "DYNAMIC",
         "filterBranch": filter_branch,
@@ -216,8 +217,19 @@ def _sf_private_key_bytes() -> bytes:
     pem = os.environ.get("SNOWFLAKE_PRIVATE_KEY", "").strip()
     if not pem:
         raise RuntimeError("SNOWFLAKE_PRIVATE_KEY not set")
-    pem = pem.replace("\\n", "\n")
-    key = load_pem_private_key(pem.encode(), password=None, backend=default_backend())
+    # Common .env copy/paste mistakes: stray wrapping quotes, literal \n / \r\n escapes,
+    # and real CRLF line endings (all of which produce "MalformedFraming" from cryptography).
+    if len(pem) >= 2 and pem[0] == pem[-1] and pem[0] in "'\"":
+        pem = pem[1:-1].strip()
+    pem = pem.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\r\n", "\n").replace("\r", "\n")
+    try:
+        key = load_pem_private_key(pem.encode(), password=None, backend=default_backend())
+    except Exception as exc:
+        raise RuntimeError(
+            f"Failed to parse SNOWFLAKE_PRIVATE_KEY as a PEM key ({exc}). "
+            "Check that .env holds the full unencrypted PKCS8 PEM "
+            "(BEGIN/END PRIVATE KEY lines) with line breaks preserved as literal \\n."
+        ) from exc
     return key.private_bytes(
         encoding=Encoding.DER,
         format=PrivateFormat.PKCS8,
@@ -390,24 +402,22 @@ def _audience_execute(name: str, tool_input: dict) -> str:
 # Prompts (ported verbatim from lf-event-studio/app/prompts.py)
 # ══════════════════════════════════════════════════════════════════════════════
 
-PLANNING_PROMPT = """You are an experienced LF email audience strategist.
+PLANNING_PROMPT_TEMPLATE = """You are an experienced LF email audience strategist.
 Plan the HubSpot audience segment for this Linux Foundation event:
 
 {url}
 
+CRITICAL — Snowflake data integrity: past-edition EVENT_NAME values are ONLY valid
+when they come from a successful snowflake_query call against EVENT_REGISTRATIONS.
+If snowflake_query fails (connection/key error) or you skip calling it, do NOT
+substitute guessed, remembered, or web-researched event name strings — including
+values copied from existing HubSpot list filters (e.g. communitySeg snapshots).
+Report the failure plainly and list past-registrant segmentation under
+"Open questions / flags" as unresolved until Snowflake is reachable.
+
 Work through ALL 4 steps below, narrating each sub-step so progress is visible.
 
-═══════════════════════════════════════════════════
-STEP 1 — Scrape the event page
-═══════════════════════════════════════════════════
-Use web_fetch to fetch the URL above. Extract:
-- Event name (full title, e.g. "KubeCon + CloudNativeCon North America 2026")
-- Short name / slug (e.g. "KCNA", "OSSNA") — used for HubSpot search terms
-- Foundation / brand (e.g. CNCF, The Linux Foundation, PyTorch, OpenSearch)
-- Location (city + country/region)
-- Event dates and year
-- Event type (in-person conference, virtual, hybrid, summit)
-
+{step1}
 ═══════════════════════════════════════════════════
 STEP 2 — Find previous edition emails in HubSpot
 ═══════════════════════════════════════════════════
@@ -438,8 +448,9 @@ foundation-specific opt-outs.
 Opt-in filter logic: whether applied, which variant (Foundation / LF Events /
 LF Newsletter), and why.
 
-Flag any communitySeg / community_seg lists found — note which are
-past-registrant lists (rebuildable) vs other (skip and flag).
+Flag any communitySeg / community_seg lists found. They are retired — exclude them
+entirely from the plan. Do not propose rebuilding, replacing, or otherwise reusing
+their logic; just note that they were found and excluded.
 
 ═══════════════════════════════════════════════════
 STEP 4 — Produce the Segment Plan Report
@@ -459,8 +470,8 @@ Follow foundation naming convention, e.g.:
 **Inclusion strategy** — per source list: name, why it belongs, dynamic vs snapshot.
 Group by and number each list:
   1. Past registrants (BEHAVIORAL_EVENT filter)
-  2. Web visitors (PAGE_VIEW + brand master)
-  3. Geographic segments (if applicable)
+  2. Web visitors (PAGE_VIEW only — no brand-master gate)
+  3. Geographic segments (LIST_MEMBERSHIP + brand-master gate — mandatory, if applicable)
   4. Topic / persona lists (if applicable)
   5. Foundation / newsletter subscribers (if applicable)
   6. Any other inclusion lists from prior sends
@@ -480,12 +491,54 @@ Always include: LF Events Global Opt Outs, LF Global Opt-Outs, GDPR Suppression 
 
 **Recommended HubSpot list structure** — filter group sketch (OR/AND logic).
 
-**communitySeg lists** — list each one found; classify as past-registrant (rebuildable) or other.
+**communitySeg lists** — list each one found and confirm it is excluded from this plan.
+Do not recommend rebuilding, replacing, or reusing any of them.
 
 **Open questions / flags** — anything to confirm before building.
 
 End with: "Ready to proceed? Say yes and I'll build the segment in HubSpot."
 """
+
+_STEP1_SCRAPE = """═══════════════════════════════════════════════════
+STEP 1 — Scrape the event page
+═══════════════════════════════════════════════════
+Use web_fetch to fetch the URL above. Extract:
+- Event name (full title, e.g. "KubeCon + CloudNativeCon North America 2026")
+- Short name / slug (e.g. "KCNA", "OSSNA") — used for HubSpot search terms
+- Foundation / brand (e.g. CNCF, The Linux Foundation, PyTorch, OpenSearch)
+- Location (city + country/region)
+- Event dates and year
+- Event type (in-person conference, virtual, hybrid, summit)
+"""
+
+
+def _format_prescraped_step1(data: dict) -> str:
+    """Render already-scraped event data (from the Email Content stage) into the
+    STEP 1 block so the planning agent doesn't hit the event page a second time."""
+    dates = ", ".join(data.get("event_dates") or []) or "unknown"
+    headings = ", ".join(data.get("headings") or []) or "none captured"
+    return f"""═══════════════════════════════════════════════════
+STEP 1 — Event details (already scraped — do NOT re-fetch the page)
+═══════════════════════════════════════════════════
+The event page was already scraped while drafting the email content. Use this data
+directly instead of calling web_fetch on the URL above:
+
+- Event name: {data.get("event_name") or "unknown"}
+- Foundation / brand: {data.get("brand_name") or "unknown"}
+- Location: {data.get("location") or "unknown"}
+- Event dates: {dates}
+- Description: {data.get("description") or "unknown"}
+- Page headings: {headings}
+
+Derive the short name / slug and event type from the above. Do NOT call web_fetch for
+this URL — it has already been scraped and re-fetching would waste a step. Only fall
+back to web_fetch if a detail you need is genuinely missing from the data above.
+"""
+
+
+def build_planning_prompt(url: str, prescraped: dict | None = None) -> str:
+    step1 = _format_prescraped_step1(prescraped) if prescraped else _STEP1_SCRAPE
+    return PLANNING_PROMPT_TEMPLATE.format(url=url, step1=step1)
 
 
 BUILDING_PROMPT = """Build ALL the HubSpot audience lists for this Linux Foundation event.
@@ -507,10 +560,11 @@ RULE 1 — Build EVERY inclusion list from the plan, not just 2.
   Read the "Inclusion strategy" section carefully. Create one HubSpot list per
   numbered inclusion source. Do not skip any.
 
-RULE 2 — communitySeg lists MUST NEVER be used as sources:
-  Any list labelled communitySeg / community_seg must NOT be referenced or included.
-  Past-registrant communitySeg → rebuild using BEHAVIORAL_EVENT filters.
-  Non-registrant communitySeg → skip and add to ## FLAGGED FOR REVIEW.
+RULE 2 — communitySeg lists MUST NEVER be used, referenced, or rebuilt:
+  Any list labelled communitySeg / community_seg must NOT be included as a source,
+  and its logic must NOT be reproduced under a different filter type. Do not propose
+  or build a BEHAVIORAL_EVENT (or any other) rebuild of it. Skip it entirely and add
+  it to ## FLAGGED FOR REVIEW with reason "communitySeg — excluded per policy".
 
 RULE 3 — Print ## BUILD PLAN before creating anything in HubSpot.
   Number each list to create. State its filter type and logic.
@@ -539,9 +593,21 @@ Segment Plan above — do NOT re-scrape the URL.
 
 Copy the exact EVENT_NAME strings — they are used verbatim as HubSpot filter values.
 
+If snowflake_query errors (connection/key failure) or returns zero rows, you MUST NOT
+substitute guessed, remembered, or web-researched event name strings — including values
+seen in the Segment Plan above or in existing HubSpot list filters (e.g. communitySeg
+snapshots). Those are not guaranteed to match Snowflake's exact EVENT_NAME values and
+will silently miscount the list. Instead: skip the BEHAVIORAL_EVENT past-registrant
+list entirely, add it to ## FLAGGED FOR REVIEW with reason "Snowflake unavailable —
+exact EVENT_NAME values could not be verified", and continue with the remaining
+inclusion lists + master list per RULE 4.
+
 ═══════════════════════════════════════════════════
 STEP 2 — Look up brand master list ID
 ═══════════════════════════════════════════════════
+Only needed if the plan includes a geographic/regional inclusion list — the brand-master
+gate is mandatory there, but is NOT applied to web-visitor lists (Step 4 below).
+
 Use read_reference_file("brand-master-lists.md") to look up the brand key from the plan.
 If not found → use hubspot_search_lists("[brand] master") to find it, note the ID.
 
@@ -556,8 +622,7 @@ Inclusion strategy in the Segment Plan. Include:
 - List number and name
 - Filter type(s)
 - Why it's needed
-- Any communitySeg list it replaces (→ BEHAVIORAL_EVENT rebuild)
-- Anything being SKIPPED and why
+- Anything being SKIPPED and why (including any communitySeg lists found — excluded per policy, not rebuilt)
 
 ═══════════════════════════════════════════════════
 STEP 4 — Build ALL inclusion lists (one per inclusion source)
@@ -565,7 +630,8 @@ STEP 4 — Build ALL inclusion lists (one per inclusion source)
 Create every list from your BUILD PLAN in order. Use the correct filter type for each:
 
 ── BEHAVIORAL_EVENT (past registrants) ──────────────────────
-Use for: past-registrant lists, communitySeg rebuilds.
+Use for: past-registrant lists (built fresh from Snowflake EVENT_NAME data — never as
+a rebuild or replacement of a communitySeg list; see RULE 2).
 filterBranch structure:
 {{
   "filterBranchType": "OR",
@@ -597,8 +663,8 @@ filterBranch structure:
 }}
 Add one AND branch per past edition. All inside the top OR.
 
-── PAGE_VIEW + LIST_MEMBERSHIP (web visitors) ───────────────
-Use for: web-visitor + brand-master combination.
+── PAGE_VIEW (web visitors) ──────────────────────────────────
+Use for: web-visitor lists. NO brand-master gate — a page view alone qualifies.
 filterBranch structure:
 {{
   "filterBranchType": "OR",
@@ -611,6 +677,29 @@ filterBranch structure:
           "filterType": "PAGE_VIEW",
           "value": "[event URL]",
           "operator": "HAS_VIEWED_URL"
+        }}
+      ]
+    }}
+  ],
+  "filters": []
+}}
+
+── LIST_MEMBERSHIP + brand master (geographic / regional segments) ──
+Use for: geographic or regional contact lists. The brand-master gate is MANDATORY
+here — a regional filter alone is too broad. Look up the brand master list ID in
+Step 2 before building this list.
+filterBranch structure:
+{{
+  "filterBranchType": "OR",
+  "filterBranches": [
+    {{
+      "filterBranchType": "AND",
+      "filterBranches": [],
+      "filters": [
+        {{
+          "filterType": "LIST_MEMBERSHIP",
+          "listId": "[existing geographic/regional HubSpot list ID as string]",
+          "operator": "IN_LIST"
         }},
         {{
           "filterType": "LIST_MEMBERSHIP",
@@ -623,8 +712,9 @@ filterBranch structure:
   "filters": []
 }}
 
-── LIST_MEMBERSHIP (reference existing HubSpot lists) ───────
-Use for: geographic lists, topic/persona lists, newsletter lists already in HubSpot.
+── LIST_MEMBERSHIP (other existing HubSpot lists) ───────────
+Use for: topic/persona lists, newsletter lists already in HubSpot (not geographic/regional
+— no brand-master gate needed here).
 Use hubspot_search_lists to find the existing list ID first.
 filterBranch structure:
 {{
@@ -816,6 +906,7 @@ def _run_agent(prompt: str, q: queue.Queue) -> None:
     in the same shape the SSE consumer expects; identical behavior on any backend."""
     log.info(f"[AGENT] starting — backend={llm_gateway.backend_name()!r} "
              f"model={llm_gateway.resolve_model()!r} prompt_len={len(prompt)}")
+    q.put({"type": "output", "text": f"🚀 Starting agent (backend={llm_gateway.backend_name()})…"})
 
     def _on_event(ev: dict) -> None:
         etype = ev.get("type")
@@ -823,6 +914,12 @@ def _run_agent(prompt: str, q: queue.Queue) -> None:
             for line in (ev.get("text") or "").splitlines():
                 if line.strip():
                     q.put({"type": "output", "text": line})
+        elif etype == "output_delta":
+            # Partial streamed chunk — pushed raw (not line-split) so words/sentences
+            # aren't mangled; tagged `delta` so the frontend doesn't force a newline.
+            text = ev.get("text") or ""
+            if text:
+                q.put({"type": "output", "text": text, "delta": True})
         elif etype == "tool":
             q.put({"type": "output",
                    "text": f"🔧 {ev.get('name')}({json.dumps(ev.get('input', {}))[:100]})"})
@@ -856,25 +953,32 @@ def _run_agent(prompt: str, q: queue.Queue) -> None:
 # Public API
 # ══════════════════════════════════════════════════════════════════════════════
 
-def start_plan_job(event_url: str) -> str:
+def start_plan_job(event_url: str, prescraped: dict | None = None) -> str:
     """Phase 1 — start segment planning job. Returns job_id for SSE polling.
-    Always routes through the deterministic gateway (SDK or CLI, chosen inside it)."""
+    Always routes through the deterministic gateway (SDK or CLI, chosen inside it).
+
+    `prescraped` — event data already scraped during the Email Content stage
+    (session.meta["url_data"]). When present, the planning agent reuses it
+    instead of re-fetching the event page."""
     job_id = str(uuid.uuid4())
     q: queue.Queue = queue.Queue()
     _jobs[job_id] = q
-    log.info(f"[AUDIENCE] plan job {job_id[:8]} — backend={llm_gateway.backend_name()!r} — url={event_url!r}")
-    prompt = PLANNING_PROMPT.format(url=event_url)
+    log.info(f"[AUDIENCE] plan job {job_id[:8]} — backend={llm_gateway.backend_name()!r} — url={event_url!r} reuse_scrape={bool(prescraped)}")
+    prompt = build_planning_prompt(event_url, prescraped)
     threading.Thread(target=_run_agent, args=(prompt, q), daemon=True).start()
     return job_id
 
 
-def start_build_job(event_url: str, plan: str = "", qa: str = "") -> str:
+def start_build_job(event_url: str, plan: str = "", qa: str = "", prescraped: dict | None = None) -> str:
     """
     Start audience list building. Returns job_id for SSE polling.
     Always routes through the deterministic gateway (SDK or CLI, chosen inside it).
 
     - plan provided  → Phase 2 only (building from existing plan)
     - plan empty     → Phase 1 + Phase 2 chained automatically in one job
+
+    `prescraped` — event data already scraped during the Email Content stage;
+    reused by Phase 1 planning instead of re-fetching the event page.
     """
     job_id = str(uuid.uuid4())
     q: queue.Queue = queue.Queue()
@@ -887,12 +991,12 @@ def start_build_job(event_url: str, plan: str = "", qa: str = "") -> str:
         threading.Thread(target=_run_agent, args=(prompt, q), daemon=True).start()
     else:
         log.info(f"[AUDIENCE] build job {job_id[:8]} — two-phase (no plan provided) — url={event_url!r} "
-                 f"— backend={llm_gateway.backend_name()!r}")
-        threading.Thread(target=_run_two_phase, args=(event_url, qa, q), daemon=True).start()
+                 f"reuse_scrape={bool(prescraped)} — backend={llm_gateway.backend_name()!r}")
+        threading.Thread(target=_run_two_phase, args=(event_url, qa, q, prescraped), daemon=True).start()
     return job_id
 
 
-def _run_two_phase(event_url: str, qa: str, q: queue.Queue) -> None:
+def _run_two_phase(event_url: str, qa: str, q: queue.Queue, prescraped: dict | None = None) -> None:
     """
     Run PLANNING_PROMPT then BUILDING_PROMPT in sequence within a single job.
     Phase 1 output is captured and passed as {plan} to Phase 2.
@@ -900,9 +1004,12 @@ def _run_two_phase(event_url: str, qa: str, q: queue.Queue) -> None:
     """
     # ── Phase 1: planning ────────────────────────────────────────────────────
     log.info("[AUDIENCE] two-phase: starting Phase 1 (planning)")
-    q.put({"type": "output", "text": "═══ Phase 1: Segment Planning ═══"})
+    if prescraped:
+        q.put({"type": "output", "text": "═══ Phase 1: Segment Planning (reusing already-scraped event data) ═══"})
+    else:
+        q.put({"type": "output", "text": "═══ Phase 1: Segment Planning ═══"})
     plan_q: queue.Queue = queue.Queue()
-    plan_prompt = PLANNING_PROMPT.format(url=event_url)
+    plan_prompt = build_planning_prompt(event_url, prescraped)
     threading.Thread(target=_run_agent, args=(plan_prompt, plan_q), daemon=True).start()
 
     plan_lines: list[str] = []

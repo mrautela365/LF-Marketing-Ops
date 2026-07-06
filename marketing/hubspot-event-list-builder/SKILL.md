@@ -6,9 +6,8 @@ description: >
   of that event, then creates two lists in HubSpot by cloning the reference
   example list and updating filters: (1) All Past Registrants filtered by custom
   event synced from Snowflake, and (2) Registrants + Web Visitors combining
-  List 1 OR web visitor to the event page (no master-list gate — that gate is
-  only required for regional/geographic contact filters). Always use this
-  skill when the user provides an
+  List 1 OR (web visitor to the event page AND member of the brand's master
+  list). Always use this skill when the user provides an
   events.linuxfoundation.org URL and wants to build or prepare HubSpot lists,
   audience segments, or promotion lists for that event — even if they say things
   like "prep the lists", "set up audiences", "build the list for this event", or
@@ -29,7 +28,7 @@ Filter: OR across all past editions → Custom Event `[event_name]` synced from 
 **List 2 — Registrants + Web Visitors**
 Name: `[Brand] - [Event Name] - Registrants + Web Visitors`
 Filter Group 1 (OR): Member of List 1
-Filter Group 2 (OR): Web visitor to the event page URL (no master-list gate)
+Filter Group 2 (OR): Web visitor to the event page URL AND member of brand master list
 
 ---
 
@@ -40,7 +39,7 @@ Fetch the provided event URL using the web fetch tool.
 Extract:
 - **Event name** — the full title (e.g., "KubeCon + CloudNativeCon India")
 - **Edition** — location and/or year (e.g., "India 2025", "North America 2024")
-- **Event URL** — the exact URL (needed for web visitor filter in Step 4)
+- **Event URL** — the exact URL (needed for web visitor filter in Step 5)
 
 Derive the **brand key** by checking the URL slug against `references/brand-master-lists.md`.
 Example: `kubecon-cloudnativecon-india` → brand key `cncf`.
@@ -84,7 +83,18 @@ If you cannot access Snowflake, ask the user to provide the past event name list
 
 ---
 
-## Step 3 — Clone reference list and build List 1: All Past Registrants
+## Step 3 — Look up brand master list ID
+
+Read `references/brand-master-lists.md` and look up the master list ID for the derived brand key.
+
+- If found → use that list ID directly
+- If not found → search HubSpot: go to Contacts → Lists, search for `[brand] master`, pick the list
+  that contains opt-in filters, all event registrations, and education enrollments. Note its ID.
+  Add it to the reference file for future use.
+
+---
+
+## Step 4 — Clone reference list and build List 1: All Past Registrants
 
 The reference example list lives at:
 `https://app.hubspot.com/contacts/8112310/objectLists/26624/filters`
@@ -106,7 +116,7 @@ All past editions are OR'd together in a single filter group. Save the list and 
 
 ---
 
-## Step 4 — Build List 2: Registrants + Web Visitors
+## Step 5 — Build List 2: Registrants + Web Visitors
 
 Create a second new **Contact-based** list in HubSpot (or clone any simple existing list as a starting point).
 
@@ -116,19 +126,18 @@ Example: `CNCF - KubeCon + CloudNativeCon India - Registrants + Web Visitors`
 **Filter structure** — two filter groups joined by OR:
 
 **Filter Group 1** (past registrants):
-- Member of list: [List 1 ID from Step 3]
+- Member of list: [List 1 ID from Step 4]
 
-**Filter Group 2** (web visitors):
-- Has visited page URL = `[the event URL from Step 1]`
+**Filter Group 2** (web visitors in brand audience) — two conditions joined by AND:
+- Condition A: Has visited page URL = `[the event URL from Step 1]`
   (Use HubSpot's "Visited URL" / "Page view" web activity filter, exact match or contains)
-  No master-list gate — a page view alone qualifies. (The master-list gate is only
-  required when building regional/geographic contact filters, which this skill doesn't build.)
+- Condition B: Member of list = `[brand master list ID from Step 3]`
 
 Save the list and note the new list ID.
 
 ---
 
-## Step 5 — Confirm and report
+## Step 6 — Confirm and report
 
 After both lists are saved, report:
 - List 1 name + HubSpot list ID + count of filter conditions added

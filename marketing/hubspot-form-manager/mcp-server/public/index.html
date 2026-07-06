@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HubSpot Form Manager</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<!-- Header -->
+<div class="app-header">
+  <h1>🧩 HubSpot Form Manager</h1>
+  <a href="/setup" class="settings-link">⚙️ Settings</a>
+</div>
+
+<!-- Tab bar -->
+<div class="tab-bar">
+  <button class="tab-btn active" data-tab="create">➕ Create Form</button>
+  <button class="tab-btn" data-tab="delete">🗑️ Delete Forms</button>
+  <button class="tab-btn" data-tab="notifications">🔕 Disable Notifications</button>
+  <button class="tab-btn" data-tab="update">✏️ Update Form</button>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════
+     TAB 1 — CREATE FORM
+     ═══════════════════════════════════════════════════════════ -->
+<div id="tab-create" class="tab-content active">
+
+  <!-- Asana pre-fill (optional) -->
+  <div class="asana-prefill">
+    <div class="field-group" style="margin:0">
+      <label for="asana-url">📎 Asana task URL <span class="optional">(optional — paste to auto-fill fields below)</span></label>
+      <div style="display:flex; gap:0.5rem; margin-top:0.35rem">
+        <input type="url" id="asana-url" placeholder="https://app.asana.com/1/..." style="flex:1">
+        <button type="button" class="btn-secondary" id="btn-prefill">Pre-fill</button>
+      </div>
+      <small>Hints from Asana are suggestions only — you must review and confirm all fields.</small>
+    </div>
+    <div id="prefill-banner" class="hint-banner" style="display:none; margin-top:0.75rem"></div>
+  </div>
+
+  <!-- Form details -->
+  <div class="card">
+    <h2>Form Details</h2>
+
+    <div class="field-group">
+      <label for="brand">Brand / Business Unit <span class="required">*</span></label>
+      <select id="brand-select">
+        <option value="">⏳ Loading brands…</option>
+      </select>
+      <input type="text" id="brand-custom" placeholder="Type brand / business unit name" style="display:none; margin-top:0.4rem">
+      <input type="hidden" id="brand">
+      <input type="hidden" id="brand-bu-id">
+      <small>Required — never assumed. This must be confirmed explicitly.</small>
+    </div>
+
+    <div class="field-group">
+      <label for="form-name">Form Name <span class="required">*</span></label>
+      <input type="text" id="form-name" placeholder="26Q2 - LF Events - CloudNativeCon Europe 2026" required>
+      <small>Convention: <code>[YYQ#] - [Team] - [Event Name] [Year]</code></small>
+    </div>
+
+    <div class="field-group">
+      <label for="reference-form">Reference Form <span class="optional">(optional — search to copy thank-you message)</span></label>
+      <div class="autocomplete-wrapper">
+        <input type="text" id="reference-form" placeholder="Search existing HubSpot forms..." autocomplete="off">
+        <ul class="autocomplete-list" id="reference-form-list" style="display:none"></ul>
+      </div>
+      <input type="hidden" id="reference-form-id">
+    </div>
+
+    <div class="field-group">
+      <label for="submit-text">Submit Button Text</label>
+      <input type="text" id="submit-text" value="Submit">
+    </div>
+
+    <div class="field-group">
+      <label for="thank-you">Thank-You Message <span class="required">*</span></label>
+      <textarea id="thank-you" rows="2" placeholder="Thank you for registering! We'll be in touch soon."></textarea>
+    </div>
+  </div>
+
+  <!-- Fields builder -->
+  <div class="card">
+    <h2>Form Fields</h2>
+    <div id="fields-loading" style="font-size:13px; color:#718096; padding:0.4rem 0">⏳ Loading HubSpot properties…</div>
+    <div class="fields-list" id="fields-list">
+      <!-- Rows added dynamically -->
+    </div>
+    <button type="button" class="btn-add" id="btn-add-field">+ Add Field</button>
+  </div>
+
+  <!-- Subscription & notifications -->
+  <div class="card">
+    <h2>Subscription &amp; Notifications</h2>
+
+    <div class="field-group">
+      <label for="subscription-type">Subscription Type <span class="required">*</span></label>
+      <select id="subscription-type">
+        <option value="">— Loading subscription types… —</option>
+      </select>
+      <small>The user must select this explicitly. Never inherited from a reference form.</small>
+    </div>
+
+    <div class="field-group">
+      <label for="notification-emails">Notification Emails <span class="optional">(leave blank for no notifications)</span></label>
+      <input type="text" id="notification-emails" placeholder="email1@example.com, email2@example.com">
+      <small>Comma-separated. Leave empty to send no email notifications on form submissions.</small>
+    </div>
+  </div>
+
+  <!-- Autoresponder email -->
+  <div class="card">
+    <h2>Autoresponder Email <span class="optional">(optional)</span></h2>
+    <p style="font-size:13px; color:#718096; margin-bottom:1rem">
+      A transactional email sent automatically when the form is submitted. Bypasses subscription status.
+    </p>
+
+    <div class="field-group">
+      <label for="ar-subject">Subject Line</label>
+      <input type="text" id="ar-subject" placeholder="You're registered — [Event Name]">
+    </div>
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.75rem">
+      <div class="field-group">
+        <label for="ar-from-name">From Name</label>
+        <input type="text" id="ar-from-name" placeholder="LF Events">
+      </div>
+      <div class="field-group">
+        <label for="ar-from-email">From Email Address</label>
+        <input type="email" id="ar-from-email" placeholder="events@aaif.io">
+      </div>
+    </div>
+    <div class="field-group">
+      <label for="ar-body">Email Body (HTML or plain text)</label>
+      <textarea id="ar-body" rows="4"
+        placeholder="<p>Thanks for signing up for [Event Name] — we'll send you the livestream link closer to the event.</p>"></textarea>
+    </div>
+  </div>
+
+  <!-- Workflow enrollment -->
+  <div class="card">
+    <h2>Workflow Enrollment <span class="optional">(optional)</span></h2>
+
+    <div class="field-group">
+      <label for="workflow-search">Enroll Submitters in Workflow</label>
+      <div class="autocomplete-wrapper">
+        <input type="text" id="workflow-search" placeholder="Search workflows by name… e.g. AAIF, Subscription" autocomplete="off">
+        <ul class="autocomplete-list" id="workflow-list" style="display:none"></ul>
+      </div>
+      <input type="hidden" id="workflow-id">
+      <input type="hidden" id="workflow-name">
+      <small>User must explicitly select a workflow. Leave blank if none.</small>
+    </div>
+  </div>
+
+  <!-- Submit -->
+  <div class="form-actions">
+    <button type="button" class="btn-primary" id="btn-create-form">Create Form</button>
+    <button type="button" class="btn-secondary" id="btn-reset-create">Reset</button>
+  </div>
+  <div id="create-result" class="result-area hidden"></div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════
+     TAB 2 — DELETE FORMS
+     ═══════════════════════════════════════════════════════════ -->
+<div id="tab-delete" class="tab-content">
+  <div class="card">
+    <h2>Search Forms to Delete</h2>
+    <div class="search-bar">
+      <input type="text" id="delete-search" placeholder="Search forms by name…">
+      <button type="button" class="btn-secondary" id="btn-delete-search">Search</button>
+    </div>
+    <div class="forms-checklist" id="delete-checklist">
+      <p style="color:#718096; font-size:13px">Search for forms above to see results.</p>
+    </div>
+  </div>
+
+  <div class="card" id="delete-confirm-card" style="display:none">
+    <h2>Confirm Deletion</h2>
+    <div class="danger-confirm">
+      <input type="checkbox" id="delete-confirm-checkbox">
+      <label for="delete-confirm-checkbox">
+        I understand that deleting these forms is <strong>permanent and cannot be undone</strong>.
+        All associated form data and settings will be lost.
+      </label>
+    </div>
+    <div class="form-actions">
+      <button type="button" class="btn-danger" id="btn-delete-forms" disabled>🗑️ Delete Selected Forms</button>
+      <span id="delete-selected-count" style="font-size:13px; color:#718096"></span>
+    </div>
+    <div id="delete-result" class="result-area hidden"></div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════
+     TAB 3 — DISABLE NOTIFICATIONS
+     ═══════════════════════════════════════════════════════════ -->
+<div id="tab-notifications" class="tab-content">
+  <div class="card">
+    <h2>Search Forms</h2>
+    <div class="search-bar">
+      <input type="text" id="notif-search" placeholder="Search forms by name…">
+      <button type="button" class="btn-secondary" id="btn-notif-search">Search</button>
+    </div>
+    <div class="forms-checklist" id="notif-checklist">
+      <p style="color:#718096; font-size:13px">Search for forms above to see results.</p>
+    </div>
+  </div>
+
+  <div class="card" id="notif-action-card" style="display:none">
+    <div class="form-actions">
+      <button type="button" class="btn-primary" id="btn-disable-notifs">🔕 Disable Notifications on Selected</button>
+      <span id="notif-selected-count" style="font-size:13px; color:#718096"></span>
+    </div>
+    <div id="notif-result" class="result-area hidden"></div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════
+     TAB 4 — UPDATE FORM
+     ═══════════════════════════════════════════════════════════ -->
+<div id="tab-update" class="tab-content">
+
+  <!-- Form picker -->
+  <div class="card">
+    <h2>Find Form to Update</h2>
+    <div class="field-group" style="margin:0">
+      <label for="update-form-search">Search for a form <span class="required">*</span></label>
+      <div class="autocomplete-wrapper">
+        <input type="text" id="update-form-search" placeholder="Search existing HubSpot forms…" autocomplete="off">
+        <ul class="autocomplete-list" id="update-form-list" style="display:none"></ul>
+      </div>
+      <input type="hidden" id="update-form-id">
+      <small>Type to search, then select a form to load its current values.</small>
+    </div>
+  </div>
+
+  <!-- Editable fields (shown after a form is selected) -->
+  <div class="card" id="update-details-card" style="display:none">
+    <h2>Edit Form Details</h2>
+
+    <div class="field-group">
+      <label for="update-form-name">Form Name</label>
+      <input type="text" id="update-form-name" placeholder="e.g. 26Q2 - LF Events - CloudNativeCon Europe 2026">
+    </div>
+
+    <div class="field-group">
+      <label for="update-submit-text">Submit Button Text</label>
+      <input type="text" id="update-submit-text" placeholder="Submit">
+    </div>
+
+    <div class="field-group">
+      <label for="update-thank-you">Thank-You Message</label>
+      <textarea id="update-thank-you" rows="2" placeholder="Thank you for registering!"></textarea>
+    </div>
+
+    <div class="field-group">
+      <label for="update-notification-emails">Notification Emails <span class="optional">(leave blank for none)</span></label>
+      <input type="text" id="update-notification-emails" placeholder="email1@example.com, email2@example.com">
+      <small>Comma-separated. Clear and save to disable all notifications.</small>
+    </div>
+
+    <div class="form-actions">
+      <button type="button" class="btn-primary" id="btn-save-form">Save Changes</button>
+      <button type="button" class="btn-secondary" id="btn-update-reset">Clear</button>
+    </div>
+    <div id="update-result" class="result-area hidden"></div>
+  </div>
+</div>
+
+<!-- Confirmation modal -->
+<div class="modal-backdrop" id="confirm-modal">
+  <div class="modal">
+    <h3 id="modal-title">Confirm Action</h3>
+    <pre id="modal-body"></pre>
+    <div class="modal-actions">
+      <button type="button" class="btn-secondary" id="modal-cancel">Cancel</button>
+      <button type="button" class="btn-primary" id="modal-confirm">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

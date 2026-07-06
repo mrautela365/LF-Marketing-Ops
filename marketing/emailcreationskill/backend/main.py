@@ -1253,13 +1253,16 @@ async def start_audience_plan(req: AudiencePlanRequest):
         raise HTTPException(status_code=404, detail="Session not found")
 
     event_url = (req.event_url or "").strip()
+    cached = session.meta.get("url_data") or {}
     if not event_url:
-        event_url = (session.meta.get("url_data") or {}).get("url", "")
+        event_url = cached.get("url", "")
     if not event_url:
         raise HTTPException(status_code=400, detail="No event URL — provide event_url or run plan first")
 
-    job_id = audience_tools.start_plan_job(event_url)
-    log.info(f"[AUDIENCE-PLAN] job started: {job_id[:8]} url={event_url!r}")
+    # Reuse the scrape done during the Email Content stage if it's for this same URL.
+    prescraped = cached if cached.get("url") == event_url else None
+    job_id = audience_tools.start_plan_job(event_url, prescraped=prescraped)
+    log.info(f"[AUDIENCE-PLAN] job started: {job_id[:8]} url={event_url!r} reuse_scrape={bool(prescraped)}")
     return {"job_id": job_id, "event_url": event_url}
 
 
@@ -1275,13 +1278,34 @@ async def start_build_audience(req: BuildAudienceRequest):
         raise HTTPException(status_code=404, detail="Session not found")
 
     event_url = (req.event_url or "").strip()
+    cached = session.meta.get("url_data") or {}
     if not event_url:
-        event_url = (session.meta.get("url_data") or {}).get("url", "")
+        event_url = cached.get("url", "")
     if not event_url:
         raise HTTPException(status_code=400, detail="No event URL — provide event_url or run plan first")
 
-    job_id = audience_tools.start_build_job(event_url, plan=req.plan, qa=req.qa)
-    log.info(f"[AUDIENCE-BUILD] job started: {job_id[:8]} url={event_url!r}")
+    # Reuse the scrape done during the Email Content stage if it's for this same URL;
+    # otherwise the planning phase scrapes it fresh.
+    prescraped = cached if cached.get("url") == event_url else None
+    job_id = audience_tools.start_build_job(event_url, plan=req.plan, qa=req.qa, prescraped=prescraped)
+    log.info(f"[AUDIENCE-BUILD] job started: {job_id[:8]} url={event_url!r} reuse_scrape={bool(prescraped)}")
+    return {"job_id": job_id, "event_url": event_url}
+
+
+@app.post("/api/audience/plan")
+async def start_audience_plan_standalone(req: AudienceRunRequest):
+    """
+    Standalone Phase 1 — plan-only, no email session required.
+    Scrapes the event page and produces a Segment Plan; creates no HubSpot lists.
+    Stream output via GET /api/audience-stream/{job_id}, then call /api/audience/run
+    with the reviewed plan text to actually build the lists.
+    """
+    event_url = req.event_url.strip()
+    if not event_url:
+        raise HTTPException(status_code=400, detail="event_url is required")
+
+    job_id = audience_tools.start_plan_job(event_url)
+    log.info(f"[AUDIENCE-PLAN] standalone job {job_id[:8]} url={event_url!r}")
     return {"job_id": job_id, "event_url": event_url}
 
 
