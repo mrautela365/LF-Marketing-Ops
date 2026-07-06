@@ -1,0 +1,141 @@
+{
+  "timestamp": "2026-07-07T00:08:25.657640",
+  "inclusion_lists": [
+    {
+      "list_number": 4,
+      "name": "26Q3 - LF Events - PyTorch Conf NA 2026 - Newsletter (22Q4) [psh-test]",
+      "listId": "29449",
+      "size": null,
+      "hubspot_url": "https://app.hubspot.com/contacts/8112310/lists/29449",
+      "status": "EXISTS"
+    },
+    {
+      "list_number": 5,
+      "name": "26Q3 - LF Events - PyTorch Conf NA 2026 - Newsletter (25Q1 Updated BU) [psh-test]",
+      "listId": "29450",
+      "size": null,
+      "hubspot_url": "https://app.hubspot.com/contacts/8112310/lists/29450",
+      "status": "EXISTS"
+    },
+    {
+      "list_number": 6,
+      "name": "26Q3 - LF Events - PyTorch Conf NA 2026 - Newsletter (25Q1 OSS AI Week) [psh-test]",
+      "listId": "29451",
+      "size": null,
+      "hubspot_url": "https://app.hubspot.com/contacts/8112310/lists/29451",
+      "status": "EXISTS"
+    },
+    {
+      "list_number": 7,
+      "name": "26Q3 - LF Events - PyTorch Conf NA 2026 - Livestream 2024 [psh-test]",
+      "listId": "29452",
+      "size": null,
+      "hubspot_url": "https://app.hubspot.com/contacts/8112310/lists/29452",
+      "status": "EXISTS"
+    }
+  ],
+  "suppression_lists": [
+    {
+      "search_key": "LF Global Opt-Outs",
+      "notes": "Global opt-out list",
+      "status": "FOUND",
+      "listId": "888",
+      "name": "LF Global Opt-Outs",
+      "size": null,
+      "alternatives": [
+        {
+          "name": "LF Training Global Opt Outs",
+          "listId": "18239",
+          "size": null
+        },
+        {
+          "name": "LF Europe Global Opt-Outs",
+          "listId": "21558",
+          "size": null
+        }
+      ]
+    },
+    {
+      "search_key": "LF Europe Global Opt-Outs",
+      "notes": "Europe opt-out list",
+      "status": "FOUND",
+      "listId": "21558",
+      "name": "LF Europe Global Opt-Outs",
+      "size": null,
+      "alternatives": []
+    },
+    {
+      "search_key": "LF Events GDPR Suppression",
+      "notes": "Most recent quarterly (e.g., 25Q2)",
+      "status": "FOUND",
+      "listId": "13340",
+      "name": "24Q1 - LF Events - GDPR Suppression",
+      "size": null,
+      "alternatives": []
+    },
+    {
+      "search_key": "LF Europe GDPR Suppression",
+      "notes": "Most recent",
+      "status": "FOUND",
+      "listId": "20420",
+      "name": "25Q2 - LF Europe - GDPR Suppression",
+      "size": null,
+      "alternatives": []
+    },
+    {
+      "search_key": "23Q1 LF Master Exclusion",
+      "notes": "Known ID: 3732, verify",
+      "status": "FOUND",
+      "listId": "3732",
+      "name": "23Q1 - LF - Master Exclusion List",
+      "size": null,
+      "alternatives": [
+        {
+          "name": "23Q1 - LF - Master Exclusion List - without Internal Emails",
+          "listId": "18546",
+          "size": null
+        },
+        {
+          "name": "23Q1 - LF - Master Exclusion List - RISCV",
+          "listId": "24640",
+          "size": null
+        }
+      ]
+    },
+    {
+      "search_key": "LF Events Suppression List",
+      "notes": "Most recent",
+      "status": "FOUND",
+      "listId": "9501",
+      "name": "23Q3 - LF Events - Suppression List",
+      "size": null,
+      "alternatives": []
+    },
+    {
+      "search_key": "PyTorch Global Opt Out",
+      "notes": "Known ID: 13404, verify",
+      "status": "FOUND",
+      "listId": "13404",
+      "name": "PyTorch Global Opt Out Static List",
+      "size": null,
+      "alternatives": [
+        {
+          "name": "Pytorch Global Opt-Outs",
+          "listId": "15427",
+          "size": null
+        }
+      ]
+    },
+    {
+      "search_key": "PyTorch Foundation Opt Out",
+      "notes": "Event-specific opt-out",
+      "status": "NOT_FOUND"
+    }
+  ],
+  "summary": {
+    "inclusion_success": 4,
+    "inclusion_total": 4,
+    "suppression_found": 7,
+    "suppression_total": 8
+  }
+}

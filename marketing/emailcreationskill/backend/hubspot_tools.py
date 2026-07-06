@@ -7,6 +7,7 @@ import logging
 import re
 import requests
 from config import HUBSPOT_ACCESS_TOKEN, HUBSPOT_PORTAL_ID, tag_asset_name
+from utm_tools import add_utm, slugify_utm_content, tag_html_links
 
 
 def _headers() -> dict:
@@ -100,6 +101,84 @@ def lookup_brand_history(brand_name: str, email_type_hint: str = None) -> dict:
         "email_type": latest.get("type") or "BATCH_EMAIL",
         "subscription_type_id": send_opts.get("subscriptionId"),
     }
+
+
+# ── UTM campaign resolution ─────────────────────────────────────────────────
+
+def get_email_campaign(email_id: str) -> dict:
+    """Look up the HubSpot Marketing Campaign a given email is associated with."""
+    log = logging.getLogger("email-staging")
+    try:
+        data = _get(f"/marketing/v3/emails/{email_id}")
+    except Exception as e:
+        log.warning(f"[UTM] get_email_campaign({email_id!r}) failed: {e}")
+        return {"campaign_id": None, "campaign_name": None}
+    return {
+        "campaign_id":   data.get("campaign"),
+        "campaign_name": data.get("campaignName"),
+    }
+
+
+def get_campaign_utm(campaign_guid: str) -> dict:
+    """Read a HubSpot Campaign's configured UTM value (hs_utm property)."""
+    log = logging.getLogger("email-staging")
+    try:
+        data = _get(
+            f"/marketing/v3/campaigns/{campaign_guid}",
+            params={"properties": "hs_name,hs_utm,hs_campaign_status"},
+        )
+    except Exception as e:
+        log.warning(f"[UTM] get_campaign_utm({campaign_guid!r}) failed: {e}")
+        return {"campaign_name": None, "utm_campaign": None, "status": None}
+    props = data.get("properties") or {}
+    return {
+        "campaign_name": props.get("hs_name"),
+        "utm_campaign":  props.get("hs_utm"),
+        "status":        props.get("hs_campaign_status"),
+    }
+
+
+def resolve_utm_campaign(source_email_id: str, fallback_name: str) -> dict:
+    """
+    Resolve the UTM parameters to apply to every link in a generated email.
+
+    Follows the already-matched source/clone email to its HubSpot Campaign and
+    reads that campaign's configured `hs_utm` value. Falls back to a slug built
+    from the deterministic email name when there's no source email, no campaign,
+    or the campaign has no `hs_utm` configured. Never raises.
+    """
+    log = logging.getLogger("email-staging")
+    fallback_slug = slugify_utm_content(fallback_name, suffix="")
+
+    campaign_id = None
+    campaign_name = None
+    utm_campaign = None
+
+    if source_email_id:
+        email_campaign = get_email_campaign(source_email_id)
+        campaign_id = email_campaign.get("campaign_id")
+        campaign_name = email_campaign.get("campaign_name")
+        if campaign_id:
+            campaign_utm = get_campaign_utm(campaign_id)
+            campaign_name = campaign_utm.get("campaign_name") or campaign_name
+            utm_campaign = campaign_utm.get("utm_campaign") or None
+
+    if utm_campaign:
+        source = "hubspot_campaign"
+    else:
+        utm_campaign = fallback_slug or "email-campaign"
+        source = "fallback"
+
+    result = {
+        "campaign_id":   campaign_id,
+        "campaign_name": campaign_name,
+        "utm_campaign":  utm_campaign,
+        "source":        source,
+        "utm_source":    "email",
+        "utm_medium":    "LF-Events",
+    }
+    log.info(f"[UTM] resolve_utm_campaign(source_email_id={source_email_id!r}) -> {result}")
+    return result
 
 
 # ── Tool 2: Clone email ──────────────────────────────────────────────────────
@@ -747,6 +826,7 @@ def update_email_content(
     event_url: str = "",
     content_sections: list = None,
     sponsors: list = None,
+    utm_params: dict = None,
 ) -> dict:
     """
     Replace email body using HubSpot's DnD widget/flexArea structure.
@@ -773,7 +853,8 @@ def update_email_content(
     style_settings = content.get("styleSettings") or {}
 
     log.info(f"[CONTENT] email={email_id} flex={flex_area_name!r} "
-             f"banner={'yes' if banner_url else 'no'} event_url={bool(event_url)}")
+             f"banner={'yes' if banner_url else 'no'} event_url={bool(event_url)} "
+             f"utm_campaign={(utm_params or {}).get('utm_campaign')!r}")
 
     # Strip outer DOCTYPE/html/head/body — HubSpot wraps content itself
     body_match = re.search(r"<body[^>]*>([\s\S]*?)</body\s*>", html_content, re.IGNORECASE)
@@ -826,7 +907,7 @@ def update_email_content(
                     "alt":   "Email Banner",
                     "width": 600,
                 },
-                "link":              event_url or "",
+                "link":              add_utm(event_url, utm_params, "banner") if event_url else "",
                 "stretch_on_mobile": True,
                 "hs_enable_module_padding": False,
                 "hs_wrapper_css": {
@@ -855,6 +936,7 @@ def update_email_content(
 
     # Body content — structured sections (native modules) or fallback rich_text
     if content_sections:
+        sponsors = sponsors or []
         for _idx, _sec in enumerate(content_sections):
             _stype = _sec.get("type", "")
             if _stype == "rich_text":
@@ -864,7 +946,7 @@ def update_email_content(
                     "body": {
                         "path":      "@hubspot/rich_text",
                         "module_id": 1155639,
-                        "html":      _sec.get("html", ""),
+                        "html":      tag_html_links(_sec.get("html", ""), utm_params),
                         "hs_enable_module_padding": True,
                         "hs_wrapper_css": {
                             "padding-bottom": "10px",
@@ -888,7 +970,10 @@ def update_email_content(
                         "module_id":      1976948,
                         "background_color": _btn_color,
                         "corner_radius":  8,
-                        "destination":    _sec.get("url", "#"),
+                        "destination":    add_utm(
+                            _sec.get("url", "#"), utm_params,
+                            slugify_utm_content(_sec.get("text", "Register Now")),
+                        ),
                         "font":           "Arial, sans-serif",
                         "font_color":     "#ffffff",
                         "font_size":      16,
@@ -999,7 +1084,7 @@ def update_email_content(
             "body": {
                 "path":           "@hubspot/rich_text",
                 "schema_version": 2,
-                "html":           inner_html,
+                "html":           tag_html_links(inner_html, utm_params),
             },
         }
         sections.append({
@@ -1086,16 +1171,17 @@ def update_email_content(
                         "src":    "https://8112310.fs1.hubspotusercontent-na1.net/hubfs/8112310/LFX%20Logo%20-%20white%20-%203-1.png",
                         "width":  1536,
                     },
-                    "url": (
+                    "url": add_utm(
                         "https://insights.linuxfoundation.org/"
                         "?utm_campaign=23551824-Q3-2025-LF-Awareness-LFX-Insights"
-                        "&utm_source=email&utm_medium=LF-Events&utm_content=regular-email"
+                        "&utm_source=email&utm_medium=LF-Events&utm_content=regular-email",
+                        utm_params, "social-lfx-insights",
                     ),
                 },
-                {"network": "twitter",  "url": "https://twitter.com/linuxfoundation"},
-                {"network": "linkedin", "url": "https://www.linkedin.com/company/the-linux-foundation/"},
-                {"network": "youtube",  "url": "https://www.youtube.com/user/TheLinuxFoundation"},
-                {"network": "facebook", "url": "https://www.facebook.com/TheLinuxFoundation/"},
+                {"network": "twitter",  "url": add_utm("https://twitter.com/linuxfoundation", utm_params, "social-twitter")},
+                {"network": "linkedin", "url": add_utm("https://www.linkedin.com/company/the-linux-foundation/", utm_params, "social-linkedin")},
+                {"network": "youtube",  "url": add_utm("https://www.youtube.com/user/TheLinuxFoundation", utm_params, "social-youtube")},
+                {"network": "facebook", "url": add_utm("https://www.facebook.com/TheLinuxFoundation/", utm_params, "social-facebook")},
             ],
         },
     }

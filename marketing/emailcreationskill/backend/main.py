@@ -406,6 +406,22 @@ def _create_plan_impl(req: PlanRequest, emit=lambda *a, **k: None):
         session.meta["email_name"] = _det_name
         log.info(f"[PLAN] email_name (deterministic): {_det_name!r}")
 
+    # ── UTM campaign resolution — follow the matched source email to its
+    # HubSpot Campaign and read its configured UTM value; fall back to a slug
+    # of the deterministic email name when no campaign/UTM is found. ─────────
+    emit("🔗 Resolving UTM campaign…")
+    _source_email_id = (session.meta.get("brand_history") or {}).get("matched_email_id") \
+        or (session.meta.get("brand_history") or {}).get("last_email_id")
+    try:
+        utm_params = hubspot_tools.resolve_utm_campaign(
+            _source_email_id, session.meta.get("email_name", "")
+        )
+    except Exception as e:
+        log.warning(f"[PLAN] resolve_utm_campaign failed: {e}")
+        utm_params = {}
+    session.meta["utm_params"] = utm_params
+    log.info(f"[PLAN] UTM: {utm_params}")
+
     # ── Step B2: Find stage-specific content reference email ──────────────────
     # Look for the most recent sent email whose name contains the stage keyword
     # (e.g. "Last Chance" for a Last Chance stage). This email's actual HTML will
@@ -589,6 +605,7 @@ def _create_plan_impl(req: PlanRequest, emit=lambda *a, **k: None):
         "mode":         MODE,
         "source_email": source_email,
         "stage":        stage_info,
+        "utm":          session.meta.get("utm_params", {}),
     }
 
 
@@ -972,6 +989,15 @@ async def stage_from_brief(req: StagingBriefRequest):
         hubspot_tools.update_email_settings(**settings_kw)
         log.info(f"[BRIEF] settings applied: {[k for k in settings_kw if k != 'email_id']}")
 
+        # ── UTM resolution — follow the clone source email to its HubSpot
+        # Campaign; fall back to a slug of the email name. ─────────────────────
+        try:
+            utm_params = hubspot_tools.resolve_utm_campaign(req.clone_base_id, req.email_name)
+        except Exception as e:
+            log.warning(f"[BRIEF] resolve_utm_campaign failed: {e}")
+            utm_params = {}
+        log.info(f"[BRIEF] UTM: {utm_params}")
+
         # ── Step 3: Content ──────────────────────────────────────────────────
         content_applied = False
         content_source  = "none"
@@ -980,7 +1006,7 @@ async def stage_from_brief(req: StagingBriefRequest):
 
         if req.raw_html:
             # Doc HTML provided — inject directly (no AI generation)
-            hubspot_tools.update_email_content(new_email_id, req.raw_html)
+            hubspot_tools.update_email_content(new_email_id, req.raw_html, utm_params=utm_params)
             content_applied = True
             content_source  = "doc"
             log.info(f"[BRIEF] content: doc HTML injected ({len(req.raw_html):,} chars)")
@@ -1012,6 +1038,7 @@ async def stage_from_brief(req: StagingBriefRequest):
                 event_url=req.event_url,
                 content_sections=_gen_sections or None,
                 sponsors=generated.get("sponsors") or None,
+                utm_params=utm_params,
             )
             content_applied = True
             content_source  = "ai"
@@ -1373,7 +1400,17 @@ async def stream_audience_build(job_id: str, session_id: str = ""):
             if item.get("done"):
                 try:
                     all_text          = "\n".join(accumulated)
-                    master_id         = audience_tools.extract_master_list_id(all_text)
+                    # Prefer the ID captured straight from the hubspot_create_list tool
+                    # result (ground truth); only fall back to scraping the model's
+                    # narration text if that tracking somehow came up empty.
+                    master_id         = str(item.get("master_list_id") or "").strip()
+                    if not master_id:
+                        master_id = audience_tools.extract_master_list_id(all_text)
+                        if master_id:
+                            log.warning(
+                                f"[AUDIENCE] master_list_id missing from tool tracking — "
+                                f"fell back to text extraction, got {master_id!r}"
+                            )
                     suppression_lists = audience_tools.extract_suppression_lists(all_text)
                     posthoc_applied   = False
 

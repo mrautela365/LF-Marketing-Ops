@@ -263,6 +263,33 @@ function renderSourceChip(source) {
   }
 }
 
+function renderUtmChip(utm) {
+  const chip = document.getElementById("utm-chip");
+  if (!chip) return;
+  if (!utm || !utm.utm_campaign) {
+    chip.style.display = "none";
+    return;
+  }
+  const isRealCampaign = utm.source === "hubspot_campaign";
+  chip.style.background = isRealCampaign ? "var(--green-light)" : "var(--blue-light)";
+  chip.style.border = isRealCampaign ? "1px solid #86efac" : "1px solid #c7d2fe";
+
+  const sourceLabel = document.getElementById("utm-source-label");
+  const nameEl      = document.getElementById("utm-campaign-name");
+  const campaignEl  = document.getElementById("utm-campaign-value");
+  const utmSourceEl = document.getElementById("utm-source-value");
+  const utmMediumEl = document.getElementById("utm-medium-value");
+
+  if (sourceLabel) sourceLabel.textContent = isRealCampaign ? "HubSpot Campaign:" : "Auto-generated UTM:";
+  if (nameEl)       nameEl.textContent     = utm.campaign_name ? `(${utm.campaign_name})` : "";
+  if (campaignEl)   campaignEl.textContent = utm.utm_campaign;
+  if (utmSourceEl)  utmSourceEl.textContent = utm.utm_source || "email";
+  if (utmMediumEl)  utmMediumEl.textContent = utm.utm_medium || "";
+
+  chip.style.display = "flex";
+  chip.classList.remove("hidden");
+}
+
 async function generatePlan() {
   const url = document.getElementById("event_url").value.trim();
   const extraContext = document.getElementById("extra_context").value.trim();
@@ -294,6 +321,7 @@ async function generatePlan() {
       try { renderMessage("plan-message", result.message); } catch (_) {}
       try { renderStageBadge(result.stage); } catch (_) {}
       try { renderSourceChip(result.source_email); } catch (_) {}
+      try { renderUtmChip(result.utm); } catch (_) {}
       // Draft the email content next — streams into the same brief, returns sections.
       generateEmailContent(sessionId, "", token).finally(() => {
         setBriefStatus("done");
@@ -677,6 +705,8 @@ function startOver() {
 
   // Reset stage badge, content displays
   document.getElementById("stage-badge").classList.add("hidden");
+  document.getElementById("utm-chip").classList.add("hidden");
+  document.getElementById("utm-chip").style.display = "none";
   const frame = document.getElementById("email-preview-frame");
   if (frame) frame.srcdoc = "";
   const subjEl = document.getElementById("subject-display");

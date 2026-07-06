@@ -46,6 +46,8 @@ def _ensure_stubs():
     cfg.GOOGLE_SERVICE_ACCOUNT_FILE = ""
     cfg.INTERNAL_API_TOKEN    = "test-internal-token"
     cfg.ASANA_ACCESS_TOKEN    = ""
+    cfg.ASSET_TAG             = ""
+    cfg.tag_asset_name        = lambda name: name
 
     # anthropic stub (SDK not installed in test env)
     if "anthropic" not in sys.modules:
@@ -59,10 +61,17 @@ def _ensure_stubs():
 
     # googleapiclient / google stubs
     for mod_name in ("googleapiclient", "googleapiclient.discovery",
-                     "google", "google.oauth2", "google.oauth2.service_account",
-                     "bs4"):
+                     "google", "google.oauth2", "google.oauth2.service_account"):
         if mod_name not in sys.modules:
             _make_stub(mod_name)
+
+    # bs4 — prefer the real package (utm_tools does genuine HTML parsing that
+    # tests rely on); only fall back to a stub if it's truly not installed.
+    if "bs4" not in sys.modules:
+        try:
+            import bs4  # noqa: F401
+        except ImportError:
+            _make_stub("bs4")
 
     bs4_mod = sys.modules["bs4"]
     if not hasattr(bs4_mod, "BeautifulSoup"):
@@ -109,6 +118,7 @@ if _BACKEND_DIR not in sys.path:
     sys.path.insert(0, _BACKEND_DIR)
 
 import hubspot_tools
+import utm_tools
 import stage_detector
 from stage_detector import detect_stage, parse_event_date, STAGES
 import session_store
@@ -2133,3 +2143,266 @@ class TestParseEventDate:
         """Non-date string → returns None."""
         result = parse_event_date(["not a date"])
         assert result is None
+
+
+# ---------------------------------------------------------------------------
+# ── TestAddUtm / TestSlugifyUtmContent / TestTagHtmlLinks ────────────────────
+# ---------------------------------------------------------------------------
+
+_UTM = {
+    "utm_campaign": "26q3-lf-kubecon-eu-invite",
+    "utm_source":   "email",
+    "utm_medium":   "LF-Events",
+}
+
+
+class TestAddUtm:
+    """Tests for utm_tools.add_utm."""
+
+    def test_merges_utm_params_into_clean_url(self):
+        result = utm_tools.add_utm("https://example.com/register", _UTM, "register-cta")
+        assert "utm_campaign=26q3-lf-kubecon-eu-invite" in result
+        assert "utm_source=email" in result
+        assert "utm_medium=LF-Events" in result
+        assert "utm_content=register-cta" in result
+
+    def test_preserves_existing_query_params(self):
+        result = utm_tools.add_utm("https://example.com/register?ref=homepage", _UTM, "register-cta")
+        assert "ref=homepage" in result
+        assert "utm_campaign=26q3-lf-kubecon-eu-invite" in result
+
+    def test_empty_url_is_noop(self):
+        assert utm_tools.add_utm("", _UTM, "register-cta") == ""
+        assert utm_tools.add_utm(None, _UTM, "register-cta") is None
+
+    def test_empty_utm_params_is_noop(self):
+        url = "https://example.com/register"
+        assert utm_tools.add_utm(url, {}, "register-cta") == url
+        assert utm_tools.add_utm(url, None, "register-cta") == url
+
+    def test_already_tagged_url_is_noop(self):
+        """A URL with a non-empty utm_campaign is never double-tagged."""
+        url = "https://insights.linuxfoundation.org/?utm_campaign=23551824-Q3-2025-LF-Awareness-LFX-Insights&utm_source=email"
+        result = utm_tools.add_utm(url, _UTM, "social-lfx-insights")
+        assert result == url
+
+    def test_mailto_and_anchor_untouched(self):
+        assert utm_tools.add_utm("mailto:info@linuxfoundation.org", _UTM, "x") == "mailto:info@linuxfoundation.org"
+        assert utm_tools.add_utm("#section-2", _UTM, "x") == "#section-2"
+
+
+class TestSlugifyUtmContent:
+    """Tests for utm_tools.slugify_utm_content."""
+
+    def test_slugifies_button_text(self):
+        assert utm_tools.slugify_utm_content("Register Now") == "register-now-cta"
+
+    def test_no_duplicate_suffix(self):
+        assert utm_tools.slugify_utm_content("Register CTA") == "register-cta"
+
+    def test_empty_text_falls_back_to_suffix(self):
+        assert utm_tools.slugify_utm_content("", suffix="cta") == "cta"
+
+    def test_no_suffix_when_empty_string_passed(self):
+        assert utm_tools.slugify_utm_content("Register Now", suffix="") == "register-now"
+
+
+class TestTagHtmlLinks:
+    """Tests for utm_tools.tag_html_links."""
+
+    def test_tags_anchor_href(self):
+        html = '<p>See our <a href="https://example.com/agenda">agenda</a>.</p>'
+        result = utm_tools.tag_html_links(html, _UTM)
+        assert "utm_campaign=26q3-lf-kubecon-eu-invite" in result
+        assert "utm_content=body-link-1" in result
+
+    def test_skips_mailto_and_anchor_links(self):
+        html = '<a href="mailto:info@lf.org">Email us</a><a href="#top">Top</a>'
+        result = utm_tools.tag_html_links(html, _UTM)
+        assert "mailto:info@lf.org" in result
+        assert "#top" in result
+        assert "utm_campaign" not in result
+
+    def test_empty_html_or_params_is_noop(self):
+        assert utm_tools.tag_html_links("", _UTM) == ""
+        assert utm_tools.tag_html_links("<p>x</p>", None) == "<p>x</p>"
+
+    def test_multiple_links_get_distinct_content(self):
+        html = (
+            '<a href="https://example.com/a">A</a>'
+            '<a href="https://example.com/b">B</a>'
+        )
+        result = utm_tools.tag_html_links(html, _UTM)
+        assert "utm_content=body-link-1" in result
+        assert "utm_content=body-link-2" in result
+
+
+# ---------------------------------------------------------------------------
+# ── TestResolveUtmCampaign ────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+
+class TestResolveUtmCampaign:
+    """Tests for hubspot_tools.resolve_utm_campaign (+ get_email_campaign / get_campaign_utm)."""
+
+    FALLBACK_NAME = "26Q3 - LF - KubeCon EU - Invite"
+
+    def test_real_campaign_with_utm(self):
+        with patch.object(hubspot_tools, "_get", side_effect=[
+            {"campaign": "guid-1", "campaignName": "Q3 Campaign"},
+            {"properties": {"hs_name": "Q3 Campaign", "hs_utm": "26q3-official-slug",
+                             "hs_campaign_status": "ACTIVE"}},
+        ]):
+            result = hubspot_tools.resolve_utm_campaign("email-1", self.FALLBACK_NAME)
+
+        assert result["source"] == "hubspot_campaign"
+        assert result["utm_campaign"] == "26q3-official-slug"
+        assert result["campaign_id"] == "guid-1"
+        assert result["campaign_name"] == "Q3 Campaign"
+        assert result["utm_source"] == "email"
+
+    def test_campaign_with_empty_utm_falls_back(self):
+        with patch.object(hubspot_tools, "_get", side_effect=[
+            {"campaign": "guid-2", "campaignName": "No UTM Campaign"},
+            {"properties": {"hs_name": "No UTM Campaign", "hs_utm": "",
+                             "hs_campaign_status": "ACTIVE"}},
+        ]):
+            result = hubspot_tools.resolve_utm_campaign("email-2", self.FALLBACK_NAME)
+
+        assert result["source"] == "fallback"
+        assert result["campaign_id"] == "guid-2"
+        assert result["campaign_name"] == "No UTM Campaign"
+        assert result["utm_campaign"] == utm_tools.slugify_utm_content(self.FALLBACK_NAME, suffix="")
+
+    def test_email_with_no_campaign_falls_back(self):
+        with patch.object(hubspot_tools, "_get", side_effect=[
+            {"campaign": None, "campaignName": None},
+        ]) as mock_get:
+            result = hubspot_tools.resolve_utm_campaign("email-3", self.FALLBACK_NAME)
+
+        assert result["source"] == "fallback"
+        assert result["campaign_id"] is None
+        mock_get.assert_called_once()  # get_campaign_utm never called — no campaign_id
+
+    def test_no_source_email_id_falls_back_without_api_call(self):
+        with patch.object(hubspot_tools, "_get") as mock_get:
+            result = hubspot_tools.resolve_utm_campaign(None, self.FALLBACK_NAME)
+
+        mock_get.assert_not_called()
+        assert result["source"] == "fallback"
+        assert result["campaign_id"] is None
+
+    def test_api_error_degrades_to_fallback(self):
+        with patch.object(hubspot_tools, "_get", side_effect=RuntimeError("HubSpot 500")):
+            result = hubspot_tools.resolve_utm_campaign("email-4", self.FALLBACK_NAME)
+
+        assert result["source"] == "fallback"
+        assert result["utm_campaign"]
+
+
+# ---------------------------------------------------------------------------
+# ── TestUpdateEmailContentUtmTagging ──────────────────────────────────────────
+# ---------------------------------------------------------------------------
+
+class TestUpdateEmailContentUtmTagging:
+    """Tests that update_email_content tags every link when utm_params is passed."""
+
+    def test_no_utm_params_leaves_links_untagged(self):
+        content_sections = [{"type": "button", "text": "Register Now", "url": "https://example.com/register"}]
+        with patch.object(hubspot_tools, "_get", side_effect=[
+            _make_email_response("em1"),
+            _mock_get_response_for_update("em1", ["staging_btn_0", "staging_footer_social",
+                                                   "staging_footer_body", "staging_footer_hs"]),
+        ]), patch.object(hubspot_tools, "_patch", return_value=_make_email_response("em1")) as mp:
+            hubspot_tools.update_email_content(
+                "em1", content_sections=content_sections, utm_params=None,
+            )
+            dest = mp.call_args[0][1]["content"]["widgets"]["staging_btn_0"]["body"]["destination"]
+            assert dest == "https://example.com/register"
+
+    def test_button_destination_tagged(self):
+        content_sections = [{"type": "button", "text": "Register Now", "url": "https://example.com/register"}]
+        with patch.object(hubspot_tools, "_get", side_effect=[
+            _make_email_response("em1"),
+            _mock_get_response_for_update("em1", ["staging_btn_0", "staging_footer_social",
+                                                   "staging_footer_body", "staging_footer_hs"]),
+        ]), patch.object(hubspot_tools, "_patch", return_value=_make_email_response("em1")) as mp:
+            hubspot_tools.update_email_content(
+                "em1", content_sections=content_sections, utm_params=_UTM,
+            )
+            dest = mp.call_args[0][1]["content"]["widgets"]["staging_btn_0"]["body"]["destination"]
+            assert "utm_campaign=26q3-lf-kubecon-eu-invite" in dest
+            assert "utm_content=register-now-cta" in dest
+
+    def test_banner_link_tagged(self):
+        content_sections = [{"type": "rich_text", "html": "<p>Body</p>"}]
+        event_url = "https://events.linuxfoundation.org/kubecon-eu/"
+        with patch.object(hubspot_tools, "_get", side_effect=[
+            _make_email_response("em1"),
+            _mock_get_response_for_update("em1", ["staging_banner", "staging_sec_0",
+                                                   "staging_footer_social", "staging_footer_body",
+                                                   "staging_footer_hs"]),
+        ]), patch.object(hubspot_tools, "_patch", return_value=_make_email_response("em1")) as mp:
+            hubspot_tools.update_email_content(
+                "em1", banner_url="https://cdn.example.com/banner.png", event_url=event_url,
+                content_sections=content_sections, utm_params=_UTM,
+            )
+            link = mp.call_args[0][1]["content"]["widgets"]["staging_banner"]["body"]["link"]
+            assert "utm_campaign=26q3-lf-kubecon-eu-invite" in link
+            assert "utm_content=banner" in link
+
+    def test_rich_text_inline_links_tagged(self):
+        html = '<p>Details on the <a href="https://example.com/agenda">agenda</a>.</p>'
+        content_sections = [{"type": "rich_text", "html": html}]
+        with patch.object(hubspot_tools, "_get", side_effect=[
+            _make_email_response("em1"),
+            _mock_get_response_for_update("em1", ["staging_sec_0", "staging_footer_social",
+                                                   "staging_footer_body", "staging_footer_hs"]),
+        ]), patch.object(hubspot_tools, "_patch", return_value=_make_email_response("em1")) as mp:
+            hubspot_tools.update_email_content(
+                "em1", content_sections=content_sections, utm_params=_UTM,
+            )
+            body_html = mp.call_args[0][1]["content"]["widgets"]["staging_sec_0"]["body"]["html"]
+            assert "utm_campaign=26q3-lf-kubecon-eu-invite" in body_html
+            assert "utm_content=body-link-1" in body_html
+
+    def test_footer_social_links_tagged_except_lfx_insights(self):
+        content_sections = [{"type": "rich_text", "html": "<p>Body</p>"}]
+        with patch.object(hubspot_tools, "_get", side_effect=[
+            _make_email_response("em1"),
+            _mock_get_response_for_update("em1", ["staging_sec_0", "staging_footer_social",
+                                                   "staging_footer_body", "staging_footer_hs"]),
+        ]), patch.object(hubspot_tools, "_patch", return_value=_make_email_response("em1")) as mp:
+            hubspot_tools.update_email_content(
+                "em1", content_sections=content_sections, utm_params=_UTM,
+            )
+            social = mp.call_args[0][1]["content"]["widgets"]["staging_footer_social"]["body"]["social"]
+            by_network = {s["network"]: s["url"] for s in social}
+
+            # LFX Insights already carries its own static utm_campaign — must be untouched.
+            assert "utm_campaign=23551824-Q3-2025-LF-Awareness-LFX-Insights" in by_network["icon"]
+            assert "26q3-lf-kubecon-eu-invite" not in by_network["icon"]
+
+            # The other social networks get tagged with the new campaign + a per-network utm_content.
+            assert "utm_campaign=26q3-lf-kubecon-eu-invite" in by_network["twitter"]
+            assert "utm_content=social-twitter" in by_network["twitter"]
+            assert "utm_campaign=26q3-lf-kubecon-eu-invite" in by_network["linkedin"]
+            assert "utm_content=social-linkedin" in by_network["linkedin"]
+            assert "utm_campaign=26q3-lf-kubecon-eu-invite" in by_network["youtube"]
+            assert "utm_campaign=26q3-lf-kubecon-eu-invite" in by_network["facebook"]
+
+    def test_sponsor_logo_links_unaffected(self):
+        """Sponsor logos have no link today — utm tagging must not add one."""
+        content_sections = [{"type": "rich_text", "html": "<p>Body</p>"}]
+        sponsors = [{"name": "Sponsor1", "logo_url": "https://cdn.example.com/sp1.png"}]
+        with patch.object(hubspot_tools, "_get", side_effect=[
+            _make_email_response("em1"),
+            _mock_get_response_for_update("em1", ["staging_sec_0", "staging_sponsor_header",
+                                                   "staging_sponsor_t1_0_0", "staging_footer_social",
+                                                   "staging_footer_body", "staging_footer_hs"]),
+        ]), patch.object(hubspot_tools, "_patch", return_value=_make_email_response("em1")) as mp:
+            hubspot_tools.update_email_content(
+                "em1", content_sections=content_sections, sponsors=sponsors, utm_params=_UTM,
+            )
+            widgets = mp.call_args[0][1]["content"]["widgets"]
+            sponsor_widget = widgets["staging_sponsor_t1_0_0"]["body"]
+            assert sponsor_widget["link"] == ""
