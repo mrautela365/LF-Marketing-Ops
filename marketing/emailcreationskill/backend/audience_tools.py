@@ -443,8 +443,8 @@ Follow foundation naming convention, e.g.:
 **Inclusion strategy** — per source list: name, why it belongs, dynamic vs snapshot.
 Group by and number each list:
   1. Past registrants (BEHAVIORAL_EVENT filter)
-  2. Web visitors (PAGE_VIEW + brand master)
-  3. Geographic segments (if applicable)
+  2. Web visitors (PAGE_VIEW only — no brand-master gate)
+  3. Geographic segments (LIST_MEMBERSHIP + brand-master gate — mandatory, if applicable)
   4. Topic / persona lists (if applicable)
   5. Foundation / newsletter subscribers (if applicable)
   6. Any other inclusion lists from prior sends
@@ -578,6 +578,9 @@ inclusion lists + master list per RULE 4.
 ═══════════════════════════════════════════════════
 STEP 2 — Look up brand master list ID
 ═══════════════════════════════════════════════════
+Only needed if the plan includes a geographic/regional inclusion list — the brand-master
+gate is mandatory there, but is NOT applied to web-visitor lists (Step 4 below).
+
 Use read_reference_file("brand-master-lists.md") to look up the brand key from the plan.
 If not found → use hubspot_search_lists("[brand] master") to find it, note the ID.
 
@@ -633,8 +636,8 @@ filterBranch structure:
 }}
 Add one AND branch per past edition. All inside the top OR.
 
-── PAGE_VIEW + LIST_MEMBERSHIP (web visitors) ───────────────
-Use for: web-visitor + brand-master combination.
+── PAGE_VIEW (web visitors) ──────────────────────────────────
+Use for: web-visitor lists. NO brand-master gate — a page view alone qualifies.
 filterBranch structure:
 {{
   "filterBranchType": "OR",
@@ -647,6 +650,29 @@ filterBranch structure:
           "filterType": "PAGE_VIEW",
           "value": "[event URL]",
           "operator": "HAS_VIEWED_URL"
+        }}
+      ]
+    }}
+  ],
+  "filters": []
+}}
+
+── LIST_MEMBERSHIP + brand master (geographic / regional segments) ──
+Use for: geographic or regional contact lists. The brand-master gate is MANDATORY
+here — a regional filter alone is too broad. Look up the brand master list ID in
+Step 2 before building this list.
+filterBranch structure:
+{{
+  "filterBranchType": "OR",
+  "filterBranches": [
+    {{
+      "filterBranchType": "AND",
+      "filterBranches": [],
+      "filters": [
+        {{
+          "filterType": "LIST_MEMBERSHIP",
+          "listId": "[existing geographic/regional HubSpot list ID as string]",
+          "operator": "IN_LIST"
         }},
         {{
           "filterType": "LIST_MEMBERSHIP",
@@ -659,8 +685,9 @@ filterBranch structure:
   "filters": []
 }}
 
-── LIST_MEMBERSHIP (reference existing HubSpot lists) ───────
-Use for: geographic lists, topic/persona lists, newsletter lists already in HubSpot.
+── LIST_MEMBERSHIP (other existing HubSpot lists) ───────────
+Use for: topic/persona lists, newsletter lists already in HubSpot (not geographic/regional
+— no brand-master gate needed here).
 Use hubspot_search_lists to find the existing list ID first.
 filterBranch structure:
 {{

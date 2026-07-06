@@ -1,7 +1,8 @@
 # Brand Master Lists
 
-These are the standing HubSpot master lists used in Filter Group 2 of the Registrants + Web Visitors list.
-They represent the broad brand audience (opt-in + event registrations + education enrollments).
+These are the standing HubSpot master lists used to gate regional/geographic contact filters
+(web-visitor filters do NOT use this gate). They represent the broad brand audience
+(opt-in + event registrations + education enrollments).
 
 | Brand Key | HubSpot List Name | List ID | Size (approx) | Notes |
 |-----------|-------------------|---------|---------------|-------|
