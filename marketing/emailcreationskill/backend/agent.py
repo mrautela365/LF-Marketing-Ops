@@ -34,16 +34,25 @@ def _make_client():
         return anthropic.Anthropic(api_key=LITELLM_API_KEY, base_url=LITELLM_BASE_URL)
     return anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
-# ── Find the claude CLI — explicit Windows path as fallback ───────────────────
-def _find_claude_cli() -> str:
+# ── Find the claude CLI — resolved lazily, only when the CLI fallback mode is
+# actually used (LiteLLM/Anthropic SDK users should never need it installed) ──
+_CLAUDE_CLI: str | None = None
+
+def _get_claude_cli() -> str:
+    global _CLAUDE_CLI
+    if _CLAUDE_CLI:
+        return _CLAUDE_CLI
+    if env_path := os.getenv("CLAUDE_CLI_PATH"):
+        _CLAUDE_CLI = env_path
+        return env_path
     if found := shutil.which("claude"):
+        _CLAUDE_CLI = found
         return found
     fallback = r"C:\Users\VinayU\AppData\Roaming\npm\claude.cmd"
     if os.path.exists(fallback):
+        _CLAUDE_CLI = fallback
         return fallback
     raise RuntimeError("claude CLI not found. Install with: npm install -g @anthropic-ai/claude-code")
-
-CLAUDE_CLI = os.getenv("CLAUDE_CLI_PATH") or _find_claude_cli()
 
 # ── Shared system prompt ─────────────────────────────────────────────────────
 
@@ -387,7 +396,7 @@ def _sdk_run_turn_cc(messages: list, user_message: str) -> tuple[str, list]:
             popen_kw["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
 
         proc = subprocess.Popen(
-            [CLAUDE_CLI, "--print", "--dangerously-skip-permissions"],
+            [_get_claude_cli(), "--print", "--dangerously-skip-permissions"],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             **popen_kw,
         )
@@ -532,7 +541,7 @@ def _claude_text(prompt: str, max_tokens: int = 100, timeout: int = 60) -> str:
             popen_kw["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
 
         proc = subprocess.Popen(
-            [CLAUDE_CLI, "--print", "--dangerously-skip-permissions"],
+            [_get_claude_cli(), "--print", "--dangerously-skip-permissions"],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             **popen_kw,
         )
@@ -600,7 +609,7 @@ Return ONLY this JSON (no markdown fences, no explanation — raw JSON only):
         popen_kw["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
 
     proc = subprocess.Popen(
-        [CLAUDE_CLI, "--print", "--dangerously-skip-permissions"],
+        [_get_claude_cli(), "--print", "--dangerously-skip-permissions"],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         **popen_kw,
     )

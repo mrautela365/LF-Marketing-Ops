@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>LF Email Automation — Campaign Builder</title>
-  <link rel="stylesheet" href="/static/style.css?v=7" />
+  <link rel="stylesheet" href="/static/style.css?v=8" />
 </head>
 <body>
 
@@ -31,7 +31,7 @@
         <div class="step-circle"><svg viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/><polyline points="22,6 12,13 2,6"/></svg></div>
         <span class="step-label">Email Preview</span>
       </div>
-      <div class="step" id="s3">
+      <div class="step step-clickable" id="s3" onclick="goToAudienceTab()">
         <div class="step-circle"><svg viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></div>
         <span class="step-label">Audience Preview</span>
       </div>
@@ -210,11 +210,24 @@
           or skip and create the email only. Your choice is attached as the email’s send list at implementation.
         </div>
 
+        <!-- Shown only when no event page has been scraped yet (e.g. jumped here without Step 1) -->
+        <div id="audience-url-prompt" class="hidden" style="margin-top:2px">
+          <div class="section-subhead">Event / Campaign URL</div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <input id="audience_event_url" type="url" placeholder="https://events.linuxfoundation.org/kubecon-europe/"
+              style="flex:1;min-width:260px" autocomplete="off" />
+            <button class="btn btn-primary" id="audience-scrape-btn" onclick="submitAudienceUrl()">
+              Scrape page &amp; build audience →
+            </button>
+          </div>
+          <div id="audience-url-status" class="hidden" style="margin-top:8px"></div>
+        </div>
+
         <!-- Choice buttons -->
         <div class="btn-row" id="audience-options" style="margin-top:2px">
           <button class="btn btn-primary" id="start-build-btn" onclick="runAudienceBuild()">
             <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-            Build audience list
+            Generate audience plan
           </button>
           <button class="btn btn-outline" id="skip-audience-btn" onclick="skipAudience()">
             <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><line x1="5.6" y1="5.6" x2="18.4" y2="18.4"/></svg>
@@ -234,8 +247,18 @@
           <input type="hidden" id="send_list_id" />
         </div>
 
-        <!-- Live build log -->
+        <!-- Live build/plan log -->
         <div id="audience-ticker" class="hidden" style="margin-top:18px;padding:10px;background:#0f172a;border-radius:8px;font-family:ui-monospace,monospace;font-size:11px;color:#e2e8f0;max-height:340px;overflow-y:auto;white-space:pre-wrap;word-break:break-all"></div>
+
+        <!-- Plan review — shown once Phase 1 finishes; no HubSpot lists exist yet. -->
+        <div class="btn-row hidden" id="audience-plan-actions" style="margin-top:12px">
+          <button class="btn btn-success" id="approve-plan-btn" onclick="approveAudiencePlan()">
+            ✅ Approve plan — create lists
+          </button>
+          <button class="btn btn-outline" id="discard-plan-btn" onclick="discardAudiencePlan()">
+            Discard &amp; start over
+          </button>
+        </div>
 
         <!-- Lists rolled up into the master audience -->
         <div id="audience-sublists-wrap" class="hidden" style="margin-top:14px">
@@ -291,6 +314,6 @@
   </div><!-- /flow-event -->
 </div><!-- /container -->
 
-<script src="/static/app.js?v=6"></script>
+<script src="/static/app.js?v=10"></script>
 </body>
 </html>

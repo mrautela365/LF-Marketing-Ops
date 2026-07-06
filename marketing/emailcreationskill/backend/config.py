@@ -23,6 +23,19 @@ INTERNAL_API_TOKEN = os.getenv("INTERNAL_API_TOKEN", "")
 
 ASANA_ACCESS_TOKEN = os.getenv("ASANA_ACCESS_TOKEN", "")
 
+# Optional marker appended to the name of every HubSpot asset this service creates
+# (cloned emails, audience/suppression lists) so test/dev runs can be found and bulk
+# -deleted later, e.g. ASSET_TAG=psh-test -> "... [psh-test]". Leave unset in prod.
+ASSET_TAG = os.getenv("ASSET_TAG", "").strip()
+
+
+def tag_asset_name(name: str) -> str:
+    """Append ASSET_TAG to a HubSpot asset name. No-op when ASSET_TAG is unset."""
+    if not ASSET_TAG or not name:
+        return name
+    suffix = f" [{ASSET_TAG}]"
+    return name if name.endswith(suffix) else f"{name}{suffix}"
+
 # LiteLLM proxy (takes priority over direct Anthropic API key when both are set)
 LITELLM_BASE_URL = os.getenv("LITELLM_BASE_URL", "")
 LITELLM_API_KEY  = os.getenv("LITELLM_API_KEY",  "")
