@@ -53,6 +53,7 @@ Copy `.env.example` to `.env` and fill in values. Variables read by `config.py`:
 | `ASANA_ACCESS_TOKEN` | Asana integration (optional) |
 | `GOOGLE_SERVICE_ACCOUNT_FILE` | Google Docs content sources (optional) |
 | `SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_USER`, `SNOWFLAKE_PRIVATE_KEY`, `SNOWFLAKE_DATABASE`, `SNOWFLAKE_SCHEMA`, `SNOWFLAKE_WAREHOUSE`, `SNOWFLAKE_ROLE` | Snowflake (audience list building) |
+| `ASSET_TAG` | Optional (default empty = no-op). When set (e.g. `psh-test`), appended as `" [psh-test]"` to the name of every new HubSpot asset this app creates — cloned emails and audience/suppression lists — so test runs can be found and bulk-deleted later. |
 
 > **Never commit `.env`.** It holds live tokens and is covered by `.gitignore`.
 

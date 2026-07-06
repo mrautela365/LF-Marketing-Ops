@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "hubspot-form-manager",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["server.py"],
+      "port": 8000,
+      "cwd": "C:\\Projects\\LF Claude\\LF-Marketing-Ops\\marketing\\hubspot-form-manager\\mcp-server"
+    }
+  ]
+}

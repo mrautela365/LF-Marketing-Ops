@@ -6,6 +6,9 @@ let _draftUrl = "";           // HubSpot draft URL of the cloned email
 let _masterListId = "";       // master audience list id produced by the build step
 let _sections = [];           // editable email content blocks (removable on Email Preview)
 let _subLists = [];           // lists rolled into the master audience (built or selected)
+let _audiencePlanText       = "";     // Phase 1 segment plan, captured for review before any list is created
+let _audiencePlanEventUrl   = "";     // event_url the plan was generated for
+let _audiencePlanStandalone = false;  // true when planned without a campaign session
 
 // ── Step navigation ──────────────────────────────────────────────────────────
 
@@ -480,12 +483,50 @@ async function removeSection(index) {
 function goToAudience() {
   showStep(3);
   resetAudienceUI();
+  updateAudienceUrlPrompt();
+}
+
+// Audience Preview pill is always clickable — jumps straight to Step 3 without
+// resetting any build/selection already in progress, regardless of Step 1/2 status.
+function goToAudienceTab() {
+  showStep(3);
+  updateAudienceUrlPrompt();
+}
+
+// Show the "paste a URL" prompt whenever no event page has been scraped yet
+// (no campaign session — e.g. Audience Preview was opened without Step 1/2).
+function updateAudienceUrlPrompt() {
+  const prompt = document.getElementById("audience-url-prompt");
+  if (!prompt) return;
+  if (sessionId) {
+    prompt.classList.add("hidden");
+    return;
+  }
+  const urlInput = document.getElementById("audience_event_url");
+  const step1Url = (document.getElementById("event_url") || {}).value || "";
+  if (urlInput && !urlInput.value) urlInput.value = step1Url;
+  prompt.classList.remove("hidden");
+}
+
+function submitAudienceUrl() {
+  const urlInput = document.getElementById("audience_event_url");
+  const url = ((urlInput && urlInput.value) || "").trim();
+  if (!url || !url.startsWith("http")) {
+    showError("audience-url-status", "Please enter a valid URL starting with http:// or https://");
+    return;
+  }
+  clearStatus("audience-url-status");
+  document.getElementById("audience-url-prompt").classList.add("hidden");
+  runAudienceBuild(url);
 }
 
 // Reset the Audience Preview tab to its initial "choose an option" state.
 function resetAudienceUI() {
   _masterListId = "";
   _subLists = [];
+  _audiencePlanText = "";
+  _audiencePlanEventUrl = "";
+  _audiencePlanStandalone = false;
   clearList();
   const options = document.getElementById("audience-options");
   if (options) options.style.display = "";
@@ -493,6 +534,8 @@ function resetAudienceUI() {
   if (startBuild) startBuild.disabled = false;
   const ticker = document.getElementById("audience-ticker");
   if (ticker) { ticker.textContent = ""; ticker.classList.add("hidden"); }
+  const planActions = document.getElementById("audience-plan-actions");
+  if (planActions) planActions.classList.add("hidden");
   const wrap = document.getElementById("audience-sublists-wrap");
   if (wrap) wrap.classList.add("hidden");
   const subs = document.getElementById("audience-sublists");
@@ -774,24 +817,82 @@ function _markMaster(id) {
   renderSubLists();
 }
 
-// ── Step 3: Audience Preview — build the segmented list (attached at implementation) ──
+// ── Step 3: Audience Preview — plan the segment, then build only after approval ──
+//
+// Two stages, both streamed over the same SSE endpoint:
+//   1. runAudienceBuild()    — Phase 1 only. Produces a plan as text. No HubSpot lists exist yet.
+//   2. approveAudiencePlan() — Phase 2 only, using the reviewed plan text. This is the only
+//                              function in this file that actually creates HubSpot lists.
 
-async function runAudienceBuild() {
-  if (!sessionId) return;
+// Open the shared SSE stream and dispatch to the given handlers.
+// `onDelta(text)` gets raw streamed chunks for live ticker rendering (no forced
+// newline — chunks are appended as-is). `onOutput(line)` only ever fires with
+// complete, reconstructed lines (deltas are buffered until a `\n`), since callers
+// like _parseSubList() regex-match a full line and would break on fragments.
+function _openAudienceStream(jobId, streamSessionId, handlers) {
+  const streamUrl = streamSessionId
+    ? `${API}/audience-stream/${jobId}?session_id=${encodeURIComponent(streamSessionId)}`
+    : `${API}/audience-stream/${jobId}`;
+  const es = new EventSource(streamUrl);
+  let lineBuf = "";
+
+  es.onmessage = (event) => {
+    let msg;
+    try { msg = JSON.parse(event.data); } catch { return; }
+    if (msg.type === "heartbeat") return;
+    if (msg.type === "output" && msg.text) {
+      if (msg.delta) {
+        handlers.onDelta && handlers.onDelta(msg.text);
+        lineBuf += msg.text;
+        let idx;
+        while ((idx = lineBuf.indexOf("\n")) !== -1) {
+          const line = lineBuf.slice(0, idx);
+          lineBuf = lineBuf.slice(idx + 1);
+          if (line.trim()) handlers.onOutput && handlers.onOutput(line);
+        }
+      } else {
+        handlers.onDelta && handlers.onDelta(msg.text + "\n");
+        handlers.onOutput && handlers.onOutput(msg.text);
+      }
+      return;
+    }
+    if (msg.type === "complete") {
+      if (lineBuf.trim()) { handlers.onOutput && handlers.onOutput(lineBuf); lineBuf = ""; }
+      es.close(); handlers.onComplete && handlers.onComplete(msg); return;
+    }
+    if (msg.type === "error") { es.close(); handlers.onError && handlers.onError(msg); }
+  };
+  es.onerror = () => { es.close(); handlers.onError && handlers.onError({ text: "Stream disconnected" }); };
+  return es;
+}
+
+// Stage 1 — generate the segment plan. `urlOverride` is set when kicked off from the
+// "paste a URL" prompt (no campaign session yet, or the session's own scrape failed).
+// Creates no HubSpot lists — see submitAudienceUrl().
+async function runAudienceBuild(urlOverride) {
+  const eventUrl   = (urlOverride || "").trim();
+  const standalone = !sessionId;  // no campaign session → nothing scraped yet, no email to attach to later
+  if (standalone && !eventUrl) { updateAudienceUrlPrompt(); return; }
+
   _masterListId = "";
   _subLists = [];
+  _audiencePlanText = "";
+  _audiencePlanEventUrl = eventUrl;
+  _audiencePlanStandalone = standalone;
   renderSubLists();
   clearList();  // drop any previously selected existing list
 
-  const badge     = document.getElementById("audience-status-badge");
-  const buildBtn  = document.getElementById("start-build-btn");
-  const ticker    = document.getElementById("audience-ticker");
-  const statusEl  = document.getElementById("audience-status");
-  const startImpl = document.getElementById("start-impl-btn");
+  const badge       = document.getElementById("audience-status-badge");
+  const buildBtn    = document.getElementById("start-build-btn");
+  const ticker      = document.getElementById("audience-ticker");
+  const statusEl    = document.getElementById("audience-status");
+  const planActions = document.getElementById("audience-plan-actions");
+  const startImpl   = document.getElementById("start-impl-btn");
 
-  if (badge)     { badge.textContent = "⏳ Segmenting audience…"; badge.style.color = "var(--gray-500)"; }
-  if (buildBtn)  { buildBtn.disabled = true; }
-  if (startImpl) { startImpl.disabled = true; startImpl.textContent = "⏳ Building audience…"; }
+  if (badge)       { badge.textContent = "⏳ Planning audience segment…"; badge.style.color = "var(--gray-500)"; }
+  if (buildBtn)    { buildBtn.disabled = true; }
+  if (planActions) planActions.classList.add("hidden");
+  if (startImpl)   { startImpl.disabled = true; startImpl.textContent = "Start Implementation →"; }
   ticker.textContent = "";
   ticker.classList.remove("hidden");
   statusEl.classList.add("hidden");
@@ -799,10 +900,78 @@ async function runAudienceBuild() {
 
   let jobId = null;
   try {
-    const resp = await fetch(`${API}/build-audience`, {
+    const resp = await fetch(`${API}/${standalone ? "audience/plan" : "audience-plan"}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ session_id: sessionId, event_url: "" }),
+      body: JSON.stringify(standalone
+        ? { event_url: eventUrl }
+        : { session_id: sessionId, event_url: eventUrl }),
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({ detail: resp.statusText }));
+      throw new Error(err.detail || "Failed to start planning");
+    }
+    const data = await resp.json();
+    jobId = data.job_id;
+    _audiencePlanEventUrl = data.event_url || eventUrl;
+  } catch (e) {
+    ticker.classList.add("hidden");
+    if (badge)    { badge.textContent = "⚠ Planning failed — " + escapeHtml(e.message); badge.style.color = "#dc2626"; }
+    if (buildBtn) buildBtn.disabled = false;
+    // Scrape/URL missing — surface the URL prompt instead of leaving a dead end.
+    if (/no event url/i.test(e.message || "")) updateAudienceUrlPrompt();
+    return;
+  }
+
+  _openAudienceStream(jobId, standalone ? "" : sessionId, {
+    onDelta: (text) => {
+      ticker.textContent += text;
+      ticker.scrollTop = ticker.scrollHeight;
+    },
+    onComplete: (msg) => {
+      if (buildBtn) buildBtn.disabled = false;
+      _audiencePlanText = ticker.textContent.trim();
+      if (!_audiencePlanText || msg.success === false) {
+        if (badge) { badge.textContent = "⚠ Planning failed — see log above"; badge.style.color = "#dc2626"; }
+        return;
+      }
+      if (badge) { badge.textContent = "📝 Plan ready — review below, then approve to create lists"; badge.style.color = "#92400e"; }
+      if (planActions) planActions.classList.remove("hidden");
+    },
+    onError: (msg) => {
+      if (badge)    { badge.textContent = `⚠ Planning error: ${escapeHtml(msg.text || "unknown")}`; badge.style.color = "#dc2626"; }
+      if (buildBtn) buildBtn.disabled = false;
+    },
+  });
+}
+
+// Stage 2 — the user has reviewed the plan text in the ticker; now actually create the
+// HubSpot lists (Phase 2 only, reusing the captured plan so it isn't re-generated).
+async function approveAudiencePlan() {
+  if (!_audiencePlanText) return;
+  const standalone = _audiencePlanStandalone;
+
+  const badge       = document.getElementById("audience-status-badge");
+  const ticker      = document.getElementById("audience-ticker");
+  const statusEl    = document.getElementById("audience-status");
+  const planActions = document.getElementById("audience-plan-actions");
+  const approveBtn  = document.getElementById("approve-plan-btn");
+  const startImpl   = document.getElementById("start-impl-btn");
+
+  if (approveBtn) approveBtn.disabled = true;
+  if (badge)      { badge.textContent = "⏳ Creating HubSpot lists…"; badge.style.color = "var(--gray-500)"; }
+  if (startImpl)  { startImpl.disabled = true; startImpl.textContent = "⏳ Building audience…"; }
+  ticker.textContent += "\n── Building approved plan ──\n";
+  ticker.scrollTop = ticker.scrollHeight;
+
+  let jobId = null;
+  try {
+    const resp = await fetch(`${API}/${standalone ? "audience/run" : "build-audience"}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(standalone
+        ? { event_url: _audiencePlanEventUrl, plan: _audiencePlanText }
+        : { session_id: sessionId, event_url: _audiencePlanEventUrl, plan: _audiencePlanText }),
     });
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({ detail: resp.statusText }));
@@ -811,60 +980,52 @@ async function runAudienceBuild() {
     const data = await resp.json();
     jobId = data.job_id;
   } catch (e) {
-    ticker.classList.add("hidden");
-    if (badge)     { badge.textContent = "⚠ Build failed — " + escapeHtml(e.message); badge.style.color = "#dc2626"; }
-    if (buildBtn)  buildBtn.disabled = false;
-    if (startImpl) { startImpl.disabled = true; startImpl.textContent = "Start Implementation →"; }
+    if (badge)      { badge.textContent = "⚠ Build failed — " + escapeHtml(e.message); badge.style.color = "#dc2626"; }
+    if (approveBtn) approveBtn.disabled = false;
+    if (startImpl)  { startImpl.disabled = true; startImpl.textContent = "Start Implementation →"; }
     return;
   }
 
-  // Stream output via SSE
-  const es = new EventSource(`${API}/audience-stream/${jobId}?session_id=${encodeURIComponent(sessionId)}`);
-
-  es.onmessage = (event) => {
-    let msg;
-    try { msg = JSON.parse(event.data); } catch { return; }
-
-    if (msg.type === "heartbeat") return;
-
-    if (msg.type === "output" && msg.text) {
-      ticker.textContent += msg.text + "\n";
+  _openAudienceStream(jobId, standalone ? "" : sessionId, {
+    onDelta: (text) => {
+      ticker.textContent += text;
       ticker.scrollTop = ticker.scrollHeight;
-      _parseSubList(msg.text);  // surface each created list below the log
-    }
-
-    if (msg.type === "complete") {
-      es.close();
-      if (buildBtn) buildBtn.disabled = false;
+    },
+    onOutput: (text) => {
+      _parseSubList(text);  // surface each created list below the log
+    },
+    onComplete: (msg) => {
+      if (approveBtn) approveBtn.disabled = false;
       const mid = msg.master_list_id;
       if (mid) {
         _masterListId = String(mid);
         _markMaster(mid);
+        if (planActions) planActions.classList.add("hidden");
         if (statusEl) {
           statusEl.classList.remove("hidden");
-          statusEl.innerHTML = `<span style="color:#166534">✅ Master audience ready (List ID ${escapeHtml(mid)}). It is attached to the email when you start implementation.</span>`;
+          statusEl.innerHTML = standalone
+            ? `<span style="color:#166534">✅ Master audience ready (List ID ${escapeHtml(mid)}). Start a campaign plan (Step 1) to attach it to an email.</span>`
+            : `<span style="color:#166534">✅ Master audience ready (List ID ${escapeHtml(mid)}). It is attached to the email when you start implementation.</span>`;
         }
-        if (badge)     { badge.textContent = `✓ Audience ready (ID ${escapeHtml(mid)})`; badge.style.color = "#166534"; }
-        if (startImpl) { startImpl.disabled = false; startImpl.textContent = "Start Implementation →"; }
+        if (badge) { badge.textContent = `✓ Audience ready (ID ${escapeHtml(mid)})`; badge.style.color = "#166534"; }
+        // Implementation clones/attaches against a campaign session — nothing to attach to yet in standalone mode.
+        if (startImpl) { startImpl.disabled = standalone; startImpl.textContent = "Start Implementation →"; }
       } else {
         if (badge)     { badge.textContent = "⚠ Build finished but list ID not found — pick an existing list or skip"; badge.style.color = "#92400e"; }
         if (startImpl) { startImpl.disabled = true; startImpl.textContent = "Start Implementation →"; }
       }
-      return;
-    }
+    },
+    onError: (msg) => {
+      if (badge)      { badge.textContent = `⚠ Build error: ${escapeHtml(msg.text || "unknown")}`; badge.style.color = "#dc2626"; }
+      if (approveBtn) approveBtn.disabled = false;
+    },
+  });
+}
 
-    if (msg.type === "error") {
-      es.close();
-      if (badge)    { badge.textContent = `⚠ Build error: ${escapeHtml(msg.text || "unknown")}`; badge.style.color = "#dc2626"; }
-      if (buildBtn) buildBtn.disabled = false;
-    }
-  };
-
-  es.onerror = () => {
-    es.close();
-    if (badge)    { badge.textContent = "⚠ Stream disconnected — click Build again"; badge.style.color = "#dc2626"; }
-    if (buildBtn) buildBtn.disabled = false;
-  };
+// Discard the reviewed plan without building anything, back to the initial choice state.
+function discardAudiencePlan() {
+  resetAudienceUI();
+  updateAudienceUrlPrompt();
 }
 
 // Close dropdown when clicking outside
