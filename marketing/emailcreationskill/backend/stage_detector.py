@@ -183,15 +183,15 @@ STAGES = [
     {"name": "CFP Launch",                        "funnel": "TOFU",      "email_type": "Invite",      "min": 85,    "max": 99},
     {"name": "Registration Launch",               "funnel": "TOFU",      "email_type": "Invite",      "min": 70,    "max": 84},
     {"name": "Co-Located Events + CFP Reminder",  "funnel": "MOFU",      "email_type": "Invite",      "min": 50,    "max": 69},
-    {"name": "DEI & Travel Fund",                 "funnel": "MOFU",      "email_type": "Newsletter",  "min": 42,    "max": 49},
-    {"name": "Schedule Announcement",             "funnel": "MOFU",      "email_type": "Newsletter",  "min": 28,    "max": 41},
-    {"name": "Main Registration Push",            "funnel": "BOFU",      "email_type": "Reminder",    "min": 14,    "max": 27},
-    {"name": "Final Countdown",                   "funnel": "BOFU",      "email_type": "Last Chance", "min": 3,     "max": 13},
-    {"name": "Event Week",                        "funnel": "BOFU",      "email_type": "Reminder",    "min": -2,    "max": 2},
-    {"name": "Thank You + Survey",                "funnel": "FOLLOW-UP", "email_type": "Newsletter",  "min": -3,    "max": -1},
-    {"name": "Content & Recordings Release",      "funnel": "FOLLOW-UP", "email_type": "Newsletter",  "min": -14,   "max": -4},
-    {"name": "Next Event CFP Teaser",             "funnel": "FOLLOW-UP", "email_type": "Newsletter",  "min": -28,   "max": -15},
-    {"name": "Community Nurture",                 "funnel": "FOLLOW-UP", "email_type": "Newsletter",  "min": -9999, "max": -29},
+    {"name": "DEI & Travel Fund",                 "funnel": "MOFU",      "email_type": "Invite",      "min": 42,    "max": 49},
+    {"name": "Schedule Announcement",             "funnel": "MOFU",      "email_type": "Invite",      "min": 28,    "max": 41},
+    {"name": "Main Registration Push",            "funnel": "BOFU",      "email_type": "Invite",      "min": 14,    "max": 27},
+    {"name": "Final Countdown",                   "funnel": "BOFU",      "email_type": "Invite",      "min": 3,     "max": 13},
+    {"name": "Event Week",                        "funnel": "BOFU",      "email_type": "Invite",      "min": -2,    "max": 2},
+    {"name": "Thank You + Survey",                "funnel": "FOLLOW-UP", "email_type": "Invite",      "min": -3,    "max": -1},
+    {"name": "Content & Recordings Release",      "funnel": "FOLLOW-UP", "email_type": "Invite",      "min": -14,   "max": -4},
+    {"name": "Next Event CFP Teaser",             "funnel": "FOLLOW-UP", "email_type": "Invite",      "min": -28,   "max": -15},
+    {"name": "Community Nurture",                 "funnel": "FOLLOW-UP", "email_type": "Invite",      "min": -9999, "max": -29},
 ]
 
 STAGE_GOALS = {
@@ -312,7 +312,7 @@ def detect_stage(event_dates: list) -> dict:
     return {
         "name": name,
         "funnel": funnel,
-        "email_type": "Newsletter",
+        "email_type": "Invite",
         "days_to_event": days,
         "goal": STAGE_GOALS.get(name, ""),
         "cta_label": CTA_LABELS.get(name, "Learn More"),
