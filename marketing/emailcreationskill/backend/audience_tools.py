@@ -344,8 +344,9 @@ TOOL_DEFS_OPENAI = [
         (
             "Create a new dynamic HubSpot contact list. "
             "filter_branch must follow the HubSpot filterBranch schema. "
-            "For custom-event filters use filterType='BEHAVIORAL_EVENT'. "
-            "For list-membership filters use filterType='LIST_MEMBERSHIP'. "
+            "For custom-event filters (past registrants, education enrolled, etc.) "
+            "use filterBranchType='UNIFIED_EVENTS' with a fixed portal eventTypeId. "
+            "For list-membership filters use filterType='LIST_MEMBERSHIP' or 'IN_LIST'. "
             "For page-view filters use filterType='PAGE_VIEW'."
         ),
         {
@@ -376,8 +377,12 @@ TOOL_DEFS_OPENAI = [
         ["sql"]),
 
     _fn("read_reference_file",
-        "Read a file from the references/ directory. Use 'brand-master-lists.md' to look up brand master list IDs.",
-        {"filename": {"type": "string", "description": "Filename only, e.g. 'brand-master-lists.md'"}},
+        (
+            "Read a file from the references/ directory. Use 'brand-master-lists.md' to look up "
+            "brand master list IDs, or 'region-map.md' to look up an event's broader region "
+            "(APAC/EMEA/NA/LATAM) for building the regional-expansion inclusion lists."
+        ),
+        {"filename": {"type": "string", "description": "Filename only, e.g. 'brand-master-lists.md' or 'region-map.md'"}},
         ["filename"]),
 ]
 
@@ -449,6 +454,27 @@ editions/countries into one list, do NOT reproduce that structure — note it
 under "Open questions / flags" as a legacy pattern to leave behind, and scope
 your new plan to this event's own location only.
 
+CRITICAL — Regional-expansion segments (groups 4-7): every master list also
+carries a standard second tier of FOUR inclusion lists that broaden reach
+beyond this exact event, scoped to this event's own COUNTRY and its broader
+REGION (not other editions of this series — that's the Location scoping rule
+above, which stays untouched):
+  4. Education Enrolled [Country] — anyone who ever enrolled in LF Education,
+     located in this event's own country.
+  5. Event Registered [Country] — anyone who ever registered for ANY past LF
+     event (any brand), located in this event's own country.
+  6. Expanded Web Visitors — visited the page of the nearest sibling event in
+     the same broader region, OR visited training.linuxfoundation.org while
+     located in this event's own country.
+  7. [Region] Event Registrants — registrants of sibling events (any brand)
+     held in OTHER countries of the same broader region during this event
+     cycle (e.g. for an APAC event: other APAC editions of any LF/CNCF series).
+Use read_reference_file("region-map.md") to find this event's region and how
+to discover its sibling events. These 4 lists are standard and should be
+proposed for every event unless the foundation has no LF Education presence
+or no sibling events this cycle — in which case note it as N/A under "Open
+questions / flags" rather than omitting them silently.
+
 Work through ALL 4 steps below, narrating each sub-step so progress is visible.
 
 {step1}
@@ -467,11 +493,18 @@ Also search for each of the inclusion lists referenced in prior sends:
 past-registrant lists, geographic lists, topic/persona lists, newsletter lists, etc.
 Use hubspot_get_list on any list IDs found to inspect their filter logic.
 
+Also research this event's regional-expansion groups (4-7, see the CRITICAL note
+above): read_reference_file("region-map.md") for this event's region, then
+hubspot_search_campaigns / hubspot_search_lists for sibling events (other
+countries in the same region, current cycle) to identify candidates for the
+Expanded Web Visitors and [Region] Event Registrants lists.
+
 When inspecting a prior master list's filter branches, check whether any AND
-branch's BEHAVIORAL_EVENT / hs_event_name value names a DIFFERENT city/country
-than this event's own location. If so, that branch belongs to a different
-edition of the series (see the Location scoping rule above) — record it as a
-legacy cross-edition branch to leave out, not as a template to copy.
+branch's event-name value (UNIFIED_EVENTS/event_name, or legacy BEHAVIORAL_EVENT/
+hs_event_name) names a DIFFERENT city/country than this event's own location. If
+so, that branch belongs to a different edition of the series (see the Location
+scoping rule above) — record it as a legacy cross-edition branch to leave out,
+not as a template to copy.
 
 ═══════════════════════════════════════════════════
 STEP 3 — Analyse historical segmentation logic
@@ -520,18 +553,26 @@ Follow foundation naming convention, e.g.:
 
 **Inclusion strategy** — per source list: name, why it belongs, dynamic vs snapshot.
 Group by and number each list:
-  1. Past registrants of THIS event's own location only (BEHAVIORAL_EVENT filter —
+  1. Past registrants of THIS event's own location only (UNIFIED_EVENTS filter —
      one segment per past YEAR of this same city/country, never per other country)
   2. Web visitors (PAGE_VIEW only — no brand-master gate)
   3. Geographic segments for THIS event's own country/region only
      (LIST_MEMBERSHIP + brand-master gate — mandatory, if applicable)
-  4. Topic / persona lists (if applicable)
-  5. Foundation / newsletter subscribers (if applicable)
-  6. Any other inclusion lists from prior sends
+  4. Education Enrolled [Country] — standard regional-expansion group (see CRITICAL
+     note above); N/A only if the foundation has no LF Education presence
+  5. Event Registered [Country] — standard regional-expansion group; any past LF
+     event registration, gated by this event's own country
+  6. Expanded Web Visitors — standard regional-expansion group; nearest sibling
+     regional event's page OR training.linuxfoundation.org + this event's country
+  7. [Region] Event Registrants — standard regional-expansion group; registrants
+     of sibling events in the same broader region this cycle; N/A only if none found
+  8. Topic / persona lists (if applicable)
+  9. Foundation / newsletter subscribers (if applicable)
+  10. Any other inclusion lists from prior sends
 
 For each inclusion list, state:
   - Proposed HubSpot list name
-  - Filter type (BEHAVIORAL_EVENT / PAGE_VIEW / LIST_MEMBERSHIP / property)
+  - Filter type (UNIFIED_EVENTS / PAGE_VIEW / LIST_MEMBERSHIP / property)
   - Why it belongs
 
 **Exclusion strategy** — per suppression list: name and reason.
@@ -614,12 +655,14 @@ CRITICAL RULES (enforce throughout all steps)
 ═══════════════════════════════════════════════════
 RULE 1 — Build EVERY inclusion list from the plan, not just 2.
   Read the "Inclusion strategy" section carefully. Create one HubSpot list per
-  numbered inclusion source. Do not skip any.
+  numbered inclusion source. Do not skip any — this includes the 4 standard
+  regional-expansion lists (Education Enrolled / Event Registered / Expanded Web
+  Visitors / [Region] Event Registrants) unless the plan flagged one N/A.
 
 RULE 2 — communitySeg lists MUST NEVER be used, referenced, or rebuilt:
   Any list labelled communitySeg / community_seg must NOT be included as a source,
   and its logic must NOT be reproduced under a different filter type. Do not propose
-  or build a BEHAVIORAL_EVENT (or any other) rebuild of it. Skip it entirely and add
+  or build a UNIFIED_EVENTS (or any other) rebuild of it. Skip it entirely and add
   it to ## FLAGGED FOR REVIEW with reason "communitySeg — excluded per policy".
 
 RULE 3 — Print ## BUILD PLAN before creating anything in HubSpot.
@@ -644,6 +687,14 @@ RULE 7 — LOCATION SCOPING IS MANDATORY for past-registrant and geographic segm
   event's own location, DROP those rows before building — do not create a branch for
   them, and do not carry forward any cross-edition branch from a prior master list
   (see the Segment Plan's "Historical context" notes on legacy branches).
+
+RULE 8 — Regional-expansion lists (groups 4-7) use THIS event's own country as
+  [location_term] (same value as RULE 7, e.g. "Korea") for country/ip_country
+  filters — never the region name itself. Sibling events for groups 6-7 come
+  from the Segment Plan's regional research (read_reference_file("region-map.md")
+  + hubspot_search_campaigns/hubspot_search_lists), never guessed. If the plan
+  flagged a regional-expansion group N/A, skip it and note why in ## FLAGGED FOR
+  REVIEW rather than building an empty or irrelevant list.
 
 ═══════════════════════════════════════════════════
 STEP 1 — Query Snowflake for past editions
@@ -671,7 +722,7 @@ If snowflake_query errors (connection/key failure) or returns zero rows, you MUS
 substitute guessed, remembered, or web-researched event name strings — including values
 seen in the Segment Plan above or in existing HubSpot list filters (e.g. communitySeg
 snapshots). Those are not guaranteed to match Snowflake's exact EVENT_NAME values and
-will silently miscount the list. Instead: skip the BEHAVIORAL_EVENT past-registrant
+will silently miscount the list. Instead: skip the UNIFIED_EVENTS past-registrant
 list entirely, add it to ## FLAGGED FOR REVIEW with reason "Snowflake unavailable —
 exact EVENT_NAME values could not be verified", and continue with the remaining
 inclusion lists + master list per RULE 4.
@@ -685,8 +736,9 @@ gate is mandatory there, but is NOT applied to web-visitor lists (Step 4 below).
 Use read_reference_file("brand-master-lists.md") to look up the brand key from the plan.
 If not found → use hubspot_search_lists("[brand] master") to find it, note the ID.
 
-Call hubspot_get_event_types() now so the fullyQualifiedName is ready for Step 4.
-Look for a name containing "event_registration". The value looks like "pe8112310_event_registration".
+The past-registrant, Event Registered, and [Region] Event Registrants lists (STEP 4)
+all use the fixed portal-wide eventTypeId "6-48984571" — no lookup needed. The
+Education Enrolled list (STEP 4) uses the fixed eventTypeId "6-58204655".
 
 ═══════════════════════════════════════════════════
 STEP 3 — Print ## BUILD PLAN
@@ -703,34 +755,44 @@ STEP 4 — Build ALL inclusion lists (one per inclusion source)
 ═══════════════════════════════════════════════════
 Create every list from your BUILD PLAN in order. Use the correct filter type for each:
 
-── BEHAVIORAL_EVENT (past registrants) ──────────────────────
+── UNIFIED_EVENTS (past registrants — group 1) ────────────────
 Use for: past-registrant lists (built fresh from Snowflake EVENT_NAME data — never as
 a rebuild or replacement of a communitySeg list; see RULE 2).
+Uses the SAME portal-wide "Event Registered" eventTypeId "6-48984571" as groups
+5 and 7 below — the only difference is the event_name filter inside it (exact
+match here, vs no filter for group 5 and CONTAINS multi-value for group 7).
+This is the schema HubSpot's own UI produces for this filter (confirmed from a
+live reference list) — do NOT use the older BEHAVIORAL_EVENT/HAS_EVENT/filterGroups
+shape, which is a different, legacy event system in this portal.
 filterBranch structure:
 {{
   "filterBranchType": "OR",
   "filterBranches": [
     {{
       "filterBranchType": "AND",
-      "filterBranches": [],
-      "filters": [
+      "filterBranches": [
         {{
-          "filterType": "BEHAVIORAL_EVENT",
-          "eventTypeId": "[exact fullyQualifiedName e.g. pe8112310_event_registration]",
-          "operator": "HAS_EVENT",
-          "filterGroups": [
+          "filterBranchType": "UNIFIED_EVENTS",
+          "operator": "HAS_COMPLETED",
+          "eventTypeId": "6-48984571",
+          "filterBranches": [
             {{
+              "filterBranchType": "AND",
+              "filterBranches": [],
               "filters": [
                 {{
-                  "property": "hs_event_name",
-                  "operator": "EQ",
-                  "value": "[exact EVENT_NAME from Snowflake]"
+                  "filterType": "PROPERTY",
+                  "property": "event_name",
+                  "operation": {{"operator": "IS_EQUAL_TO", "includeObjectsWithNoValueSet": false,
+                                 "values": ["[exact EVENT_NAME from Snowflake]"], "operationType": "MULTISTRING"}}
                 }}
               ]
             }}
-          ]
+          ],
+          "filters": []
         }}
-      ]
+      ],
+      "filters": []
     }}
   ],
   "filters": []
@@ -811,6 +873,131 @@ filterBranch structure:
   "filters": []
 }}
 
+── UNIFIED_EVENTS + PROPERTY (regional expansion — groups 4 & 5) ────
+Use for: "Education Enrolled [Country]" and "Event Registered [Country]".
+These use HubSpot's built-in unified custom-behavioral-event IDs for this
+portal — literal, portal-wide constants (do NOT look these up per event):
+  Education Enrolled → eventTypeId "6-58204655"
+  Event Registered (any past LF event, any brand) → eventTypeId "6-48984571"
+Root is OR of two AND branches (country, then ip_country) so either property
+qualifies. [location_term] is this event's own country (RULE 7/8), e.g. "Korea".
+filterBranch structure:
+{{
+  "filterBranchType": "OR",
+  "filterBranches": [
+    {{
+      "filterBranchType": "AND",
+      "filterBranches": [
+        {{
+          "filterBranchType": "UNIFIED_EVENTS",
+          "operator": "HAS_COMPLETED",
+          "eventTypeId": "[6-58204655 or 6-48984571]",
+          "filterBranches": [],
+          "filters": []
+        }}
+      ],
+      "filters": [
+        {{
+          "filterType": "PROPERTY",
+          "property": "country",
+          "operation": {{"operator": "CONTAINS", "includeObjectsWithNoValueSet": false,
+                         "values": ["[location_term]"], "operationType": "MULTISTRING"}}
+        }}
+      ]
+    }},
+    {{
+      "filterBranchType": "AND",
+      "filterBranches": [
+        {{
+          "filterBranchType": "UNIFIED_EVENTS",
+          "operator": "HAS_COMPLETED",
+          "eventTypeId": "[same eventTypeId as above]",
+          "filterBranches": [],
+          "filters": []
+        }}
+      ],
+      "filters": [
+        {{
+          "filterType": "PROPERTY",
+          "property": "ip_country",
+          "operation": {{"operator": "CONTAINS", "includeObjectsWithNoValueSet": false,
+                         "values": ["[location_term]"], "operationType": "MULTISTRING"}}
+        }}
+      ]
+    }}
+  ],
+  "filters": []
+}}
+
+── PAGE_VIEW multi-branch (regional expansion — group 6: Expanded Web Visitors) ──
+Use for: "Expanded Web Visitors". [sibling_event_url] is the nearest sibling
+regional event's page from the Segment Plan's regional research.
+filterBranch structure:
+{{
+  "filterBranchType": "OR",
+  "filterBranches": [
+    {{
+      "filterBranchType": "AND",
+      "filterBranches": [],
+      "filters": [
+        {{"filterType": "PAGE_VIEW", "operator": "HAS_PAGEVIEW_CONTAINS",
+          "pageUrl": "[sibling_event_url]", "enableTracking": false}}
+      ]
+    }},
+    {{
+      "filterBranchType": "AND",
+      "filterBranches": [],
+      "filters": [
+        {{"filterType": "PAGE_VIEW", "operator": "HAS_PAGEVIEW_CONTAINS",
+          "pageUrl": "training.linuxfoundation.org", "enableTracking": false}},
+        {{"filterType": "PROPERTY", "property": "country",
+          "operation": {{"operator": "CONTAINS", "includeObjectsWithNoValueSet": false,
+                         "values": ["[location_term]"], "operationType": "MULTISTRING"}}}}
+      ]
+    }}
+  ],
+  "filters": []
+}}
+
+── UNIFIED_EVENTS multi-value CONTAINS (regional expansion — group 7: [Region] Event Registrants) ──
+Use for: "[Region] Event Registrants". [sibling_event_name_1..N] are the exact
+EVENT_NAME / event series names of sibling events found in the Segment Plan's
+regional research (one CONTAINS list, not one branch per event).
+filterBranch structure:
+{{
+  "filterBranchType": "OR",
+  "filterBranches": [
+    {{
+      "filterBranchType": "AND",
+      "filterBranches": [
+        {{
+          "filterBranchType": "UNIFIED_EVENTS",
+          "operator": "HAS_COMPLETED",
+          "eventTypeId": "6-48984571",
+          "filterBranches": [
+            {{
+              "filterBranchType": "AND",
+              "filterBranches": [],
+              "filters": [
+                {{
+                  "filterType": "PROPERTY",
+                  "property": "event_name",
+                  "operation": {{"operator": "CONTAINS", "includeObjectsWithNoValueSet": false,
+                                 "values": ["[sibling_event_name_1]", "[sibling_event_name_2]"],
+                                 "operationType": "MULTISTRING"}}
+                }}
+              ]
+            }}
+          ],
+          "filters": []
+        }}
+      ],
+      "filters": []
+    }}
+  ],
+  "filters": []
+}}
+
 After EACH successful hubspot_create_list call, print:
 ✅ [List name] created — ID: [listId] — [hubspot_url]
 
@@ -854,9 +1041,9 @@ build it yourself:
 
 This is the mirror image of the STEP 1 query (ILIKE the current year instead of
 excluding it) — it must return THIS event's own EVENT_NAME, never a past edition's.
-Use the exact EVENT_NAME(s) returned to build a BEHAVIORAL_EVENT list the same way
-as a past-registrant list (same filterBranch shape as STEP 4's BEHAVIORAL_EVENT
-block), name it "[Quarter] [Year] - [Brand] - [Event Name] - Current Registrants",
+Use the exact EVENT_NAME(s) returned to build a UNIFIED_EVENTS list the same way
+as a past-registrant list (same filterBranch shape as STEP 4's UNIFIED_EVENTS
+past-registrant block), name it "[Quarter] [Year] - [Brand] - [Event Name] - Current Registrants",
 and feed its list ID into STEP 5B's combined suppression — do NOT add it to the
 master list's inclusion branches. If the query errors or returns zero rows, note it
 in ## FLAGGED FOR REVIEW rather than skipping the exclusion silently — a missing
