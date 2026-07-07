@@ -11,6 +11,8 @@ All prompt text is ported verbatim from
 The agent loop is ported verbatim from
   lf-event-studio/app/agent.py
 """
+import datetime
+import decimal
 import json
 import logging
 import os
@@ -31,6 +33,17 @@ from config import (
     tag_asset_name,
 )
 import llm_gateway   # ALL AI calls route through this single deterministic gateway
+
+
+def _json_default(obj):
+    """Fallback encoder for json.dumps — handles date/datetime/Decimal values that
+    can slip into tool results (e.g. raw Snowflake rows) without crashing the agent loop."""
+    if isinstance(obj, (datetime.date, datetime.datetime, datetime.time)):
+        return obj.isoformat()
+    if isinstance(obj, decimal.Decimal):
+        return float(obj)
+    return str(obj)
+
 
 log = logging.getLogger("audience-builder")
 log.setLevel(logging.INFO)
@@ -255,6 +268,15 @@ def _sf_connect():
     )
 
 
+def _sf_json_safe(value):
+    """Convert a Snowflake column value (date/datetime/Decimal/etc.) to a JSON-serializable type."""
+    if isinstance(value, (datetime.date, datetime.datetime, datetime.time)):
+        return value.isoformat()
+    if isinstance(value, decimal.Decimal):
+        return float(value)
+    return value
+
+
 def snowflake_query(sql: str) -> dict:
     """Run a SQL query against Snowflake and return rows as a list of dicts."""
     conn = _sf_connect()
@@ -262,7 +284,7 @@ def snowflake_query(sql: str) -> dict:
         cur = conn.cursor()
         cur.execute(sql)
         cols = [d[0] for d in cur.description]
-        rows = [dict(zip(cols, row)) for row in cur.fetchall()]
+        rows = [{col: _sf_json_safe(val) for col, val in zip(cols, row)} for row in cur.fetchall()]
         return {"columns": cols, "rows": rows, "count": len(rows)}
     finally:
         conn.close()
@@ -392,7 +414,7 @@ def _audience_execute(name: str, tool_input: dict) -> str:
     if not handler:
         return json.dumps({"error": f"Unknown tool: {name}"})
     try:
-        return json.dumps(handler(tool_input))
+        return json.dumps(handler(tool_input), default=_json_default)
     except Exception as exc:
         log.warning(f"[AGENT] tool {name} raised: {exc}")
         return json.dumps({"error": str(exc)})
@@ -642,6 +664,8 @@ Copy the exact EVENT_NAME strings — they are used verbatim as HubSpot filter v
 Every returned EVENT_NAME should refer to THIS event's own location (different past
 YEARS of it are expected and fine); if any row clearly names a different city/country,
 exclude that row per RULE 7 rather than building a branch for it.
+
+Print the exact SQL you ran before showing its results, so it's auditable.
 
 If snowflake_query errors (connection/key failure) or returns zero rows, you MUST NOT
 substitute guessed, remembered, or web-researched event name strings — including values
@@ -1015,8 +1039,12 @@ def _run_agent(prompt: str, q: queue.Queue) -> None:
             if text:
                 q.put({"type": "output", "text": text, "delta": True})
         elif etype == "tool":
-            q.put({"type": "output",
-                   "text": f"🔧 {ev.get('name')}({json.dumps(ev.get('input', {}))[:100]})"})
+            name = ev.get("name")
+            if name == "snowflake_query":
+                q.put({"type": "output", "text": f"🔧 {name}:\n{ev.get('input', {}).get('sql', '')}"})
+            else:
+                q.put({"type": "output",
+                       "text": f"🔧 {name}({json.dumps(ev.get('input', {}))[:100]})"})
         elif etype == "tool_result":
             q.put({"type": "output", "text": f"   ↳ {str(ev.get('text',''))[:200]}"})
 
