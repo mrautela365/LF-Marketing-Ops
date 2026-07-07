@@ -923,14 +923,14 @@ class TestStageDet:
         assert result["funnel"] == "TOFU"
 
     def test_two_weeks_out_returns_main_registration_push(self):
-        """Event 20 days away → Main Registration Push (14-27 days range)."""
-        result = detect_stage([self._future_date_str(20)])
+        """Event 40 days away → Main Registration Push (35-48 days range)."""
+        result = detect_stage([self._future_date_str(40)])
         assert result["name"] == "Main Registration Push"
         assert result["funnel"] == "BOFU"
 
     def test_final_countdown_within_13_days(self):
-        """Event 7 days away → Final Countdown stage."""
-        result = detect_stage([self._future_date_str(7)])
+        """Event 20 days away → Final Countdown stage (14-34 days range)."""
+        result = detect_stage([self._future_date_str(20)])
         assert result["name"] == "Final Countdown"
 
     def test_event_week_within_2_days(self):
@@ -961,13 +961,13 @@ class TestStageDet:
         assert result["event_date_str"] != ""
 
     def test_cfp_launch_stage_range(self):
-        """Event 90 days away falls in CFP Launch range (85-99 days)."""
-        result = detect_stage([self._future_date_str(90)])
+        """Event 100 days away falls in CFP Launch range (98-104 days)."""
+        result = detect_stage([self._future_date_str(100)])
         assert result["name"] == "CFP Launch"
 
     def test_registration_launch_stage_range(self):
-        """Event 75 days away falls in Registration Launch range (70-84 days)."""
-        result = detect_stage([self._future_date_str(75)])
+        """Event 90 days away falls in Registration Launch range (84-97 days)."""
+        result = detect_stage([self._future_date_str(90)])
         assert result["name"] == "Registration Launch"
 
     def test_marketing_journey_data_included(self):

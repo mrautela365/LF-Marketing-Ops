@@ -845,6 +845,7 @@ def update_email_content(
     content_sections: list = None,
     sponsors: list = None,
     utm_params: dict = None,
+    sent_by_org: str = "",
 ) -> dict:
     """
     Replace email body using HubSpot's DnD widget/flexArea structure.
@@ -1209,7 +1210,9 @@ def update_email_content(
         "style":   _section_style,
     })
 
-    # "Sent by" attribution text
+    # "Sent by" attribution text — org name must match the actual sending brand
+    # (e.g. "Cloud Native Computing Foundation" for CNCF emails), not always LF.
+    _sent_by_org = sent_by_org or "The Linux Foundation Events"
     FOOTER_BODY = "staging_footer_body"
     widgets[FOOTER_BODY] = {
         "type": "module",
@@ -1220,7 +1223,7 @@ def update_email_content(
                 '<h2 style="font-size:8px;line-height:175%;font-weight:normal;text-align:center;">'
                 '<span style="font-size:12px;color:#000000;">'
                 'This email was sent by: '
-                '<span style="font-weight:normal;">The Linux Foundation Events</span>'
+                f'<span style="font-weight:normal;">{_sent_by_org}</span>'
                 '</span></h2>'
             ),
             "hs_enable_module_padding": True,

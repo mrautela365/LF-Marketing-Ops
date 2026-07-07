@@ -10,6 +10,7 @@ BRAND_MAP = [
     {"event_name": "The Linux Foundation Member Summit",          "event_short_name": "LF Member Summit",    "brand_name": "The Linux Foundation",              "short_brand_name": "LF"},
     {"event_name": "HPSF Conference",                             "event_short_name": "HPSF Conf",           "brand_name": "High Performance Software Foundation","short_brand_name": "HPSF"},
     {"event_name": "OpenSearchCon China",                         "event_short_name": "OSC China",           "brand_name": "OpenSearch Software Foundation",    "short_brand_name": "OSSF"},
+    {"event_name": "OpenSearchCon North America",                 "event_short_name": "OSC NA",              "brand_name": "OpenSearch Software Foundation",    "short_brand_name": "OSSF"},
     {"event_name": "KubeCon + CloudNativeCon Europe",             "event_short_name": "KubeCon EU",          "brand_name": "Cloud Native Computing Foundation", "short_brand_name": "CNCF"},
     {"event_name": "Agentics Day: MCP + Agents Europe",           "event_short_name": "Agentics Day EU",     "brand_name": "Agentic AI Foundation",            "short_brand_name": "AIF"},
     {"event_name": "CiliumCon Europe",                            "event_short_name": "CiliumCon EU",        "brand_name": "Cloud Native Computing Foundation", "short_brand_name": "CNCF"},
