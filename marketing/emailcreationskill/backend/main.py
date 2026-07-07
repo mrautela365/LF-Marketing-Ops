@@ -9,7 +9,7 @@ import traceback
 from fastapi import FastAPI, HTTPException
 import hubspot_tools
 import content_tools
-from event_brands import lookup_event_brand, get_brand_events, expand_location_words, location_fallback_chain, extract_location_from_name, build_location_chain
+from event_brands import lookup_event_brand, get_brand_events, expand_location_words, location_fallback_chain, extract_location_from_name, build_location_chain, filter_candidates_by_locale
 from stage_detector import detect_stage
 
 log = logging.getLogger("email-staging")
@@ -174,22 +174,11 @@ async def debug_lookup(url: str):
         except Exception as e:
             result["hubspot_error"] = str(e)
 
-    # 4. Mandatory location filter: event name location first, then scraped city/country/region.
-    # e.g. "LF Energy Summit Europe" + "Berlin, Germany" → tries "europe/eu" before "berlin"
-    filter_level = "none"
-    ai_pool      = candidates
-
-    if location or event_name:
-        chain = build_location_chain(event_name, location)
-        for idx, loc_words in enumerate(chain):
-            level_hits = [e for e in candidates if any(w in (e.get("name") or "").lower() for w in loc_words)]
-            if len(level_hits) >= 2:
-                ai_pool      = level_hits
-                filter_level = f"level_{idx+1} ({', '.join(sorted(loc_words))})"
-                break
-        else:
-            filter_level = "ai_decides"
-
+    # 4. Strict locale filter: event name location first, then scraped city/country/region.
+    # e.g. "LF Energy Summit Europe" + "Berlin, Germany" → tries "europe/eu" before "berlin".
+    # A locale mismatch (no hits at any level) means "no history for this location" —
+    # it never falls back to an unfiltered, cross-country candidate pool.
+    ai_pool, filter_level = filter_candidates_by_locale(candidates, event_name, location)
     filtered = ai_pool
 
     # 5. Keyword score — uses expanded location words so "NA" and "North America" both score
@@ -315,22 +304,11 @@ def _create_plan_impl(req: PlanRequest, emit=lambda *a, **k: None):
             emit(f"📬 Found {len(candidates)} past campaign email(s) to learn from.")
 
             if candidates:
-                # Mandatory location filter: city → country → region fallback.
-                # If location is known, emails must match at some level.
-                # If nothing matches at any level, pass full pool to AI.
-                filter_level = "none"
-                ai_pool      = candidates
-
-                if location or event_name:
-                    chain = build_location_chain(event_name, location)
-                    for idx, loc_words in enumerate(chain):
-                        level_hits = [e for e in candidates if any(w in (e.get("name") or "").lower() for w in loc_words)]
-                        if len(level_hits) >= 2:
-                            ai_pool      = level_hits
-                            filter_level = f"level_{idx+1} ({', '.join(sorted(loc_words))})"
-                            break
-                    else:
-                        filter_level = "ai_decides"
+                # Strict locale filter: city → country → region, single most-specific
+                # level with a hit wins. A mismatch (no hits anywhere) yields an empty
+                # pool rather than falling back to other countries' editions — see
+                # filter_candidates_by_locale() for the rationale.
+                ai_pool, filter_level = filter_candidates_by_locale(candidates, event_name, location)
 
                 log.info(f"[PLAN] AI select: {len(candidates)} total → location filter={filter_level!r} pool={len(ai_pool)}")
 

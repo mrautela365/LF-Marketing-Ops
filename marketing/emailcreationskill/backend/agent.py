@@ -1043,9 +1043,10 @@ def ai_select_source_email(
     """
     Ask Claude to pick the best source email to clone from a pre-filtered candidate list.
 
-    Candidates are already location-filtered by the caller (main.py) so Claude sees
-    the most relevant emails first, with a fallback to all candidates when the
-    filtered list is too small.
+    Candidates are already strictly locale-filtered by the caller (main.py) —
+    every email in `candidates` matches the new event's city/region/country.
+    The caller never widens the pool to other locales, so an empty `candidates`
+    list means "no same-locale history" and this function returns None immediately.
 
     Each attempt:
       1. Show Claude the email list + full event context (name, short name, location, URL).

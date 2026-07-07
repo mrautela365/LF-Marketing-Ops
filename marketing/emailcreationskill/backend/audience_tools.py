@@ -415,6 +415,18 @@ values copied from existing HubSpot list filters (e.g. communitySeg snapshots).
 Report the failure plainly and list past-registrant segmentation under
 "Open questions / flags" as unresolved until Snowflake is reachable.
 
+CRITICAL — Location scoping: many LF event series run parallel editions in
+different countries/cities under the same brand (e.g. "MCP Dev Summit" has run
+in North America, Seoul, Toronto, Bengaluru, Mumbai, and Nairobi; "KubeCon +
+CloudNativeCon" has North America / Europe / China / Japan editions). Every
+past-registrant and geographic inclusion segment you propose MUST be for the
+SAME city/country/edition as the CURRENT event being planned — never propose a
+segment for a different edition of the same series just because it shares a
+brand or short name. If a prior master list you find in STEP 2 blended multiple
+editions/countries into one list, do NOT reproduce that structure — note it
+under "Open questions / flags" as a legacy pattern to leave behind, and scope
+your new plan to this event's own location only.
+
 Work through ALL 4 steps below, narrating each sub-step so progress is visible.
 
 {step1}
@@ -433,6 +445,12 @@ Also search for each of the inclusion lists referenced in prior sends:
 past-registrant lists, geographic lists, topic/persona lists, newsletter lists, etc.
 Use hubspot_get_list on any list IDs found to inspect their filter logic.
 
+When inspecting a prior master list's filter branches, check whether any AND
+branch's BEHAVIORAL_EVENT / hs_event_name value names a DIFFERENT city/country
+than this event's own location. If so, that branch belongs to a different
+edition of the series (see the Location scoping rule above) — record it as a
+legacy cross-edition branch to leave out, not as a template to copy.
+
 ═══════════════════════════════════════════════════
 STEP 3 — Analyse historical segmentation logic
 ═══════════════════════════════════════════════════
@@ -440,10 +458,19 @@ Reconstruct the full audience strategy from prior emails and lists:
 
 Inclusion sources: past registrants, web visitors, geographic segments,
 topic interests, newsletter subscribers, foundation subscriber lists.
+Past-registrant and geographic sources are scoped to THIS event's own
+city/country only — one segment for this edition, not one per country the
+series has ever run in (see the Location scoping rule above).
 
 Exclusion sources: LF Events Global Opt Outs, LF Global Opt-Outs,
 GDPR suppression, current registrants, internal LF contacts,
 foundation-specific opt-outs.
+"Current registrants" means people ALREADY REGISTERED for THIS SAME upcoming
+event (the one being planned right now) — they must be suppressed, never
+included, since re-inviting someone who already registered is the mistake this
+exclusion exists to prevent. Do not confuse this with past-registrant inclusion
+sources above: past editions (prior years, same location) are for INCLUSION;
+this event's own current-year registrants are for EXCLUSION only.
 
 Opt-in filter logic: whether applied, which variant (Foundation / LF Events /
 LF Newsletter), and why.
@@ -462,6 +489,8 @@ Write a complete structured report using this format:
 **Event summary** — name, foundation, location, dates, type.
 
 **Historical context** — prior master list name, send counts, key changes, QA notes.
+If the prior master list included past-registrant branches for OTHER cities/countries
+of this series, name them here and state they are being dropped (not carried forward).
 
 **Recommended master list name**
 Follow foundation naming convention, e.g.:
@@ -469,9 +498,11 @@ Follow foundation naming convention, e.g.:
 
 **Inclusion strategy** — per source list: name, why it belongs, dynamic vs snapshot.
 Group by and number each list:
-  1. Past registrants (BEHAVIORAL_EVENT filter)
+  1. Past registrants of THIS event's own location only (BEHAVIORAL_EVENT filter —
+     one segment per past YEAR of this same city/country, never per other country)
   2. Web visitors (PAGE_VIEW only — no brand-master gate)
-  3. Geographic segments (LIST_MEMBERSHIP + brand-master gate — mandatory, if applicable)
+  3. Geographic segments for THIS event's own country/region only
+     (LIST_MEMBERSHIP + brand-master gate — mandatory, if applicable)
   4. Topic / persona lists (if applicable)
   5. Foundation / newsletter subscribers (if applicable)
   6. Any other inclusion lists from prior sends
@@ -483,7 +514,10 @@ For each inclusion list, state:
 
 **Exclusion strategy** — per suppression list: name and reason.
 Always include: LF Events Global Opt Outs, LF Global Opt-Outs, GDPR Suppression (if EU in scope),
-23Q1 LF Master Exclusion List, foundation opt-out, current registrants segment.
+23Q1 LF Master Exclusion List, foundation opt-out, and this event's OWN current-year
+registrants (people already registered for the event being planned — build this fresh
+from Snowflake in the BUILDING phase if no existing HubSpot list already tracks it;
+never skip it just because it doesn't exist yet).
 
 **Opt-in filter recommendation** — whether to apply, which variant, and why.
 
@@ -578,11 +612,24 @@ RULE 5 — After EVERY successful hubspot_create_list call print:
 
 RULE 6 — If unsure about anything → skip and add to ## FLAGGED FOR REVIEW.
 
+RULE 7 — LOCATION SCOPING IS MANDATORY for past-registrant and geographic segments.
+  [location_term] in STEP 1 MUST be this event's own specific city or, if the series
+  names editions by region (e.g. "North America", "Europe"), that exact region — NEVER
+  the brand/series name alone, and NEVER omitted. A vague or missing [location_term]
+  causes the Snowflake query to match every past edition worldwide, producing one
+  inclusion branch per country instead of per year of THIS edition. If the Segment
+  Plan's rows returned by STEP 1 name a city/country/region different from this
+  event's own location, DROP those rows before building — do not create a branch for
+  them, and do not carry forward any cross-edition branch from a prior master list
+  (see the Segment Plan's "Historical context" notes on legacy branches).
+
 ═══════════════════════════════════════════════════
 STEP 1 — Query Snowflake for past editions
 ═══════════════════════════════════════════════════
 Use snowflake_query. Derive [event_term], [location_term], [current_year] from the
-Segment Plan above — do NOT re-scrape the URL.
+Segment Plan above — do NOT re-scrape the URL. [location_term] must be THIS event's
+own city/region (per RULE 7), not the brand/series name — otherwise this query
+matches every country the series has ever run in.
 
   SELECT DISTINCT EV.EVENT_NAME, EV.EVENT_ID
   FROM ANALYTICS.Silver_Segment.EVENT_REGISTRATIONS AS EV
@@ -592,6 +639,9 @@ Segment Plan above — do NOT re-scrape the URL.
   ORDER BY EV.EVENT_NAME;
 
 Copy the exact EVENT_NAME strings — they are used verbatim as HubSpot filter values.
+Every returned EVENT_NAME should refer to THIS event's own location (different past
+YEARS of it are expected and fine); if any row clearly names a different city/country,
+exclude that row per RULE 7 rather than building a branch for it.
 
 If snowflake_query errors (connection/key failure) or returns zero rows, you MUST NOT
 substitute guessed, remembered, or web-researched event name strings — including values
@@ -661,7 +711,9 @@ filterBranch structure:
   ],
   "filters": []
 }}
-Add one AND branch per past edition. All inside the top OR.
+Add one AND branch per past EVENT_NAME row from STEP 1 — i.e. one per past YEAR of
+THIS event's own location, never one per other country/city (per RULE 7). All
+branches go inside the top OR.
 
 ── PAGE_VIEW (web visitors) ──────────────────────────────────
 Use for: web-visitor lists. NO brand-master gate — a page view alone qualifies.
@@ -762,6 +814,30 @@ Standard suppressions to look up:
 
 Also look up any event-specific suppressions from the Segment Plan
 (current registrants of this event, internal LF contacts, foundation opt-outs, etc.).
+
+── Current-event registrants (MANDATORY — build fresh if no list exists) ──────
+This event's OWN registrants (current year) MUST end up in the suppression set —
+never in an inclusion branch. First try hubspot_search_lists for an existing
+registration list for this event. If none exists (common for a brand-new event),
+build it yourself:
+
+  SELECT DISTINCT EV.EVENT_NAME, EV.EVENT_ID
+  FROM ANALYTICS.Silver_Segment.EVENT_REGISTRATIONS AS EV
+  WHERE EV.EVENT_NAME ILIKE '%[event_term]%'
+    AND EV.EVENT_NAME ILIKE '%[location_term]%'
+    AND EV.EVENT_NAME ILIKE '%[current_year]%'
+  ORDER BY EV.EVENT_NAME;
+
+This is the mirror image of the STEP 1 query (ILIKE the current year instead of
+excluding it) — it must return THIS event's own EVENT_NAME, never a past edition's.
+Use the exact EVENT_NAME(s) returned to build a BEHAVIORAL_EVENT list the same way
+as a past-registrant list (same filterBranch shape as STEP 4's BEHAVIORAL_EVENT
+block), name it "[Quarter] [Year] - [Brand] - [Event Name] - Current Registrants",
+and feed its list ID into STEP 5B's combined suppression — do NOT add it to the
+master list's inclusion branches. If the query errors or returns zero rows, note it
+in ## FLAGGED FOR REVIEW rather than skipping the exclusion silently — a missing
+current-registrants suppression means people who already registered could get
+re-invited.
 
 Collect ALL found suppression list IDs into one set — they feed STEP 5B (the combined
 list) and the ## SUPPRESSION LISTS section. If a search returns no match, note it in
