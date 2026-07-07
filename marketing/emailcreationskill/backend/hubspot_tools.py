@@ -8,6 +8,7 @@ import re
 import requests
 from config import HUBSPOT_ACCESS_TOKEN, HUBSPOT_PORTAL_ID, tag_asset_name
 from utm_tools import add_utm, slugify_utm_content, tag_html_links
+from event_brands import filter_candidates_by_locale
 
 
 def _headers() -> dict:
@@ -195,7 +196,12 @@ def search_emails_for_event(brand_name: str, event_name: str, location: str = ""
       Tier 3 — short brand fallback:     name__icontains="LF"
       Tier 4 — full brand name:          name__icontains="The Linux Foundation"
 
-    Among the results from whichever tier matched, rank by:
+    Among the results from whichever tier matched, results are first restricted to
+    the SAME event locale (city/region/country) as `event_name`/`location` — e.g. a
+    "MCP Dev Summit Bengaluru" event will never match a "MCP Dev Summit Toronto"
+    email even though both share the "MCP" brand. A locale mismatch is reported as
+    not found rather than silently reusing another country's edition. Within the
+    locale-matched set, results are ranked by:
       • email_type suffix bonus (+2 if name contains e.g. "invite")
       • publishDate descending (most recently sent wins all ties)
     """
@@ -230,6 +236,17 @@ def search_emails_for_event(brand_name: str, event_name: str, location: str = ""
             "message": f"No sent emails found for event '{event_name}' / brand '{brand_name}'.",
         }
 
+    emails, locale_filter = filter_candidates_by_locale(emails, event_name, location)
+    if not emails:
+        return {
+            "found": False,
+            "message": (
+                f"Found past emails for '{brand_name}', but none for this event's location "
+                f"('{location or 'unknown'}') — ask the user for from_name, from_address, "
+                f"subscription_type, and suppression_list_ids."
+            ),
+        }
+
     def sort_key(e):
         pub = e.get("publishDate") or 0
         name = e.get("name", "").lower()
@@ -255,6 +272,7 @@ def search_emails_for_event(brand_name: str, event_name: str, location: str = ""
         "found": True,
         "event_match": matched_tier in ("event_name", "event_short_name"),
         "matched_tier": matched_tier,
+        "locale_filter": locale_filter,
         "matched_email_id": best_email.get("id"),
         "matched_email_name": best_email.get("name"),
         "matched_score": best_score,
@@ -827,6 +845,7 @@ def update_email_content(
     content_sections: list = None,
     sponsors: list = None,
     utm_params: dict = None,
+    sent_by_org: str = "",
 ) -> dict:
     """
     Replace email body using HubSpot's DnD widget/flexArea structure.
@@ -1191,7 +1210,9 @@ def update_email_content(
         "style":   _section_style,
     })
 
-    # "Sent by" attribution text
+    # "Sent by" attribution text — org name must match the actual sending brand
+    # (e.g. "Cloud Native Computing Foundation" for CNCF emails), not always LF.
+    _sent_by_org = sent_by_org or "The Linux Foundation Events"
     FOOTER_BODY = "staging_footer_body"
     widgets[FOOTER_BODY] = {
         "type": "module",
@@ -1202,7 +1223,7 @@ def update_email_content(
                 '<h2 style="font-size:8px;line-height:175%;font-weight:normal;text-align:center;">'
                 '<span style="font-size:12px;color:#000000;">'
                 'This email was sent by: '
-                '<span style="font-weight:normal;">The Linux Foundation Events</span>'
+                f'<span style="font-weight:normal;">{_sent_by_org}</span>'
                 '</span></h2>'
             ),
             "hs_enable_module_padding": True,

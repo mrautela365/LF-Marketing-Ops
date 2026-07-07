@@ -17,6 +17,7 @@ from datetime import datetime
 from config import ANTHROPIC_API_KEY, CLAUDE_MODEL, LITELLM_BASE_URL, LITELLM_API_KEY
 import hubspot_tools
 import content_tools
+from event_brands import lookup_event_brand
 import llm_gateway   # ALL AI calls route through this single deterministic gateway
 
 # ── Shared system prompt ─────────────────────────────────────────────────────
@@ -641,7 +642,12 @@ def generate_email_content(
         "- Only mention the registration window / pricing that is currently open or\n"
         "  still upcoming. If early-bird has ended, reference the current (e.g. standard)\n"
         "  tier instead, or omit pricing rather than advertising an expired deal.\n"
-        "- Do not invent dates. If unsure whether a date is still valid, omit it."
+        "- Do not invent dates. If unsure whether a date is still valid, omit it.\n"
+        "- DURATION CONSISTENCY: if the event date is a range (e.g. \"August 11-12, 2026\"),\n"
+        "  never describe it as \"a full day\" or \"a day of\" anywhere in the copy — say\n"
+        "  \"two days\" / \"August 11-12\" consistently. Derive the duration word choice\n"
+        "  (day / two days / three days) from the actual date range given above, and use\n"
+        "  the same number of days everywhere in the email — never contradict the dates."
     )
 
     # Upload hero / logo / sponsor images to HubSpot CDN for reliable rendering
@@ -876,6 +882,17 @@ For each component in the COMPONENT LAYOUT above, output the matching HTML:
   — Do NOT include a "Thank You to Our Sponsors!" heading or any sponsor section header —
     the system injects this heading automatically before the sponsor logos.
 
+▸ GREETING SPACING
+  — If the greeting line uses a name/firstname token (e.g. "Hi {hs_firstname},"),
+    put it in its own <p> tag with margin-bottom (e.g. margin:0 0 12px;) — never
+    run the greeting and the next sentence together in the same <p> or joined by <br>.
+
+▸ NO SIGN-OFF
+  — Do NOT include a closing sign-off line such as "Regards,", "Best,", "Sincerely,",
+    "The Linux Foundation", or any similar valediction anywhere in the body. If the
+    reference email's rich-text HTML contains one (often a leftover artifact from an
+    earlier cloned/reused email), drop it — do not copy it into the new email.
+
 ▸ STRICT SECTION ORDER — output section objects in this exact sequence:
   1. Greeting / intro paragraph  (rich_text)
   2. Event highlights / main body  (rich_text)
@@ -936,6 +953,13 @@ the real event details above and produce an ordered sections array.
 4. HubSpot personalization tokens (EXACT syntax):
    - First name : {hs_firstname}
    - Company    : {hs_company}
+   - Greeting spacing: if the greeting uses a name/firstname token (e.g. "Hi {hs_firstname},"),
+     put it in its own <p> tag with margin-bottom (e.g. margin:0 0 12px;) — never run the
+     greeting and the next sentence together in the same <p> or joined by <br>.
+
+4b. NO SIGN-OFF: do NOT include a closing sign-off line such as "Regards,", "Best,",
+    "Sincerely," or "The Linux Foundation" anywhere in the body — drop any such line
+    even if it appears in reference/cloned content.
 
 5. Output sections array — NOT a single HTML block:
    - rich_text sections: inline HTML only (no outer div wrapper, no style tags)
@@ -1043,9 +1067,10 @@ def ai_select_source_email(
     """
     Ask Claude to pick the best source email to clone from a pre-filtered candidate list.
 
-    Candidates are already location-filtered by the caller (main.py) so Claude sees
-    the most relevant emails first, with a fallback to all candidates when the
-    filtered list is too small.
+    Candidates are already strictly locale-filtered by the caller (main.py) —
+    every email in `candidates` matches the new event's city/region/country.
+    The caller never widens the pool to other locales, so an empty `candidates`
+    list means "no same-locale history" and this function returns None immediately.
 
     Each attempt:
       1. Show Claude the email list + full event context (name, short name, location, URL).
@@ -1333,6 +1358,15 @@ def clone_turn(session, subject=None, preview_text=None, send_list_id=None) -> t
     banner_url         = session.meta.get("banner_url", "")
     event_url          = (session.meta.get("url_data") or {}).get("url", "")
     utm_params         = session.meta.get("utm_params")
+
+    # Footer "This email was sent by: <org>" must match the actual sending brand
+    # (e.g. "Cloud Native Computing Foundation" for CNCF), not be hardcoded to LF.
+    _event_name_for_brand = (session.meta.get("url_data") or {}).get("event_name", "")
+    _brand_entry = lookup_event_brand(_event_name_for_brand) if _event_name_for_brand else None
+    sent_by_org = (_brand_entry or {}).get("brand_name", "")
+    if sent_by_org == "The Linux Foundation":
+        sent_by_org = "The Linux Foundation Events"
+
     if content_sections or body_html:
         try:
             content_result = hubspot_tools.update_email_content(
@@ -1343,6 +1377,7 @@ def clone_turn(session, subject=None, preview_text=None, send_list_id=None) -> t
                 content_sections=content_sections or None,
                 sponsors=sponsors_list or None,
                 utm_params=utm_params,
+                sent_by_org=sent_by_org,
             )
             if "error" not in content_result:
                 content_applied = True
@@ -1384,6 +1419,7 @@ def clone_turn(session, subject=None, preview_text=None, send_list_id=None) -> t
                         content_sections=content_sections or None,
                         sponsors=sponsors_list or None,
                         utm_params=utm_params,
+                        sent_by_org=sent_by_org,
                     )
                     if "error" not in retry_result:
                         val2 = hubspot_tools.validate_staged_email(

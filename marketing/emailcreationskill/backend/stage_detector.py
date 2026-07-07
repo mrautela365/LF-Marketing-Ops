@@ -179,19 +179,19 @@ MARKETING_JOURNEY: dict[str, dict] = {
 }
 
 STAGES = [
-    {"name": "Event Announcement",               "funnel": "TOFU",      "email_type": "Invite",      "min": 100,   "max": 9999},
-    {"name": "CFP Launch",                        "funnel": "TOFU",      "email_type": "Invite",      "min": 85,    "max": 99},
-    {"name": "Registration Launch",               "funnel": "TOFU",      "email_type": "Invite",      "min": 70,    "max": 84},
-    {"name": "Co-Located Events + CFP Reminder",  "funnel": "MOFU",      "email_type": "Invite",      "min": 50,    "max": 69},
-    {"name": "DEI & Travel Fund",                 "funnel": "MOFU",      "email_type": "Newsletter",  "min": 42,    "max": 49},
-    {"name": "Schedule Announcement",             "funnel": "MOFU",      "email_type": "Newsletter",  "min": 28,    "max": 41},
-    {"name": "Main Registration Push",            "funnel": "BOFU",      "email_type": "Reminder",    "min": 14,    "max": 27},
-    {"name": "Final Countdown",                   "funnel": "BOFU",      "email_type": "Last Chance", "min": 3,     "max": 13},
-    {"name": "Event Week",                        "funnel": "BOFU",      "email_type": "Reminder",    "min": -2,    "max": 2},
-    {"name": "Thank You + Survey",                "funnel": "FOLLOW-UP", "email_type": "Newsletter",  "min": -3,    "max": -1},
-    {"name": "Content & Recordings Release",      "funnel": "FOLLOW-UP", "email_type": "Newsletter",  "min": -14,   "max": -4},
-    {"name": "Next Event CFP Teaser",             "funnel": "FOLLOW-UP", "email_type": "Newsletter",  "min": -28,   "max": -15},
-    {"name": "Community Nurture",                 "funnel": "FOLLOW-UP", "email_type": "Newsletter",  "min": -9999, "max": -29},
+    {"name": "Event Announcement",               "funnel": "TOFU",      "email_type": "Invite",      "min": 105,   "max": 9999},
+    {"name": "CFP Launch",                        "funnel": "TOFU",      "email_type": "Invite",      "min": 98,    "max": 104},
+    {"name": "Registration Launch",               "funnel": "TOFU",      "email_type": "Invite",      "min": 84,    "max": 97},
+    {"name": "Co-Located Events + CFP Reminder",  "funnel": "MOFU",      "email_type": "Invite",      "min": 70,    "max": 83},
+    {"name": "DEI & Travel Fund",                 "funnel": "MOFU",      "email_type": "Invite",      "min": 63,    "max": 69},
+    {"name": "Schedule Announcement",             "funnel": "MOFU",      "email_type": "Invite",      "min": 49,    "max": 62},
+    {"name": "Main Registration Push",            "funnel": "BOFU",      "email_type": "Invite",      "min": 35,    "max": 48},
+    {"name": "Final Countdown",                   "funnel": "BOFU",      "email_type": "Invite",      "min": 14,    "max": 34},
+    {"name": "Event Week",                        "funnel": "BOFU",      "email_type": "Invite",      "min": 0,     "max": 13},
+    {"name": "Thank You + Survey",                "funnel": "FOLLOW-UP", "email_type": "Invite",      "min": -3,    "max": -1},
+    {"name": "Content & Recordings Release",      "funnel": "FOLLOW-UP", "email_type": "Invite",      "min": -17,   "max": -4},
+    {"name": "Next Event CFP Teaser",             "funnel": "FOLLOW-UP", "email_type": "Invite",      "min": -31,   "max": -18},
+    {"name": "Community Nurture",                 "funnel": "FOLLOW-UP", "email_type": "Invite",      "min": -9999, "max": -32},
 ]
 
 STAGE_GOALS = {
@@ -234,10 +234,16 @@ FUNNEL_COLORS = {
 }
 
 
-def parse_event_date(date_strings: list) -> date | None:
-    """Parse scraped date strings into a Python date object. Returns the earliest found."""
+_MONTH_RE = (r"(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?"
+             r"|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)")
+
+
+def _parse_all_dates(date_strings: list) -> list:
+    """Parse scraped date strings into Python date objects, including BOTH ends of any
+    range found in a single string (e.g. "June 15-16, 2026" → [June 15, June 16]), so
+    callers can derive the full event date range, not just the earliest day."""
     if not date_strings:
-        return None
+        return []
     parsed = []
     for ds in date_strings:
         ds = (ds or "").strip()
@@ -251,6 +257,13 @@ def parse_event_date(date_strings: list) -> date | None:
                 continue
             except ValueError:
                 pass
+        # Capture the end day of an inline range ("June 15-16, 2026") before it gets
+        # stripped below, so the range's last day isn't lost.
+        range_m = re.match(
+            r"(" + _MONTH_RE + r")[\s,]+\d{1,2}(?:st|nd|rd|th)?[\s,–\-]+"
+            r"(\d{1,2})(?:st|nd|rd|th)?[\s,]+(20\d{2})",
+            ds, re.I,
+        )
         # Normalize ranges like "June 15-16, 2026" → "June 15, 2026"
         ds_clean = re.sub(r"(\b\w+ \d+)[-–]\d+", r"\1", ds).strip()
         # Remove ordinal suffixes: 1st, 2nd, 3rd, 15th → 1, 2, 3, 15
@@ -261,7 +274,41 @@ def parse_event_date(date_strings: list) -> date | None:
                 break
             except ValueError:
                 continue
+        if range_m:
+            month, end_day, year = range_m.group(1), range_m.group(2), range_m.group(3)
+            for fmt in ("%B %d, %Y", "%b %d, %Y"):
+                try:
+                    parsed.append(datetime.strptime(f"{month} {end_day}, {year}", fmt).date())
+                    break
+                except ValueError:
+                    continue
+    return parsed
+
+
+def parse_event_date(date_strings: list) -> date | None:
+    """Parse scraped date strings into a Python date object. Returns the earliest found."""
+    parsed = _parse_all_dates(date_strings)
     return min(parsed) if parsed else None
+
+
+def parse_event_end_date(date_strings: list) -> date | None:
+    """Parse scraped date strings into a Python date object. Returns the latest found
+    (the last day of the event, when the source gives a multi-day range)."""
+    parsed = _parse_all_dates(date_strings)
+    return max(parsed) if parsed else None
+
+
+def format_event_date_range(start: date, end: date | None) -> str:
+    """Format a start/end date pair as a human-readable range, e.g. "September 7–9, 2026"
+    or "August 30 – September 1, 2026". Falls back to a single date when there is no
+    distinct end date."""
+    if not end or end <= start:
+        return f"{start.strftime('%B')} {start.day}, {start.year}"
+    if start.year == end.year and start.month == end.month:
+        return f"{start.strftime('%B')} {start.day}–{end.day}, {start.year}"
+    if start.year == end.year:
+        return f"{start.strftime('%B')} {start.day} – {end.strftime('%B')} {end.day}, {start.year}"
+    return f"{start.strftime('%B')} {start.day}, {start.year} – {end.strftime('%B')} {end.day}, {end.year}"
 
 
 def detect_stage(event_dates: list) -> dict:
@@ -283,6 +330,9 @@ def detect_stage(event_dates: list) -> dict:
             "color": "#6b7280",
         }
 
+    event_end_date = parse_event_end_date(event_dates)
+    event_date_str = format_event_date_range(event_date, event_end_date)
+
     today = date.today()
     days = (event_date - today).days
 
@@ -297,7 +347,7 @@ def detect_stage(event_dates: list) -> dict:
                 "days_to_event": days,
                 "goal": STAGE_GOALS.get(name, ""),
                 "cta_label": CTA_LABELS.get(name, "Learn More"),
-                "event_date_str": event_date.strftime("%B %d, %Y"),
+                "event_date_str": event_date_str,
                 "color": FUNNEL_COLORS.get(s["funnel"], "#6b7280"),
                 "stage_number": mj.get("stage_number"),
                 "timeline": mj.get("timeline", ""),
@@ -312,11 +362,11 @@ def detect_stage(event_dates: list) -> dict:
     return {
         "name": name,
         "funnel": funnel,
-        "email_type": "Newsletter",
+        "email_type": "Invite",
         "days_to_event": days,
         "goal": STAGE_GOALS.get(name, ""),
         "cta_label": CTA_LABELS.get(name, "Learn More"),
-        "event_date_str": event_date.strftime("%B %d, %Y"),
+        "event_date_str": event_date_str,
         "color": FUNNEL_COLORS.get(funnel, "#6b7280"),
         "stage_number": mj.get("stage_number"),
         "timeline": mj.get("timeline", ""),
