@@ -169,9 +169,13 @@ def location_fallback_chain(location: str) -> list[set]:
 
     loc_lower = location.lower().strip()
 
-    # Parse "City, Country" format
+    # Parse "City, Country" or "City, State, Country" format — the country is
+    # always the LAST comma-separated segment; middle segments (state/province)
+    # are dropped since they aren't useful for matching HubSpot email names.
     if "," in loc_lower:
-        city_part, country_part = [p.strip() for p in loc_lower.split(",", 1)]
+        parts        = [p.strip() for p in loc_lower.split(",")]
+        city_part    = parts[0]
+        country_part = parts[-1]
     else:
         city_part    = loc_lower
         country_part = ""
@@ -283,6 +287,38 @@ def build_location_chain(event_name: str, scraped_location: str) -> list[set]:
         _add(level)
 
     return chain
+
+
+def filter_candidates_by_locale(candidates: list, event_name: str, location: str,
+                                 name_key: str = "name") -> tuple[list, str]:
+    """
+    Restrict `candidates` (HubSpot email dicts) to the SAME event locale (city, or
+    name-embedded region/country) as the current event — e.g. a "MCP Dev Summit
+    Bengaluru" plan must never reuse "MCP Dev Summit Toronto" history, and a
+    "KubeCon + CloudNativeCon Europe" plan must never reuse the North America edition.
+
+    Tries the single most specific locale level available (event-name-embedded
+    location first, then scraped city/country/region — see build_location_chain)
+    and returns the FIRST level with at least one match. Unlike a broadening
+    cascade, this does NOT fall back to a broader region or an unfiltered
+    cross-locale pool when the most specific level comes up empty: a locale
+    mismatch means "no matching past event for this location", not "let the AI
+    (or a keyword search) guess from every country".
+
+    Returns (candidates, "no_location_data") unchanged only when neither the event
+    name nor the scraped location contain any recognised locale at all — i.e.
+    there's nothing to filter by, not that filtering was skipped.
+    """
+    chain = build_location_chain(event_name, location)
+    if not chain:
+        return candidates, "no_location_data"
+
+    for idx, loc_words in enumerate(chain):
+        hits = [c for c in candidates if any(w in (c.get(name_key) or "").lower() for w in loc_words)]
+        if hits:
+            return hits, f"level_{idx + 1} ({', '.join(sorted(loc_words))})"
+
+    return [], "no_locale_match"
 
 
 # Maps full region names ↔ their short codes used in HubSpot email names.
