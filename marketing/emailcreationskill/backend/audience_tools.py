@@ -219,6 +219,7 @@ def hubspot_get_event_types() -> dict:
                 "fullyQualifiedName": d.get("fullyQualifiedName"),
                 "label": d.get("label"),
                 "name": d.get("name"),
+                "properties": d.get("properties", []),
             }
             for d in defs
         ]
@@ -475,6 +476,35 @@ proposed for every event unless the foundation has no LF Education presence
 or no sibling events this cycle — in which case note it as N/A under "Open
 questions / flags" rather than omitting them silently.
 
+CRITICAL — Product/technology domain fit (groups 4, 5, 7 — MUST NOT violate):
+The regional-expansion groups above broaden the audience beyond this event's
+own registrants (group 1) and its own page/training visits (group 6, which
+this rule does NOT touch), so they are the most likely place to accidentally
+cross technology domains. Before researching groups 4/5/7, classify THIS
+event from its scraped page content (STEP 1):
+  a) Domain bucket — exactly one of HARDWARE or SOFTWARE/AI. HARDWARE means
+     the event centers on physical systems, embedded/real-time engineering,
+     automotive, robotics, industrial, or safety-critical firmware. SOFTWARE/AI
+     means everything else that is primarily software, cloud, platform,
+     developer-tooling, or AI/agentic in focus. Judge every event from its own
+     page content — do not rely on a fixed list of past examples.
+  b) Specific project/technology focus — a short free-text label naming the
+     concrete project(s)/technology area the event centers on (e.g.
+     "Kubernetes/cloud-native", "AI/agentic", "embedded automotive Linux",
+     "PyTorch/ML", "observability").
+Record both under a new **Product/technology domain** line in the STEP 4
+report — the BUILDING phase does not re-scrape the event page, so this is the
+ONLY place that classification is available downstream.
+MUST NOT (non-negotiable, symmetric): when researching or building groups 4,
+5, or 7, never include a past event or education enrollment whose bucket is
+HARDWARE if the current event's bucket is SOFTWARE/AI, and never include one
+whose bucket is SOFTWARE/AI if the current event's bucket is HARDWARE. This
+floor rule applies regardless of any finer-grained project/technology
+similarity judgment you also apply — bucket mismatch alone is disqualifying.
+Within the same bucket, prefer events/courses in a similar or adjacent
+project/technology area over an indiscriminate match — use judgment, not a
+fixed lookup table.
+
 Work through ALL 4 steps below, narrating each sub-step so progress is visible.
 
 {step1}
@@ -498,6 +528,17 @@ above): read_reference_file("region-map.md") for this event's region, then
 hubspot_search_campaigns / hubspot_search_lists for sibling events (other
 countries in the same region, current cycle) to identify candidates for the
 Expanded Web Visitors and [Region] Event Registrants lists.
+
+For groups 5 and 7, factor in this event's domain bucket + project/technology
+focus (from STEP 1) when evaluating candidates. Group 5's exact past EVENT_NAME
+values will be re-queried fresh from Snowflake in the BUILDING phase (per the
+Snowflake data-integrity rule above), so here you only need to record this
+event's own domain classification in the STEP 4 report for that later step to
+use. For group 7, from the sibling events you find via region-map.md, keep
+only ones in the SAME domain bucket as this event (HARDWARE vs SOFTWARE/AI —
+see the CRITICAL note above) and prefer ones in a similar/adjacent project or
+technology area; a domain-bucket mismatch is never acceptable even if it's the
+only sibling event found — treat that case as N/A instead.
 
 When inspecting a prior master list's filter branches, check whether any AND
 branch's event-name value (UNIFIED_EVENTS/event_name, or legacy BEHAVIORAL_EVENT/
@@ -543,6 +584,11 @@ Write a complete structured report using this format:
 
 **Event summary** — name, foundation, location, dates, type.
 
+**Product/technology domain** — HARDWARE or SOFTWARE/AI bucket, plus the
+specific project/technology focus (see the CRITICAL "Product/technology
+domain fit" note above). This is carried verbatim into the BUILDING phase,
+which does not re-scrape the event page.
+
 **Historical context** — prior master list name, send counts, key changes, QA notes.
 If the prior master list included past-registrant branches for OTHER cities/countries
 of this series, name them here and state they are being dropped (not carried forward).
@@ -559,13 +605,20 @@ Group by and number each list:
   3. Geographic segments for THIS event's own country/region only
      (LIST_MEMBERSHIP + brand-master gate — mandatory, if applicable)
   4. Education Enrolled [Country] — standard regional-expansion group (see CRITICAL
-     note above); N/A only if the foundation has no LF Education presence
-  5. Event Registered [Country] — standard regional-expansion group; any past LF
-     event registration, gated by this event's own country
+     note above); N/A only if the foundation has no LF Education presence.
+     Country-gated only by default; note under "Open questions / flags" that a
+     course/topic-level domain filter depends on a HubSpot property the
+     BUILDING phase must investigate via hubspot_get_event_types.
+  5. Event Registered [Country] — standard regional-expansion group; past LF
+     event registrations (any brand), gated by this event's own country AND
+     filtered to this event's domain bucket (see CRITICAL "Product/technology
+     domain fit" note above) — never "any past event" unfiltered
   6. Expanded Web Visitors — standard regional-expansion group; nearest sibling
      regional event's page OR training.linuxfoundation.org + this event's country
   7. [Region] Event Registrants — standard regional-expansion group; registrants
-     of sibling events in the same broader region this cycle; N/A only if none found
+     of sibling events in the same broader region this cycle, filtered to this
+     event's domain bucket (see CRITICAL "Product/technology domain fit" note
+     above); N/A only if none found in-bucket
   8. Topic / persona lists (if applicable)
   9. Foundation / newsletter subscribers (if applicable)
   10. Any other inclusion lists from prior sends
@@ -606,6 +659,10 @@ Use web_fetch to fetch the URL above. Extract:
 - Location (city + country/region)
 - Event dates and year
 - Event type (in-person conference, virtual, hybrid, summit)
+- Core product/technology domain — HARDWARE or SOFTWARE/AI bucket, plus the
+  specific project/technology focus (see the CRITICAL "Product/technology
+  domain fit" note above); judge this from the page's description/topics/
+  tracks, not just the event name
 """
 
 
@@ -627,9 +684,12 @@ directly instead of calling web_fetch on the URL above:
 - Description: {data.get("description") or "unknown"}
 - Page headings: {headings}
 
-Derive the short name / slug and event type from the above. Do NOT call web_fetch for
-this URL — it has already been scraped and re-fetching would waste a step. Only fall
-back to web_fetch if a detail you need is genuinely missing from the data above.
+Derive the short name / slug, event type, and the Product/technology domain
+(HARDWARE vs SOFTWARE/AI bucket + specific project/technology focus — see the
+CRITICAL "Product/technology domain fit" note above) from the description and
+page headings above. Do NOT call web_fetch for this URL — it has already been
+scraped and re-fetching would waste a step. Only fall back to web_fetch if a
+detail you need is genuinely missing from the data above.
 """
 
 
@@ -696,6 +756,21 @@ RULE 8 — Regional-expansion lists (groups 4-7) use THIS event's own country as
   flagged a regional-expansion group N/A, skip it and note why in ## FLAGGED FOR
   REVIEW rather than building an empty or irrelevant list.
 
+RULE 9 — PRODUCT/TECHNOLOGY DOMAIN FIT IS MANDATORY for groups 4, 5, and 7
+  (non-negotiable, symmetric). Read the Segment Plan's "Product/technology
+  domain" line for this event's HARDWARE-vs-SOFTWARE/AI bucket and specific
+  project/technology focus. You MUST NOT include, in group 4, 5, or 7, any
+  past event or education enrollment from the OPPOSITE bucket — never
+  software/AI history feeding a hardware event's audience, and never hardware
+  history feeding a software/AI event's audience — regardless of any other
+  similarity. Within the same bucket, prefer events/courses in a similar or
+  adjacent project/technology area; use judgment, not a fixed table. Apply
+  this when selecting candidate EVENT_NAME values for group 5 (STEP 4 below)
+  and when carrying forward group 7's sibling events from the plan. For group
+  4, apply it only if/when a topic-level property is found (see STEP 2 below)
+  — otherwise group 4 keeps its existing country-only filter and the gap is
+  flagged, not silently dropped.
+
 ═══════════════════════════════════════════════════
 STEP 1 — Query Snowflake for past editions
 ═══════════════════════════════════════════════════
@@ -740,6 +815,20 @@ The past-registrant, Event Registered, and [Region] Event Registrants lists (STE
 all use the fixed portal-wide eventTypeId "6-48984571" — no lookup needed. The
 Education Enrolled list (STEP 4) uses the fixed eventTypeId "6-58204655".
 
+── Education topic property investigation (group 4, RULE 9) ──
+If the plan includes the Education Enrolled group, call hubspot_get_event_types
+once and find the entry for eventTypeId "6-58204655". Inspect its properties
+for one that plausibly holds a course/topic/subject name (its name or label
+containing something like "course", "topic", "subject", "program",
+"curriculum"). If such a property exists, note its exact property name — STEP
+4 will add a domain-fit CONTAINS filter on it, using the same nesting as
+group 5/7 below. If no such property exists, do NOT skip group 4 and do NOT
+silently drop the RULE 9 requirement for it: build it with the existing
+country-only filter (a course-level exclusion isn't mechanically possible
+without that property) and add a line to ## FLAGGED FOR REVIEW noting that
+Education Enrolled could not be domain-filtered because no topic/course
+property was found on eventTypeId "6-58204655".
+
 ═══════════════════════════════════════════════════
 STEP 3 — Print ## BUILD PLAN
 ═══════════════════════════════════════════════════
@@ -749,6 +838,10 @@ Inclusion strategy in the Segment Plan. Include:
 - Filter type(s)
 - Why it's needed
 - Anything being SKIPPED and why (including any communitySeg lists found — excluded per policy, not rebuilt)
+- For groups 4/5/7: this event's domain bucket (from the plan's Product/
+  technology domain line) and, for groups 5/7, which candidate event names
+  (or the topic property, for group 4) were kept vs excluded for domain
+  mismatch per RULE 9
 
 ═══════════════════════════════════════════════════
 STEP 4 — Build ALL inclusion lists (one per inclusion source)
@@ -760,7 +853,8 @@ Use for: past-registrant lists (built fresh from Snowflake EVENT_NAME data — n
 a rebuild or replacement of a communitySeg list; see RULE 2).
 Uses the SAME portal-wide "Event Registered" eventTypeId "6-48984571" as groups
 5 and 7 below — the only difference is the event_name filter inside it (exact
-match here, vs no filter for group 5 and CONTAINS multi-value for group 7).
+match here, vs a domain-fit-filtered CONTAINS multi-value for groups 5 and 7 —
+see RULE 9 and the group 5/7 headers below).
 This is the schema HubSpot's own UI produces for this filter (confirmed from a
 live reference list) — do NOT use the older BEHAVIORAL_EVENT/HAS_EVENT/filterGroups
 shape, which is a different, legacy event system in this portal.
@@ -873,15 +967,12 @@ filterBranch structure:
   "filters": []
 }}
 
-── UNIFIED_EVENTS + PROPERTY (regional expansion — groups 4 & 5) ────
-Use for: "Education Enrolled [Country]" and "Event Registered [Country]".
-These use HubSpot's built-in unified custom-behavioral-event IDs for this
-portal — literal, portal-wide constants (do NOT look these up per event):
-  Education Enrolled → eventTypeId "6-58204655"
-  Event Registered (any past LF event, any brand) → eventTypeId "6-48984571"
-Root is OR of two AND branches (country, then ip_country) so either property
-qualifies. [location_term] is this event's own country (RULE 7/8), e.g. "Korea".
-filterBranch structure:
+── UNIFIED_EVENTS + PROPERTY (regional expansion — group 4: Education Enrolled) ──
+Use for: "Education Enrolled [Country]". Fixed portal-wide eventTypeId
+"6-58204655" (do NOT look this up per event). Root is OR of two AND branches
+(country, then ip_country) so either property qualifies. [location_term] is
+this event's own country (RULE 7/8), e.g. "Korea".
+Default filterBranch structure (used when STEP 2 found no topic/course property):
 {{
   "filterBranchType": "OR",
   "filterBranches": [
@@ -891,7 +982,7 @@ filterBranch structure:
         {{
           "filterBranchType": "UNIFIED_EVENTS",
           "operator": "HAS_COMPLETED",
-          "eventTypeId": "[6-58204655 or 6-48984571]",
+          "eventTypeId": "6-58204655",
           "filterBranches": [],
           "filters": []
         }}
@@ -911,8 +1002,120 @@ filterBranch structure:
         {{
           "filterBranchType": "UNIFIED_EVENTS",
           "operator": "HAS_COMPLETED",
-          "eventTypeId": "[same eventTypeId as above]",
+          "eventTypeId": "6-58204655",
           "filterBranches": [],
+          "filters": []
+        }}
+      ],
+      "filters": [
+        {{
+          "filterType": "PROPERTY",
+          "property": "ip_country",
+          "operation": {{"operator": "CONTAINS", "includeObjectsWithNoValueSet": false,
+                         "values": ["[location_term]"], "operationType": "MULTISTRING"}}
+        }}
+      ]
+    }}
+  ],
+  "filters": []
+}}
+If STEP 2 DID find a topic/course property on eventTypeId "6-58204655", add ONE
+domain-fit filter inside EACH UNIFIED_EVENTS node's "filterBranches" (currently
+[] above), same nesting pattern as group 5 below — one AND branch with a
+"filters" entry using that exact property name, operator "CONTAINS", and
+values populated with domain-compatible course/topic keywords per RULE 9.
+
+── UNIFIED_EVENTS + PROPERTY + event_name CONTAINS (regional expansion — group 5: Event Registered) ──
+Use for: "Event Registered [Country]". Fixed portal-wide eventTypeId
+"6-48984571" (do NOT look this up per event). Root is OR of two AND branches
+(country, then ip_country), same as group 4, PLUS a nested event_name CONTAINS
+filter inside each UNIFIED_EVENTS node (per RULE 9 — this is the change from
+the old "any past event" match).
+First, query Snowflake for candidate past EVENT_NAME values in this event's own
+country over the last 3 years, across ANY brand/event (no [event_term] filter —
+that's what makes this "any past LF event" instead of group 1's own-series
+query; the 3-year lookback keeps the candidate set small enough to judge for
+domain fit):
+  SELECT DISTINCT EV.EVENT_NAME, EV.EVENT_ID
+  FROM ANALYTICS.Silver_Segment.EVENT_REGISTRATIONS AS EV
+  WHERE EV.EVENT_NAME ILIKE '%[location_term]%'
+    AND EV.EVENT_NAME NOT ILIKE '%[current_year]%'
+    AND (EV.EVENT_NAME ILIKE '%[current_year - 1]%'
+      OR EV.EVENT_NAME ILIKE '%[current_year - 2]%'
+      OR EV.EVENT_NAME ILIKE '%[current_year - 3]%')
+  ORDER BY EV.EVENT_NAME;
+Print the exact SQL you ran before showing its results, same as STEP 1. If this
+query fails or returns zero rows, do NOT substitute guessed/remembered event
+names (same Snowflake data-integrity rule as STEP 1) — skip group 5 entirely
+and add it to ## FLAGGED FOR REVIEW with reason "Snowflake unavailable — exact
+EVENT_NAME values for Event Registered could not be verified".
+From the returned EVENT_NAME values, apply RULE 9: keep only the ones in the
+SAME domain bucket as this event (from the Segment Plan's Product/technology
+domain line), preferring similar/adjacent project or technology areas; drop
+any from the opposite bucket even if that leaves very few candidates. If NO
+candidate EVENT_NAME survives the RULE 9 filter, treat group 5 as N/A for this
+event and note why in ## FLAGGED FOR REVIEW rather than building an empty or
+unfiltered list.
+filterBranch structure:
+{{
+  "filterBranchType": "OR",
+  "filterBranches": [
+    {{
+      "filterBranchType": "AND",
+      "filterBranches": [
+        {{
+          "filterBranchType": "UNIFIED_EVENTS",
+          "operator": "HAS_COMPLETED",
+          "eventTypeId": "6-48984571",
+          "filterBranches": [
+            {{
+              "filterBranchType": "AND",
+              "filterBranches": [],
+              "filters": [
+                {{
+                  "filterType": "PROPERTY",
+                  "property": "event_name",
+                  "operation": {{"operator": "CONTAINS", "includeObjectsWithNoValueSet": false,
+                                 "values": ["[domain_compatible_event_name_1]", "[domain_compatible_event_name_2]"],
+                                 "operationType": "MULTISTRING"}}
+                }}
+              ]
+            }}
+          ],
+          "filters": []
+        }}
+      ],
+      "filters": [
+        {{
+          "filterType": "PROPERTY",
+          "property": "country",
+          "operation": {{"operator": "CONTAINS", "includeObjectsWithNoValueSet": false,
+                         "values": ["[location_term]"], "operationType": "MULTISTRING"}}
+        }}
+      ]
+    }},
+    {{
+      "filterBranchType": "AND",
+      "filterBranches": [
+        {{
+          "filterBranchType": "UNIFIED_EVENTS",
+          "operator": "HAS_COMPLETED",
+          "eventTypeId": "6-48984571",
+          "filterBranches": [
+            {{
+              "filterBranchType": "AND",
+              "filterBranches": [],
+              "filters": [
+                {{
+                  "filterType": "PROPERTY",
+                  "property": "event_name",
+                  "operation": {{"operator": "CONTAINS", "includeObjectsWithNoValueSet": false,
+                                 "values": ["[domain_compatible_event_name_1]", "[domain_compatible_event_name_2]"],
+                                 "operationType": "MULTISTRING"}}
+                }}
+              ]
+            }}
+          ],
           "filters": []
         }}
       ],
@@ -963,6 +1166,10 @@ filterBranch structure:
 Use for: "[Region] Event Registrants". [sibling_event_name_1..N] are the exact
 EVENT_NAME / event series names of sibling events found in the Segment Plan's
 regional research (one CONTAINS list, not one branch per event).
+Per RULE 9, before building, drop any sibling event whose domain bucket
+(HARDWARE vs SOFTWARE/AI, from the Segment Plan) does not match this event's
+own bucket — even if it's the only sibling event found this cycle; treat that
+case as N/A rather than including a bucket mismatch.
 filterBranch structure:
 {{
   "filterBranchType": "OR",

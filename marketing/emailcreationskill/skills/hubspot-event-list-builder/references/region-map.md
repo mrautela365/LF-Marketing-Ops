@@ -33,3 +33,7 @@ Expanded Web Visitors / Regional Event Registrants — see PLAN/BUILD prompts).
 6. If a foundation has no LF Education presence or no sibling events in its
    region for this cycle, note it in "Open questions / flags" as N/A rather
    than forcing an empty/irrelevant list.
+7. Sibling events (and Education Enrolled / Event Registered history) are also
+   filtered by product/technology domain bucket (HARDWARE vs SOFTWARE/AI) per
+   RULE 9 in the BUILDING prompt — a sibling event in the right region/quarter
+   can still be dropped if its domain bucket doesn't match the current event.
