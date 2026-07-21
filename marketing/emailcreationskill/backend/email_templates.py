@@ -930,6 +930,258 @@ The Linux Foundation Events Team""",
     },
 }
 
+# ── Best Practice Templates (B2B Event Marketing) ────────────────────────────
+# Derived from ArgoCon + KeycloakCon analysis (proven high-conversion templates)
+# These are reference templates showing what works in real campaigns
+
+BEST_PRACTICE_TEMPLATES = {
+    "B2B_Event_Announcement": {
+        "source": "ArgoCon + KeycloakCon Japan 2026",
+        "quality_rating": 5,  # Out of 5
+        "conversion_type": "announcement",
+        "sender_profile": "Sr. Global Event Partnerships Manager",
+        "key_metrics": {"expected_open_rate": 0.45, "expected_ctr": 0.12},
+        "template": {
+            "id": "b2b_announcement",
+            "label": "B2B Event Announcement (ArgoCon Template)",
+            "strategy": "Build excitement + relationship focus + multiple CTAs",
+            "subject": "[Event Name] + [Co-Location] - [Key Achievement]!",
+            "preheader": "[Number]+ attendees | [City] | [Date] | Schedule live",
+            "body": """Hi [PERSONALIZATION: names],
+
+We're excited to announce that [Event Name] [co-located with major event] is officially here.
+
+📍 [City] | 📅 [Dates] | 🎟️ [Expected attendee count]+ expected
+
+KEY HIGHLIGHTS:
+• Schedule and speakers officially announced
+• [Co-location advantage] (expanded reach + combined attendance)
+• [Number]+ sessions across [key tracks]
+• [Sponsor showcase details if applicable]
+• Sponsorship deadline: [Date]
+
+[RELATIONSHIP ELEMENT: historical context, past sponsorships]
+
+NEXT STEPS:
+[Soft CTA]: Schedule a meeting to discuss → [Calendar link]
+[Medium CTA]: Review sponsorship prospectus → [Prospectus link - page X]
+[Hard CTA]: Lock in sponsorship now → [Contract link]
+
+Looking forward to seeing you in [City]!
+[Sender name]
+[Title]
+[Phone] | [Website] | [Calendar]
+
+P.S. [Humanizing element: personal note, travel info, availability]"""
+        }
+    },
+
+    "B2B_Speaker_Conversion": {
+        "source": "ArgoCon Speaker Confirmations (Pooja Dhir)",
+        "quality_rating": 5,
+        "conversion_type": "speaker_to_sponsor",
+        "sender_profile": "Event Partnerships Associate",
+        "key_metrics": {"expected_open_rate": 0.52, "expected_ctr": 0.18},
+        "template": {
+            "id": "b2b_speaker_conversion",
+            "label": "B2B Speaker Conversion (ArgoCon Template)",
+            "strategy": "Congratulate first, convert second - achievement focus",
+            "subject": "Congratulations on [Company]'s Speaking Slot at [Event]!",
+            "preheader": "Speaking slot confirmed | Maximize visibility | Sponsorship opportunity",
+            "body": """Hi [SPEAKER_NAME],
+
+Congratulations on [Company] being selected to speak at [Event]! This is a great achievement for your team.
+
+YOUR SPEAKING OPPORTUNITY:
+Your expertise on [topic] will resonate with our [audience size]+ attendees. To maximize visibility and engagement, many speakers supplement with sponsorship to:
+• Increase booth presence during sessions
+• Host private meetings with attendees
+• Showcase products/services in sponsor showcase
+• Extend reach through co-located events
+
+IS SPONSORSHIP RIGHT FOR YOU?
+Our sponsorship prospectus (page [X]) outlines all tiers and benefits. Would you be the right person to discuss this with, or should I connect with someone from your marketing team?
+
+NEXT STEPS:
+[Soft CTA]: Schedule a call → [Calendar link]
+[Medium CTA]: Review prospectus → [Prospectus link - page X]
+[Hard CTA]: Yes, let's discuss sponsorship
+
+Sponsorship deadline: [DATE] (limited spots available)
+
+[Sender name]
+[Title]
+[Phone] | [Website] | [Calendar]"""
+        }
+    },
+
+    "B2B_Strategic_Close": {
+        "source": "ArgoCon Strategic Opportunities (Nicole Puopolo)",
+        "quality_rating": 5,
+        "conversion_type": "complex_multi_event_deal",
+        "sender_profile": "Sr. Global Event Partnerships Manager",
+        "key_metrics": {"expected_open_rate": 0.48, "expected_ctr": 0.14},
+        "template": {
+            "id": "b2b_strategic_close",
+            "label": "B2B Strategic Multi-Event Close (ArgoCon Template)",
+            "strategy": "Comprehensive context + transparent pricing + urgency + multiple options",
+            "subject": "[Event List] - Ready for a contract?",
+            "preheader": "Multiple sponsorship opportunities | Limited spots | [Deadline]",
+            "body": """Hi [ACCOUNT_NAME],
+
+Our KubeCon co-located events are now live, and [Company] is at the top of our request list for sponsorship.
+
+OPPORTUNITY OVERVIEW:
+You previously expressed interest in sponsoring multiple events. Here's what's available:
+• [Event 1] - Diamond sponsorship available
+• [Event 2] - Diamond sponsorship available
+• [Co-Located Event 3] - Platinum available
+• [Waitlist status if applicable]
+
+TRANSPARENT PRICING:
+Diamond Sponsorship: $[PRICE] (3% discount for multiple events = $[DISCOUNTED] each)
+Platinum Sponsorship: $[PRICE]
+
+DECISION TIMELINE:
+5 business days to sign & finalize (Deadline: [DATE])
+[Scarcity messaging if limited spots]
+
+FULL CO-LOCATED OPTIONS (12+ events):
+[Complete list with links to each event prospectus page]
+
+ALL-INCLUSIVE BENEFITS:
+✓ Booth presence at all events
+✓ Speaking slot(s)
+✓ Private meeting room access
+✓ Sponsor showcase participation
+✓ Brand visibility across campaigns
+✓ Post-event content access
+
+DO YOU WANT TO MOVE FORWARD?
+Let's get this locked in. I'm available to:
+[CTA 1]: Schedule a call → [Calendar link]
+[CTA 2]: Send contract immediately → [Contract link]
+[CTA 3]: Discuss questions → Reply to this email or call [PHONE]
+
+Looking forward to partnering with [Company]!
+[Sender name]
+[Title]
+[Phone] | [Website] | [Calendar]
+
+P.S. I'll be in [CITY] [DATE] - happy to meet in person if helpful."""
+        }
+    },
+
+    "B2B_Rapid_Close": {
+        "source": "ArgoCon Quick Closes (Pooja Dhir)",
+        "quality_rating": 4,
+        "conversion_type": "existing_account_contract",
+        "sender_profile": "Event Partnerships Associate",
+        "key_metrics": {"expected_open_rate": 0.35, "expected_ctr": 0.22},
+        "template": {
+            "id": "b2b_rapid_close",
+            "label": "B2B Rapid Close - Existing Accounts (ArgoCon Template)",
+            "strategy": "Minimal friction - assumes context, fast to contract",
+            "subject": "[Company] [Tier] Sponsorship for [Event]",
+            "preheader": "Contract ready | Quick turnaround | [Tier] included",
+            "body": """Hi [CONTACT_NAME],
+
+I'm looping in our Event Sales Ops team to send your [TIER] sponsorship contract for [Event Name].
+
+They'll handle next steps. Any questions, let me know!
+
+[Sender name]
+[Title]
+[Phone] | [Calendar link]"""
+        }
+    },
+
+    "B2B_Registration_Launch": {
+        "source": "ArgoCon Registration/CFP Launch",
+        "quality_rating": 4,
+        "conversion_type": "registration_and_sponsorship",
+        "sender_profile": "Sr. Global Event Partnerships Manager",
+        "key_metrics": {"expected_open_rate": 0.40, "expected_ctr": 0.10},
+        "template": {
+            "id": "b2b_registration_launch",
+            "label": "B2B Registration/CFP Launch (ArgoCon Template)",
+            "strategy": "Conversational + deadline-driven + information dense",
+            "subject": "[Event Name] - Deadline [DATE]",
+            "preheader": "Registration open | Schedule announced | Deadline approaching",
+            "body": """Hi [CONTACT_NAME],
+
+One more email from me today! (I promise this is the last one... for now!)
+
+I wanted to check in - would you want to add [Event Name] to your sponsorship calendar?
+
+EVENT DETAILS:
+📍 [City] | 📅 [Dates]
+Venue: [Venue Name]
+
+REGISTRATION LINK: [Link]
+PROSPECTUS: Page [X] with full details → [Link]
+
+KEY DEADLINE: [DATE]
+[Upcoming announcement: "Schedule will be announced [Date]" - builds anticipation]
+
+SPONSORSHIP TIERS AVAILABLE:
+✓ Diamond: $[Price]
+✓ Platinum: $[Price]
+✓ Gold: $[Price]
+
+NEXT STEPS:
+[Soft CTA]: Add to calendar → [Calendar link]
+[Medium CTA]: Review prospectus → [Prospectus link]
+[Hard CTA]: Schedule sponsorship call → [Calendar link]
+
+Let me know if you have any questions!
+
+[Sender name]
+[Title]
+[Phone] | [Website] | [Calendar]
+
+P.S. [Personal element: travel info, availability]"""
+        }
+    }
+}
+
+
+def get_best_practice_template(template_key: str) -> dict | None:
+    """Return a best-practice B2B template by key."""
+    return BEST_PRACTICE_TEMPLATES.get(template_key)
+
+
+def get_all_best_practice_templates() -> dict:
+    """Return all best-practice templates with metadata."""
+    return BEST_PRACTICE_TEMPLATES
+
+
+def recommend_best_practice_template(campaign_type: str) -> dict | None:
+    """
+    Recommend the best template based on campaign type.
+
+    Types: announcement, speaker_conversion, multi_event_deal,
+           existing_account_close, registration_launch
+    """
+    recommendations = {
+        "announcement": "B2B_Event_Announcement",
+        "speaker_conversion": "B2B_Speaker_Conversion",
+        "multi_event_deal": "B2B_Strategic_Close",
+        "existing_account_close": "B2B_Rapid_Close",
+        "registration_launch": "B2B_Registration_Launch",
+    }
+
+    key = recommendations.get(campaign_type)
+    if key:
+        template = BEST_PRACTICE_TEMPLATES.get(key)
+        return {
+            "key": key,
+            "template": template,
+            "quality_rating": template.get("quality_rating") if template else 0,
+            "source": template.get("source") if template else None
+        }
+    return None
+
 
 def get_template(stage_name: str, variant_id: str | None = None) -> dict | None:
     """

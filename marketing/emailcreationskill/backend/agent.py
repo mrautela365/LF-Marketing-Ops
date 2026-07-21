@@ -69,6 +69,20 @@ Messaging Variants:
   When you detect a stage, recommend a variant strategy, and the user can select it.
   Always call get_variant_strategies(stage_name) to see available options.
 
+Best-Practice Templates:
+  Proven B2B event email templates are available from ArgoCon/KeycloakCon analysis.
+  These templates have documented open rates (45-52%) and CTR (10-22%).
+  TEMPLATE TYPES:
+    - B2B_Event_Announcement: Schedule/speaker launches (45% open rate)
+    - B2B_Speaker_Conversion: Speaker to sponsor conversion (52% open rate)
+    - B2B_Strategic_Close: Multi-event deals with pricing (48% open rate)
+    - B2B_Rapid_Close: Existing accounts, quick close (35% open rate, 22% CTR)
+    - B2B_Registration_Launch: Registration/CFP with urgency (40% open rate)
+
+  IMPORTANT: In the PLAN phase, recommend the matching best-practice template
+  with quality rating and expected performance metrics. Show the user WHICH
+  template structure they should follow for this campaign type.
+
 Safety rules (never violate):
   - NEVER delete, archive, or send any email or list.
   - NEVER modify any existing HubSpot list.
@@ -374,6 +388,68 @@ def _get_variant_subject_preview(stage_name: str, variant_id: str | None, event_
     preview = _fill_template_placeholders(variant.get("preheader", ""), event_data)
 
     return subject, preview
+
+
+def _recommend_best_practice_template(campaign_type: str, context: dict = None) -> dict | None:
+    """
+    Recommend best-practice B2B template based on campaign type.
+
+    Campaign types:
+    - announcement: Event schedule/announcement
+    - speaker_conversion: Speaker to sponsor conversion
+    - multi_event_deal: Multiple events, complex deal
+    - existing_account_close: Quick close for existing accounts
+    - registration_launch: Registration/CFP launch with deadline
+
+    Returns: {key, template, quality_rating, source, recommendation_reason}
+    """
+    recommendation = email_templates.recommend_best_practice_template(campaign_type)
+
+    if recommendation:
+        reason_map = {
+            "announcement": "Proven 45% open rate, relationship-focused structure",
+            "speaker_conversion": "Proven 52% open rate, achievement → sponsorship flow",
+            "multi_event_deal": "Proven transparent pricing, comprehensive value prop",
+            "existing_account_close": "Proven 22% CTR, minimal friction approach",
+            "registration_launch": "Proven 40% open rate, conversational + urgent",
+        }
+
+        return {
+            **recommendation,
+            "recommendation_reason": reason_map.get(campaign_type, "Industry best practice"),
+            "context": context or {}
+        }
+    return None
+
+
+def _compare_with_similar_emails(stage_name: str, campaign_context: dict = None) -> dict:
+    """
+    Compare current email with similar templates to find best match.
+
+    Returns analysis of:
+    - Recommended template from best-practice collection
+    - Quality rating (0-5)
+    - Why this template is recommended
+    - Key success factors from the template
+    """
+    campaign_type_map = {
+        "Event Announcement": "announcement",
+        "Registration Launch": "registration_launch",
+        "CFP Launch": "registration_launch",
+        "Schedule Announcement": "announcement",
+        "Final Countdown": "registration_launch",
+    }
+
+    campaign_type = campaign_type_map.get(stage_name, "announcement")
+    recommendation = _recommend_best_practice_template(campaign_type, campaign_context)
+
+    return {
+        "stage": stage_name,
+        "campaign_type": campaign_type,
+        "recommended_template": recommendation,
+        "comparison_notes": f"This {stage_name} campaign matches B2B best practices. "
+                           f"Recommended to follow {recommendation['key'] if recommendation else 'standard'} template structure.",
+    }
 
 
 def _recommend_variant_strategy(stage_name: str, days_to_event: int | None = None, audience_type: str = "tech") -> tuple[str, str]:
@@ -1361,6 +1437,11 @@ def plan_turn(session, url: str, extra_context: str = None) -> tuple[str, list]:
         "  STEP 2: Call search_emails_for_event(brand_name, event_name, location).\n"
         "          If event_match=False, also call lookup_brand_history as fallback.\n"
         "  STEP 3: ONLY AFTER both tool calls above are done, write the full plan.\n\n"
+        "TEMPLATE REFERENCE:\n"
+        "  After identifying the event stage, include template recommendation in plan:\n"
+        "  Show which best-practice template this campaign matches (if applicable).\n"
+        "  Include template quality rating and why it's recommended.\n"
+        "  Example: 'Recommended Template: B2B Event Announcement (★★★★★, 45% avg open rate)'\n\n"
         "⚠️  DO NOT write any plan content before completing STEP 1 and STEP 2.\n"
         "⚠️  DO NOT say 'the plan above', 'as shown above', or 'presented above'.\n"
         "⚠️  Your FINAL message must contain the COMPLETE plan written from scratch.\n\n"
