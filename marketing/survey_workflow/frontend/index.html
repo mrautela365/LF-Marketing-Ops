@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Survey Workflow — Asana Stage Tracker</title>
+<link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+
+<header>
+  <span class="logo">Survey Workflow</span>
+  <span class="subtitle">Asana Stage Tracker &amp; Draft Builder</span>
+  <button id="config-toggle" class="config-toggle" onclick="toggleConfig()">⚙ Testing Overrides</button>
+</header>
+
+<div class="container">
+
+  <!-- ── Testing override panel (local only, never writes to Asana) ── -->
+  <div id="config-panel" class="card config-panel hidden">
+    <div class="card-title">Testing Overrides</div>
+    <div class="card-desc">
+      Force a stage's completed status for local testing only — this never writes to Asana.
+      Leave a stage on "Actual" to use its real Asana status.
+    </div>
+    <div id="override-rows" class="override-rows"></div>
+    <button class="btn-secondary" onclick="resetOverrides()">Reset all to Actual</button>
+  </div>
+
+  <div id="error-box" class="error-box hidden"></div>
+
+  <!-- ── Tab stepper ── -->
+  <div id="tabs" class="tabs">
+    <div class="tab active" id="tab-planning" onclick="switchTab('planning')">
+      <span class="tab-num">1</span> Planning
+    </div>
+    <div class="tab" id="tab-staging" onclick="switchTab('staging')">
+      <span class="tab-num">2</span> Staging
+    </div>
+    <div class="tab" id="tab-launch" onclick="switchTab('launch')">
+      <span class="tab-num">3</span> Launch
+    </div>
+    <div class="tab" id="tab-campaign" onclick="switchTab('campaign')">
+      <span class="tab-num">4</span> Campaign Update
+    </div>
+  </div>
+
+  <!-- ── Planning panel ── -->
+  <div id="panel-planning" class="card panel">
+    <div class="card-title">Paste the Asana task link</div>
+    <div class="card-desc">
+      Paste the parent task URL. We'll scan its Content, Provide List, Staging, Approval,
+      Launch, and Campaign Update subtasks and tell you exactly where things stand.
+    </div>
+    <div class="input-row">
+      <input id="asana-url" type="text" placeholder="https://app.asana.com/1/.../task/..." />
+      <button id="brief-btn" class="btn-primary" onclick="getBrief()">Get Brief</button>
+    </div>
+
+    <div id="planning-placeholder" class="card-desc">Click "Get Brief" to see live status here.</div>
+    <div class="card-title hidden" id="task-name">—</div>
+    <div class="current-stage-row">
+      <span class="label">Current stage:</span>
+      <span id="current-stage" class="pill pill-active">—</span>
+    </div>
+    <div id="overall-summary" class="overall-summary hidden"></div>
+
+    <table class="stage-table">
+      <thead><tr><th>Stage</th><th>Assignee</th><th>Status</th><th>Due</th><th>Summary</th></tr></thead>
+      <tbody id="planning-rows"></tbody>
+    </table>
+
+    <div id="links-box" class="links-box hidden">
+      <div><span class="label">Content doc:</span> <a id="doc-link" href="#" target="_blank">—</a></div>
+      <div id="doc-link-desc" class="summary-cell"></div>
+      <div><span class="label">Send list:</span> <a id="list-link" href="#" target="_blank">—</a></div>
+      <div id="list-link-desc" class="summary-cell"></div>
+      <div><span class="label">Workflow:</span> <a id="workflow-link" href="#" target="_blank">—</a></div>
+      <div id="workflow-link-desc" class="summary-cell"></div>
+    </div>
+
+    <div id="gate-message" class="gate-message hidden"></div>
+    <button id="continue-btn" class="btn-primary hidden" onclick="switchTab('staging')">Continue to Staging →</button>
+  </div>
+
+  <!-- ── Staging panel ── -->
+  <div id="panel-staging" class="card panel hidden">
+    <div class="card-title">Staging</div>
+    <div id="brief-logs" class="log-panel hidden"></div>
+    <div id="staging-locked" class="gate-message hidden"></div>
+    <div id="staging-content" class="hidden">
+      <div id="staging-existing" class="hidden"></div>
+      <div id="staging-preview-box" class="hidden">
+        <div id="draft-count-msg" class="draft-count-msg"></div>
+        <div id="draft-previews"></div>
+        <div class="card-desc">
+          Optional: paste a HubSpot workflow URL to clone it and wire in the built draft
+          email(s) 1:1 in order, with delay-step dates updated from the content doc. The
+          clone is always created disabled — review and enable it yourself in HubSpot.
+        </div>
+        <div class="input-row">
+          <input id="workflow-url-input" type="text" placeholder="https://app.hubspot.com/workflows/.../platform/flow/.../edit" />
+        </div>
+        <button id="build-btn" class="btn-primary" onclick="buildDrafts()">Build Draft Email(s)</button>
+      </div>
+      <div id="build-results"></div>
+      <div id="build-warnings" class="warnings hidden"></div>
+    </div>
+  </div>
+
+  <!-- ── Launch panel ── -->
+  <div id="panel-launch" class="card panel hidden">
+    <div class="card-title">Launch</div>
+    <div id="launch-body"></div>
+  </div>
+
+  <!-- ── Campaign Update panel ── -->
+  <div id="panel-campaign" class="card panel hidden">
+    <div class="card-title">Campaign Update</div>
+    <div id="campaign-body"></div>
+  </div>
+
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>

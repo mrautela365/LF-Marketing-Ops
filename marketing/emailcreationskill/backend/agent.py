@@ -19,6 +19,7 @@ import hubspot_tools
 import content_tools
 from event_brands import lookup_event_brand
 import llm_gateway   # ALL AI calls route through this single deterministic gateway
+import email_templates  # for template variants
 
 # ── Shared system prompt ─────────────────────────────────────────────────────
 
@@ -31,11 +32,16 @@ PHASE 1 - PLAN: User provides an event/campaign URL.
   2. From those details, infer: brand (HubSpot brand name), email type, and email suffix.
   3. Call lookup_brand_history to get sender settings, send list, suppression lists.
   4. Build and present a complete Email Staging Plan — see format rules below.
+  5. MESSAGING STRATEGY: After building the plan, call get_variant_strategies to see
+     available messaging approaches (value-focused, urgency, social proof, etc.).
+     Recommend one variant strategy based on the stage and audience, then ask the user
+     if they want to use a different variant.
 
-PHASE 2 - STAGE: User approves the plan (may provide missing fields).
-  1. Call clone_email with the correct name.
-  2. Call update_email_settings to apply from name, from address, email type, suppression lists.
-  3. Return the HubSpot draft URL and ask for content.
+PHASE 2 - STAGE: User approves the plan (may provide missing fields, optional variant choice).
+  1. If user chose a different variant, call select_template_variant with the variant_id.
+  2. Call clone_email with the correct name.
+  3. Call update_email_settings to apply from name, from address, email type, suppression lists.
+  4. Return the HubSpot draft URL and ask for content.
 
 PHASE 3 - CONTENT: User provides content (Google Doc URL, HTML, or text).
   1. Call fetch_content to convert to clean email HTML.
@@ -56,6 +62,12 @@ Email naming convention:
   Examples: "26Q2 - CNCF - KubeCon EU - Invite", "26Q2 - OpenSSF - Newsletter - June"
   Quarter: Q1=Jan-Mar, Q2=Apr-Jun, Q3=Jul-Sep, Q4=Oct-Dec
   Suffix: Invite / Last Chance / Newsletter / Update / Reminder
+
+Messaging Variants:
+  Each marketing stage (Event Announcement, Registration Launch, etc.) has multiple
+  messaging variants available (e.g., "value-focused", "urgency-focused", "social-proof").
+  When you detect a stage, recommend a variant strategy, and the user can select it.
+  Always call get_variant_strategies(stage_name) to see available options.
 
 Safety rules (never violate):
   - NEVER delete, archive, or send any email or list.
@@ -177,6 +189,37 @@ TOOLS = [
             "required": ["brand_name", "event_name"],
         },
     },
+    {
+        "name": "get_variant_strategies",
+        "description": (
+            "Get available messaging variant strategies for a marketing stage. "
+            "Returns list of variants with id, label, and strategy description. "
+            "Call this after detecting the event stage to recommend a variant to the user."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "stage_name": {"type": "string", "description": "Marketing stage (e.g., 'Event Announcement', 'Registration Launch', 'Final Countdown')"}
+            },
+            "required": ["stage_name"],
+        },
+    },
+    {
+        "name": "select_template_variant",
+        "description": (
+            "Select a specific messaging variant for a stage. "
+            "Call this when the user chooses a different variant from the recommended one."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "stage_name": {"type": "string", "description": "Marketing stage"},
+                "variant_id": {"type": "string", "description": "Variant ID (e.g., 'v1_value_focused', 'v2_urgency_focused')"},
+                "reason": {"type": "string", "description": "Why this variant was selected (for logging)"}
+            },
+            "required": ["stage_name", "variant_id"],
+        },
+    },
 ]
 
 # ── Tool executor (shared by both modes) ──────────────────────────────────────
@@ -257,9 +300,27 @@ def _execute_tool(name: str, inputs: dict, session_email_id: str | None = None) 
                 event_short_name=inputs.get("event_short_name", ""),
                 email_type=inputs.get("email_type", ""),
             )
+        elif name == "get_variant_strategies":
+            stage_name = inputs.get("stage_name")
+            strategies = email_templates.list_variant_strategies(stage_name)
+            if strategies:
+                result = {"stage": stage_name, "variants": strategies, "found": True}
+            else:
+                result = {"stage": stage_name, "found": False, "error": f"No variants found for stage '{stage_name}'"}
+        elif name == "select_template_variant":
+            stage_name = inputs.get("stage_name")
+            variant_id = inputs.get("variant_id")
+            reason = inputs.get("reason", "User selected")
+            variant = email_templates.get_template_variant(stage_name, variant_id)
+            if variant:
+                result = {"selected": True, "stage": stage_name, "variant_id": variant_id, "reason": reason}
+                _log.info(f"  ✓ Selected variant {variant_id} for stage {stage_name}: {reason}")
+            else:
+                result = {"selected": False, "error": f"Variant '{variant_id}' not found for stage '{stage_name}'"}
         else:
             result = {"error": f"Unknown tool: {name}. Allowed: lookup_brand_history, clone_email, "
-                               "update_email_settings, update_email_content, fetch_content, search_hubspot_lists"}
+                               "update_email_settings, update_email_content, fetch_content, search_hubspot_lists, "
+                               "get_variant_strategies, select_template_variant"}
     except Exception as exc:
         result = {"error": str(exc)}
     return json.dumps(result)
@@ -276,6 +337,94 @@ def _execute_tool(name: str, inputs: dict, session_email_id: str | None = None) 
 def _claude_text(prompt: str, max_tokens: int = 100, timeout: int = 60) -> str:
     """Single-shot text (no tools). Deterministic on every backend via the gateway."""
     return llm_gateway.complete_text(prompt, max_tokens=max_tokens, timeout=timeout)
+
+
+def _fill_template_placeholders(template_text: str, event_data: dict) -> str:
+    """Fill template placeholders with actual event data."""
+    if not template_text:
+        return ""
+
+    text = template_text
+    # Replace placeholders from event_data
+    event_name = event_data.get("event_name", "Event")
+    event_dates = event_data.get("event_dates", [])
+    date_range = ", ".join(event_dates) if event_dates else "TBD"
+    location = event_data.get("location", "TBD")
+
+    text = text.replace("[Event Name]", event_name)
+    text = text.replace("[Dates]", date_range)
+    text = text.replace("[City]", location)
+    text = text.replace("[Date]", event_dates[0] if event_dates else "TBD")
+
+    return text
+
+
+def _get_variant_subject_preview(stage_name: str, variant_id: str | None, event_data: dict) -> tuple[str, str]:
+    """
+    Get subject and preview text for a variant.
+    Returns (subject, preview_text) filled with event data.
+    """
+    # Get variant, default to first if not specified
+    variant = email_templates.get_template_variant(stage_name, variant_id) if variant_id else email_templates.get_template(stage_name)
+
+    if not variant:
+        return "", ""
+
+    subject = _fill_template_placeholders(variant.get("subject", ""), event_data)
+    preview = _fill_template_placeholders(variant.get("preheader", ""), event_data)
+
+    return subject, preview
+
+
+def _recommend_variant_strategy(stage_name: str, days_to_event: int | None = None, audience_type: str = "tech") -> tuple[str, str]:
+    """
+    Recommend a variant strategy based on stage and event proximity.
+    Returns (variant_id, reason_description).
+    """
+    strategies = {
+        # Event Announcement: early stage, focus on value + community
+        "Event Announcement": ("v1_value_focused", "Emphasizes learning opportunities and community value — good for early awareness"),
+
+        # Registration Launch: mid-funnel, mix value + urgency
+        "Registration Launch": ("v1_discount_focused", "Leads with early bird savings and urgency — proven to drive registrations"),
+
+        # Schedule Announcement: mid-late, can be varied
+        "Schedule Announcement": ("v1_keynote_focused", "Highlights speaker lineup — strong draw for tech audiences"),
+
+        # Main Registration Push: urgency-focused
+        "Main Registration Push": ("v1_discount_focused", "Emphasizes savings ending soon — drives last-minute conversions"),
+
+        # Final Countdown: pure urgency + FOMO
+        "Final Countdown": ("v1_fomo_urgency", "Hard deadline + fear of missing out — final push strategy"),
+
+        # CFP stages: speaker-focused
+        "CFP Launch": ("v1_main", "Standard call-for-proposals announcement"),
+
+        # Post-event: social proof + community
+        "Thank You + Survey": ("v1_main", "Standard thank you with survey request"),
+
+        # Default for any unlisted stages
+    }
+
+    default_variant = strategies.get(stage_name, ("v1_main", "Standard template variant"))
+    return default_variant
+
+
+def _format_variant_recommendations(stage_name: str) -> str:
+    """Format variant strategies for display in plan output."""
+    strategies = email_templates.list_variant_strategies(stage_name)
+    if not strategies:
+        return ""
+
+    lines = ["**Messaging Strategy Options:**"]
+    for v in strategies:
+        lines.append(f"  - **{v['id']}** ({v['label']}): {v['strategy']}")
+
+    recommended_id, reason = _recommend_variant_strategy(stage_name)
+    lines.append(f"\n*Recommended: {recommended_id} — {reason}*")
+    lines.append("*Feel free to use a different variant if you prefer a different messaging approach.*")
+
+    return "\n".join(lines)
 
 
 def fetch_asana_task_via_mcp(task_url: str) -> dict:
@@ -1250,8 +1399,19 @@ def plan_turn(session, url: str, extra_context: str = None) -> tuple[str, list]:
         "|---|---|\n"
         "| **Send List** | (list name and contact count from brand history) |\n"
         "| **Suppression Lists** | (all suppression list IDs/names from brand history) |\n\n"
+        "### Messaging Variant (Optional)\n\n"
+        "We have multiple messaging strategies available for this stage. Each variant emphasizes\n"
+        "different selling points (value vs urgency vs social proof). You can accept the recommended\n"
+        "one or choose a different approach:\n\n"
+        "**Available variants:**\n"
+        "[The agent will call get_variant_strategies(stage) to show available options here]\n\n"
+        "- **Recommended**: [variant_id] — [reason]\n"
+        "- To choose a different variant, say: \"Use variant [variant_id]\" in your response.\n"
+        "- If you're happy with the recommended variant, just provide the Send Date and proceed.\n\n"
         "---\n\n"
-        "Then ask ONLY for Send Date (the only [REQUIRED] field).\n"
+        "Then provide:\n"
+        "1. **Send Date** (the only required field)\n"
+        "2. **Optional Variant Choice** (e.g., \"Use variant v2_urgency_focused\" or leave blank for recommended)\n\n"
         "Do NOT ask for subject or preview text — those are auto-generated separately.\n"
         "Do NOT mention cloning, source emails, or templates anywhere.\n"
         "Do NOT say 'the plan above' or 'as shown above' — write everything in this single response."
@@ -1302,6 +1462,25 @@ def clone_turn(session, subject=None, preview_text=None, send_list_id=None) -> t
     _log.info(f"[CLONE] source_id={source_id!r} from_name={from_name!r} from_addr={from_addr!r}")
     _log.info(f"[CLONE] suppression={suppression!r}")
     _log.info(f"[CLONE] included_list_ids={brand.get('included_list_ids')!r}")
+
+    # ── Variant selection ──
+    stage_name = session.meta.get("stage_name", "")
+    variant_id = extract_variant_id_from_messages(session.messages)
+
+    if not variant_id and stage_name:
+        # Use recommended variant if user didn't specify one
+        variant_id, reason = _recommend_variant_strategy(stage_name)
+        _log.info(f"[CLONE] Using recommended variant: {variant_id} — {reason}")
+
+    if variant_id:
+        session.meta["selected_variant_id"] = variant_id
+        _log.info(f"[CLONE] Selected variant: {variant_id}")
+
+    # Generate subject/preview from variant if not provided
+    if not subject and not preview_text and stage_name and variant_id:
+        url_data = session.meta.get("url_data", {}) or {}
+        subject, preview_text = _get_variant_subject_preview(stage_name, variant_id, url_data)
+        _log.info(f"[CLONE] Generated subject from variant: {subject[:60]!r}")
 
     # Fall back to auto-generated subject/preview from plan phase if user didn't provide them
     effective_subject      = subject      or session.meta.get("generated_subject", "")
@@ -1493,10 +1672,28 @@ def clone_turn(session, subject=None, preview_text=None, send_list_id=None) -> t
 
 
 def content_turn(session, content_input: str) -> tuple[str, list]:
+    # Build context about the selected variant for the content generation
+    variant_id = session.meta.get("selected_variant_id")
+    stage_name = session.meta.get("stage_name", "")
+    variant_note = ""
+
+    if variant_id and stage_name:
+        variant = email_templates.get_template_variant(stage_name, variant_id)
+        if variant:
+            strategy = variant.get("strategy", "")
+            template_body = variant.get("body", "")
+            variant_note = (
+                f"\n🎨 MESSAGING VARIANT SELECTED: {variant_id}\n"
+                f"Strategy: {strategy}\n"
+                f"\nThe email should follow this template structure and tone:\n"
+                f"---\n{template_body[:500]}...\n---\n"
+                f"\nUse the user-provided content, but maintain the messaging strategy and structure from the variant.\n"
+            )
+
     prompt = (
-        f"Content provided:\n\n{content_input}\n\n"
-        "1. Call fetch_content to process it.\n"
-        "2. Call update_email_content to update the body.\n"
+        f"Content provided:\n\n{content_input}\n{variant_note}\n\n"
+        "1. Call fetch_content to process the user content.\n"
+        "2. Call update_email_content to update the email body.\n"
         "3. Run QA and return final summary with draft URL."
     )
     return run_turn(session.messages, prompt)
@@ -1504,6 +1701,35 @@ def content_turn(session, content_input: str) -> tuple[str, list]:
 
 def chat_turn(session, message: str) -> tuple[str, list]:
     return run_turn(session.messages, message)
+
+
+def extract_variant_id_from_messages(messages: list) -> str | None:
+    """Extract variant_id from agent or user messages if one was selected."""
+    for msg in reversed(messages):
+        content = msg.get("content", [])
+        if isinstance(content, str):
+            content = [{"type": "text", "text": content}]
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            # Check tool result for select_template_variant calls
+            if block.get("type") == "tool_result":
+                try:
+                    data = json.loads(block.get("content", "{}"))
+                    if data.get("selected") and data.get("variant_id"):
+                        return data.get("variant_id")
+                except Exception:
+                    pass
+            # Check text for "Use variant v*" patterns
+            text = block.get("text", "")
+            if isinstance(text, str) and "use variant" in text.lower():
+                import re
+                m = re.search(r"use\s+variant\s+([v\d_a-z]+)", text, re.IGNORECASE)
+                if m:
+                    return m.group(1)
+    return None
 
 
 def extract_brand_history_from_messages(messages: list) -> dict | None:

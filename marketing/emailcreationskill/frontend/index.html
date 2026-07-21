@@ -46,15 +46,44 @@
       <div class="card">
         <div class="card-title">Start Campaign Request</div>
         <div class="card-desc">
-          Paste the event or campaign URL. The Campaign Builder researches the page, identifies the brand,
+          Paste the event, campaign, or Asana task URL. The Campaign Builder researches the page, identifies the brand,
           pulls HubSpot send history, and drafts a complete campaign plan for you to review.
         </div>
 
-        <div class="field">
-          <label>Event / Campaign URL <span style="color:red">*</span></label>
-          <input id="event_url" type="url"
-            placeholder="https://events.linuxfoundation.org/kubecon-europe/" />
-          <div class="hint">Any LF event, registration, or campaign page URL.</div>
+        <!-- Tab selector: Event URL vs Asana Task -->
+        <div style="display:flex;gap:8px;margin-bottom:16px;border-bottom:1px solid #e2e8f0;padding-bottom:12px">
+          <button class="tab-btn active" id="tab-event" onclick="switchInputMode('event')" style="
+            padding:8px 12px;border:none;background:none;cursor:pointer;font-weight:600;
+            color:var(--gray-600);border-bottom:2px solid transparent;
+          ">
+            📍 Event / Campaign URL
+          </button>
+          <button class="tab-btn" id="tab-asana" onclick="switchInputMode('asana')" style="
+            padding:8px 12px;border:none;background:none;cursor:pointer;font-weight:600;
+            color:var(--gray-400);border-bottom:2px solid transparent;
+          ">
+            ✓ Asana Task
+          </button>
+        </div>
+
+        <!-- Event URL input -->
+        <div id="event-input-section">
+          <div class="field">
+            <label>Event / Campaign URL <span style="color:red">*</span></label>
+            <input id="event_url" type="url"
+              placeholder="https://events.linuxfoundation.org/kubecon-europe/" />
+            <div class="hint">Any LF event, registration, or campaign page URL.</div>
+          </div>
+        </div>
+
+        <!-- Asana Task input -->
+        <div id="asana-input-section" class="hidden">
+          <div class="field">
+            <label>Asana Task URL <span style="color:red">*</span></label>
+            <input id="asana_url" type="url"
+              placeholder="https://app.asana.com/0/PROJECT/TASK" />
+            <div class="hint">Paste the Asana task URL. Builder will extract brief, content doc, and audience instructions.</div>
+          </div>
         </div>
 
         <div class="field-row">
@@ -77,7 +106,7 @@
         <div id="step1-status" class="hidden"></div>
 
         <div class="btn-row">
-          <button class="btn btn-primary" id="plan-btn" onclick="generatePlan()">
+          <button class="btn btn-primary" id="plan-btn" onclick="generatePlanFromActiveMode()">
             Campaign brief →
           </button>
         </div>

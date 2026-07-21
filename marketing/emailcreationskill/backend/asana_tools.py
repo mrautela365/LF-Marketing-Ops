@@ -76,6 +76,32 @@ def get_stories(gid: str) -> list:
     return [s for s in resp.json().get("data", []) if s.get("type") == "comment"]
 
 
+# ── Rich fetch (used by survey_workflow's multi-stage subtask model) ─────────
+
+def get_task_full(gid: str) -> dict:
+    """Task fields including completion + assignee, for stage-gating workflows."""
+    resp = requests.get(
+        f"https://app.asana.com/api/1.0/tasks/{gid}",
+        headers=_headers(),
+        params={"opt_fields": "name,notes,due_on,completed,assignee.name,projects.name,permalink_url"},
+        timeout=15,
+    )
+    resp.raise_for_status()
+    return resp.json().get("data", {})
+
+
+def get_subtasks_full(gid: str) -> list:
+    """Subtask fields including completion + assignee + due date."""
+    resp = requests.get(
+        f"https://app.asana.com/api/1.0/tasks/{gid}/subtasks",
+        headers=_headers(),
+        params={"opt_fields": "name,notes,completed,assignee.name,due_on,gid"},
+        timeout=15,
+    )
+    resp.raise_for_status()
+    return resp.json().get("data", [])
+
+
 # ── URL extraction helpers ────────────────────────────────────────────────────
 
 def _urls_in(text: str) -> list:

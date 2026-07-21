@@ -9,8 +9,8 @@ made through the Claude CLI, the Anthropic API key, or the LiteLLM API key produ
 the same result in the same output format.
 
 Backend priority (chosen once, in one place):
-    LiteLLM proxy  (LITELLM_BASE_URL + LITELLM_API_KEY)  → Anthropic SDK → LF cluster
     Anthropic API  (ANTHROPIC_API_KEY)                   → Anthropic SDK → api.anthropic.com
+    LiteLLM proxy  (LITELLM_BASE_URL + LITELLM_API_KEY)  → Anthropic SDK → LF cluster
     Claude Code    (neither key set)                     → `claude` CLI subprocess
 
 Determinism guarantees (applied identically on every path):
@@ -85,11 +85,11 @@ def _cli_path() -> str:
 
 # ── Backend selection (chosen once) ───────────────────────────────────────────
 def backend_name() -> str:
-    """Return the active backend: 'litellm' | 'anthropic' | 'cli'."""
-    if LITELLM_BASE_URL and LITELLM_API_KEY:
-        return "litellm"
+    """Return the active backend: 'anthropic' | 'litellm' | 'cli'."""
     if ANTHROPIC_API_KEY:
         return "anthropic"
+    if LITELLM_BASE_URL and LITELLM_API_KEY:
+        return "litellm"
     return "cli"
 
 
