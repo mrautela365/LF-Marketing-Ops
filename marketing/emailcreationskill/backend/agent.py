@@ -427,6 +427,87 @@ def _claude_text(prompt: str, max_tokens: int = 100, timeout: int = 60) -> str:
     return llm_gateway.complete_text(prompt, max_tokens=max_tokens, timeout=timeout)
 
 
+def _format_ab_test_comparison(variant_a_info: dict, variant_b_info: dict) -> str:
+    """
+    Format Version A vs Version B comparison for display.
+
+    Args:
+        variant_a_info: {email_id, subject, from_name, from_address, type}
+        variant_b_info: {email_id, subject, template_key, quality_rating, expected_open_rate, expected_ctr, strategy}
+
+    Returns:
+        Nicely formatted comparison string
+    """
+    # Format rating stars
+    quality_rating = variant_b_info.get("quality_rating", 5)
+    stars = "★" * quality_rating + "☆" * (5 - quality_rating)
+
+    # Format expected metrics
+    expected_open_rate = int(variant_b_info.get("expected_open_rate", 0) * 100)
+    expected_ctr = int(variant_b_info.get("expected_ctr", 0) * 100)
+
+    comparison = f"""
+════════════════════════════════════════════════════════════════════════════════
+✅ BOTH VARIANTS READY FOR A/B TESTING IN HUBSPOT
+════════════════════════════════════════════════════════════════════════════════
+
+🔄 SIDE-BY-SIDE COMPARISON
+
+VERSION A (User-Created Content)          VERSION B (Best-Practice Template)
+─────────────────────────────────────────────────────────────────────────────
+Email ID:         {variant_a_info.get('email_id', 'N/A'):<20} {variant_b_info.get('email_id', 'N/A')}
+Subject Line:     {variant_a_info.get('subject', 'N/A')[:35]:<20} {variant_b_info.get('subject', 'N/A')[:35]}
+Type:             User-Generated          {variant_b_info.get('template_key', 'Template')}
+Quality Rating:   Unknown                 {stars} ({quality_rating}/5)
+Expected Open:    Unknown                 {expected_open_rate}% (vs 25% industry avg)
+Expected CTR:     Unknown                 {expected_ctr}% (vs 8% industry avg)
+Source:           Your Content            ArgoCon + KeycloakCon 2026
+─────────────────────────────────────────────────────────────────────────────
+
+📊 VERSION A DETAILS (Your Content)
+  Email ID: {variant_a_info.get('email_id', 'N/A')}
+  Subject: {variant_a_info.get('subject', 'N/A')}
+  From: {variant_a_info.get('from_name', 'N/A')} <{variant_a_info.get('from_address', 'N/A')}>
+  Status: DRAFT (ready to send)
+  Type: User-created messaging
+  HubSpot Link: https://app.hubspot.com/content/emails/{variant_a_info.get('email_id', '')}
+
+📋 VERSION B DETAILS (Proven Template)
+  Email ID: {variant_b_info.get('email_id', 'N/A')}
+  Subject: {variant_b_info.get('subject', 'N/A')}
+  Template: {variant_b_info.get('template_key', 'Unknown')} {stars}
+  From: {variant_a_info.get('from_name', 'N/A')} <{variant_a_info.get('from_address', 'N/A')}>
+  Status: DRAFT (ready to send)
+  Strategy: {variant_b_info.get('strategy', 'Unknown')}
+  Expected Metrics: {expected_open_rate}% open, {expected_ctr}% CTR
+  HubSpot Link: https://app.hubspot.com/content/emails/{variant_b_info.get('email_id', '')}
+
+════════════════════════════════════════════════════════════════════════════════
+🚀 NEXT STEP: CREATE A/B TEST IN HUBSPOT
+════════════════════════════════════════════════════════════════════════════════
+
+1. Go to HubSpot → Campaigns → Settings
+2. Scroll to "A/B Test" section
+3. Click "Create A/B Test"
+4. Configure:
+   - Variant A: Email ID {variant_a_info.get('email_id', 'N/A')}
+   - Variant B: Email ID {variant_b_info.get('email_id', 'N/A')}
+   - Split: 50/50
+   - Test Variable: Subject Line (Recommended)
+5. Send test to audience
+6. Monitor results in Campaign Analytics
+
+WHAT TO EXPECT:
+  ✓ Variant A: Unknown performance (user content)
+  ✓ Variant B: ~{expected_open_rate}% open rate (proven ArgoCon template)
+  ✓ Test Duration: 24-48 hours minimum
+  ✓ Auto-select winner: Yes (automatically sends winner to remaining contacts)
+
+════════════════════════════════════════════════════════════════════════════════
+"""
+    return comparison
+
+
 def _fill_template_placeholders(template_text: str, event_data: dict) -> str:
     """Fill template placeholders with actual event data."""
     if not template_text:
@@ -1943,10 +2024,40 @@ def content_turn(session, content_input: str) -> tuple[str, list]:
         "   c. Fill template placeholders (replace [Event Name], [City], [Dates])\n"
         "   d. Call update_email_settings(variant_b_email_id, subject=filled_subject, ...)\n"
         "   e. Call update_email_content(variant_b_email_id, filled_body)\n"
-        "4. Return final summary showing:\n"
-        "   - VARIANT A: email_id, subject, link\n"
-        "   - VARIANT B: email_id, subject, template_key, quality_rating, link\n"
-        "   - HubSpot A/B test setup instructions"
+        "4. Return final summary in THIS EXACT FORMAT (use boxes and comparisons):\n\n"
+        "════════════════════════════════════════════════════════════════════════════════\n"
+        "✅ BOTH VARIANTS READY FOR A/B TESTING IN HUBSPOT\n"
+        "════════════════════════════════════════════════════════════════════════════════\n\n"
+        "🔄 SIDE-BY-SIDE COMPARISON\n\n"
+        "VERSION A (User-Created Content)          VERSION B (Best-Practice Template)\n"
+        "─────────────────────────────────────────────────────────────────────────────\n"
+        "Email ID:         [VARIANT_A_ID]          [VARIANT_B_ID]\n"
+        "Subject Line:     [VARIANT_A_SUBJECT]     [VARIANT_B_SUBJECT]\n"
+        "Type:             User-Generated          [TEMPLATE_KEY]\n"
+        "Quality Rating:   Unknown                 ★★★★★ (5/5)\n"
+        "Expected Open:    Unknown                 45% (vs 25% industry avg)\n"
+        "Expected CTR:     Unknown                 12% (vs 8% industry avg)\n"
+        "─────────────────────────────────────────────────────────────────────────────\n\n"
+        "📊 VERSION A DETAILS\n"
+        "  Email ID: [VARIANT_A_ID]\n"
+        "  Subject: [VARIANT_A_SUBJECT]\n"
+        "  Type: User-created messaging\n"
+        "  HubSpot: https://app.hubspot.com/content/emails/[VARIANT_A_ID]\n\n"
+        "📋 VERSION B DETAILS\n"
+        "  Email ID: [VARIANT_B_ID]\n"
+        "  Subject: [VARIANT_B_SUBJECT]\n"
+        "  Template: [TEMPLATE_KEY] ★★★★★\n"
+        "  Strategy: [TEMPLATE_STRATEGY]\n"
+        "  HubSpot: https://app.hubspot.com/content/emails/[VARIANT_B_ID]\n\n"
+        "════════════════════════════════════════════════════════════════════════════════\n"
+        "🚀 NEXT STEP: CREATE A/B TEST IN HUBSPOT\n"
+        "════════════════════════════════════════════════════════════════════════════════\n"
+        "1. Go to HubSpot → Campaigns → Settings\n"
+        "2. Scroll to 'A/B Test' section → Click 'Create A/B Test'\n"
+        "3. Variant A: [VARIANT_A_ID] | Variant B: [VARIANT_B_ID]\n"
+        "4. Set split: 50/50 | Test variable: Subject Line (Recommended)\n"
+        "5. Send test → Monitor results\n"
+        "════════════════════════════════════════════════════════════════════════════════\n"
     )
     return run_turn(session.messages, prompt)
 
