@@ -1156,22 +1156,44 @@ def get_all_best_practice_templates() -> dict:
     return BEST_PRACTICE_TEMPLATES
 
 
+# ── Template Type to Best-Practice Mapping ──────────────────────────────────
+TEMPLATE_TYPE_MAPPING = {
+    "announcement": "B2B_Event_Announcement",           # Event schedule/speaker launches
+    "speaker_conversion": "B2B_Speaker_Conversion",      # Converting speakers to sponsors
+    "multi_event_deal": "B2B_Strategic_Close",          # Complex multi-event sponsorship deals
+    "existing_account_close": "B2B_Rapid_Close",        # Quick closes for existing accounts
+    "registration_launch": "B2B_Registration_Launch",    # Registration/CFP launches with urgency
+}
+
+
+def get_recommended_template_for_campaign_type(campaign_type: str) -> dict | None:
+    """
+    Get best-practice template recommendation for a campaign type.
+
+    Args:
+        campaign_type: announcement, speaker_conversion, multi_event_deal,
+                      existing_account_close, or registration_launch
+
+    Returns:
+        Full template dict with quality_rating, metrics, and structure, or None
+    """
+    template_key = TEMPLATE_TYPE_MAPPING.get(campaign_type)
+    if template_key:
+        return get_best_practice_template(template_key)
+    return None
+
+
 def recommend_best_practice_template(campaign_type: str) -> dict | None:
     """
-    Recommend the best template based on campaign type.
+    Recommend the best template based on campaign type (legacy function).
+
+    Deprecated: Use get_recommended_template_for_campaign_type() instead.
+    Kept for backward compatibility.
 
     Types: announcement, speaker_conversion, multi_event_deal,
            existing_account_close, registration_launch
     """
-    recommendations = {
-        "announcement": "B2B_Event_Announcement",
-        "speaker_conversion": "B2B_Speaker_Conversion",
-        "multi_event_deal": "B2B_Strategic_Close",
-        "existing_account_close": "B2B_Rapid_Close",
-        "registration_launch": "B2B_Registration_Launch",
-    }
-
-    key = recommendations.get(campaign_type)
+    key = TEMPLATE_TYPE_MAPPING.get(campaign_type)
     if key:
         template = BEST_PRACTICE_TEMPLATES.get(key)
         return {

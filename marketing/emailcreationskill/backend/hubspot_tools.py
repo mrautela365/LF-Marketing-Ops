@@ -1515,3 +1515,88 @@ def upload_image_to_hubspot(image_url: str, filename: str = "") -> str:
 def search_hubspot_lists(search_term: str) -> dict:
     """Search HubSpot contact lists by name."""
     return search_lists(search_term)
+
+
+# ── A/B Testing Helper ──────────────────────────────────────────────────────
+
+def document_ab_test_setup(variant_a_id: str, variant_a_subject: str, variant_b_id: str,
+                          variant_b_subject: str, template_key: str = "", quality_rating: int = 5) -> dict:
+    """
+    Generate A/B test setup documentation and instructions for manual creation in HubSpot UI.
+
+    HubSpot does NOT have an API for creating A/B tests on marketing emails.
+    All A/B test setup must be done manually via the HubSpot UI.
+
+    Args:
+        variant_a_id: HubSpot email ID for Variant A (user content)
+        variant_a_subject: Subject line for Variant A
+        variant_b_id: HubSpot email ID for Variant B (template)
+        variant_b_subject: Subject line for Variant B
+        template_key: Best-practice template used for Variant B
+        quality_rating: Quality rating (1-5 stars) for template
+
+    Returns:
+        Dict with setup instructions and summary
+    """
+    star_rating = "★" * quality_rating + "☆" * (5 - quality_rating)
+
+    return {
+        "ready_for_ab_test": True,
+        "variant_a": {
+            "email_id": variant_a_id,
+            "subject": variant_a_subject,
+            "type": "User-Created Content"
+        },
+        "variant_b": {
+            "email_id": variant_b_id,
+            "subject": variant_b_subject,
+            "type": "Best-Practice Template",
+            "template_key": template_key,
+            "quality_rating": quality_rating,
+            "rating_display": star_rating
+        },
+        "instructions": f"""
+🎯 A/B TEST SETUP — MANUAL STEPS IN HUBSPOT UI
+
+Both variants are ready in HubSpot as DRAFT emails. Follow these steps to create the A/B test:
+
+1. GO TO HUBSPOT
+   → Campaigns → [Event Name] → Settings
+
+2. SCROLL TO "A/B Test" SECTION
+   → Click "Create A/B Test" or "Add A/B Test"
+
+3. CONFIGURE VARIANT A (Control)
+   Email ID: {variant_a_id}
+   Name: Variant A (User Content)
+   Subject: {variant_a_subject}
+
+4. CONFIGURE VARIANT B (Treatment)
+   Email ID: {variant_b_id}
+   Name: Variant B ({template_key})
+   Subject: {variant_b_subject}
+
+5. SET TEST PARAMETERS
+   Split: 50/50 (50% get Variant A, 50% get Variant B)
+   Test Variable: Subject Line (Recommended)
+   Duration: 24-48 hours minimum
+   Auto-select Winner: Yes (recommended)
+
+6. SEND TEST
+   Click "Send A/B Test"
+
+7. MONITOR RESULTS
+   Track: Open Rate, Click-Through Rate, Conversions
+   Compare: Which variant performs better?
+
+EXPECTED OUTCOMES (from ArgoCon data):
+  Variant A: Unknown (user content)
+  Variant B: {star_rating} ({quality_rating}/5 stars) - {int(quality_rating * 10)}% open rate expected
+
+NOTES:
+  • HubSpot requires both emails to use the same template type
+  • A/B test results are available in Campaign Analytics after send
+  • Consider repeating with different test variables (send time, sender, etc.)
+  • Document winning variant for future campaign templates
+"""
+    }

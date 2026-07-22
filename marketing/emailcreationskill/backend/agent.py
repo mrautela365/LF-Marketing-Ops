@@ -234,6 +234,36 @@ TOOLS = [
             "required": ["stage_name", "variant_id"],
         },
     },
+    {
+        "name": "get_recommended_template",
+        "description": (
+            "Get the best-practice B2B template recommendation for a campaign type. "
+            "Returns template key, quality rating (1-5 stars), expected open rate, CTR, and strategy. "
+            "Call this in PLAN phase to show which best-practice template to follow."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "campaign_type": {"type": "string", "description": "Campaign type: announcement, speaker_conversion, multi_event_deal, existing_account_close, or registration_launch"}
+            },
+            "required": ["campaign_type"],
+        },
+    },
+    {
+        "name": "get_template_by_key",
+        "description": (
+            "Get a best-practice template by its key (e.g., 'B2B_Event_Announcement'). "
+            "Returns the full template with subject, preheader, body, and placeholders. "
+            "Use this in CONTENT phase when creating Variant B to get the template to fill."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "template_key": {"type": "string", "description": "Template key (e.g., 'B2B_Event_Announcement', 'B2B_Speaker_Conversion')"}
+            },
+            "required": ["template_key"],
+        },
+    },
 ]
 
 # ── Tool executor (shared by both modes) ──────────────────────────────────────
@@ -331,10 +361,49 @@ def _execute_tool(name: str, inputs: dict, session_email_id: str | None = None) 
                 _log.info(f"  ✓ Selected variant {variant_id} for stage {stage_name}: {reason}")
             else:
                 result = {"selected": False, "error": f"Variant '{variant_id}' not found for stage '{stage_name}'"}
+        elif name == "get_recommended_template":
+            campaign_type = inputs.get("campaign_type")
+            recommendation = email_templates.recommend_best_practice_template(campaign_type)
+            if recommendation and recommendation.get("template"):
+                template = recommendation["template"]
+                result = {
+                    "found": True,
+                    "campaign_type": campaign_type,
+                    "template_key": recommendation.get("key", ""),
+                    "quality_rating": template.get("quality_rating", 0),
+                    "expected_open_rate": template.get("key_metrics", {}).get("expected_open_rate", 0),
+                    "expected_ctr": template.get("key_metrics", {}).get("expected_ctr", 0),
+                    "source": template.get("source", "Unknown"),
+                    "strategy": template.get("template", {}).get("strategy", ""),
+                    "label": template.get("template", {}).get("label", "Unknown")
+                }
+                _log.info(f"  ✓ Recommended template for '{campaign_type}': {result['label']}")
+            else:
+                result = {"found": False, "campaign_type": campaign_type, "error": f"No template found for campaign type '{campaign_type}'"}
+        elif name == "get_template_by_key":
+            template_key = inputs.get("template_key")
+            template = email_templates.get_best_practice_template(template_key)
+            if template:
+                template_obj = template.get("template", {})
+                result = {
+                    "found": True,
+                    "template_key": template_key,
+                    "label": template_obj.get("label", "Unknown"),
+                    "strategy": template_obj.get("strategy", ""),
+                    "subject": template_obj.get("subject", ""),
+                    "preheader": template_obj.get("preheader", ""),
+                    "body": template_obj.get("body", ""),
+                    "quality_rating": template.get("quality_rating", 0),
+                    "expected_open_rate": template.get("key_metrics", {}).get("expected_open_rate", 0),
+                    "expected_ctr": template.get("key_metrics", {}).get("expected_ctr", 0),
+                }
+                _log.info(f"  ✓ Retrieved template: {result['label']}")
+            else:
+                result = {"found": False, "template_key": template_key, "error": f"Template '{template_key}' not found"}
         else:
             result = {"error": f"Unknown tool: {name}. Allowed: lookup_brand_history, clone_email, "
                                "update_email_settings, update_email_content, fetch_content, search_hubspot_lists, "
-                               "get_variant_strategies, select_template_variant"}
+                               "get_variant_strategies, select_template_variant, get_recommended_template, get_template_by_key"}
     except Exception as exc:
         result = {"error": str(exc)}
     return json.dumps(result)
@@ -1436,12 +1505,25 @@ def plan_turn(session, url: str, extra_context: str = None) -> tuple[str, list]:
         "  STEP 1: Call fetch_url to extract event_name, brand_name, location, event_dates.\n"
         "  STEP 2: Call search_emails_for_event(brand_name, event_name, location).\n"
         "          If event_match=False, also call lookup_brand_history as fallback.\n"
-        "  STEP 3: ONLY AFTER both tool calls above are done, write the full plan.\n\n"
-        "TEMPLATE REFERENCE:\n"
-        "  After identifying the event stage, include template recommendation in plan:\n"
-        "  Show which best-practice template this campaign matches (if applicable).\n"
-        "  Include template quality rating and why it's recommended.\n"
-        "  Example: 'Recommended Template: B2B Event Announcement (★★★★★, 45% avg open rate)'\n\n"
+        "  STEP 3: Detect the marketing stage from event details.\n"
+        "  STEP 4: Map stage to campaign_type, then call get_recommended_template(campaign_type).\n"
+        "  STEP 5: ONLY AFTER steps 1-4 are done, write the full plan including template recommendation.\n\n"
+        "BEST-PRACTICE TEMPLATE SECTION (add to plan after Stage & Content Overview):\n"
+        "  After detecting stage in STEP 3, call get_recommended_template() to get:\n"
+        "    - Template name (e.g., 'B2B_Event_Announcement')\n"
+        "    - Quality rating (1-5 stars, shown as ★★★★★)\n"
+        "    - Expected open rate and CTR from ArgoCon data\n"
+        "    - Marketing strategy (e.g., 'Build excitement + relationship focus + multiple CTAs')\n"
+        "  \n"
+        "  Include a new section in the plan:\n"
+        "    ### VARIANT B (Best-Practice Template) — Auto-Generated\n"
+        "    Template: [Template Name] (★★★★★)\n"
+        "    Expected Performance: [XX]% open rate, [XX]% CTR\n"
+        "    Strategy: [Strategy from template]\n"
+        "    Source: ArgoCon + KeycloakCon Japan 2026\n"
+        "    \n"
+        "    This variant will be automatically generated after you provide content for Variant A.\n"
+        "    You can review both before sending.\n\n"
         "⚠️  DO NOT write any plan content before completing STEP 1 and STEP 2.\n"
         "⚠️  DO NOT say 'the plan above', 'as shown above', or 'presented above'.\n"
         "⚠️  Your FINAL message must contain the COMPLETE plan written from scratch.\n\n"
@@ -1556,6 +1638,36 @@ def clone_turn(session, subject=None, preview_text=None, send_list_id=None) -> t
     if variant_id:
         session.meta["selected_variant_id"] = variant_id
         _log.info(f"[CLONE] Selected variant: {variant_id}")
+
+    # ── Store source_email_id for Variant B creation in content_turn ──
+    session.meta["source_email_id"] = source_id
+    _log.info(f"[CLONE] Stored source_email_id: {source_id}")
+
+    # ── Get and store best-practice template recommendation for Variant B ──
+    if stage_name:
+        campaign_type_map = {
+            "Event Announcement": "announcement",
+            "Registration Launch": "registration_launch",
+            "CFP Launch": "registration_launch",
+            "Schedule Announcement": "announcement",
+            "Final Countdown": "registration_launch",
+            "Speaker Confirmation": "speaker_conversion",
+            "Sponsorship Outreach": "multi_event_deal",
+        }
+        campaign_type = campaign_type_map.get(stage_name, "announcement")
+        template_rec = email_templates.recommend_best_practice_template(campaign_type)
+        if template_rec:
+            # Extract necessary fields for Variant B creation
+            template_obj = template_rec.get("template", {})
+            session.meta["recommended_template_for_variant_b"] = {
+                "template_key": template_rec.get("key", ""),
+                "quality_rating": template_obj.get("quality_rating", 0),
+                "expected_open_rate": template_obj.get("key_metrics", {}).get("expected_open_rate", 0),
+                "expected_ctr": template_obj.get("key_metrics", {}).get("expected_ctr", 0),
+                "strategy": template_obj.get("template", {}).get("strategy", ""),
+                "source": template_obj.get("source", ""),
+            }
+            _log.info(f"[CLONE] Stored template recommendation for Variant B: {session.meta['recommended_template_for_variant_b']['template_key']}")
 
     # Generate subject/preview from variant if not provided
     if not subject and not preview_text and stage_name and variant_id:
@@ -1771,11 +1883,64 @@ def content_turn(session, content_input: str) -> tuple[str, list]:
                 f"\nUse the user-provided content, but maintain the messaging strategy and structure from the variant.\n"
             )
 
+    # Get template recommendation info from session (set in plan phase)
+    template_recommendation = session.meta.get("recommended_template_for_variant_b", {})
+
+    # Prepare session context for Variant B creation
+    source_email_id = session.meta.get("source_email_id", "")
+    email_name = session.meta.get("email_name", "Unnamed Campaign")
+    url_data = session.meta.get("url_data", {})
+
+    template_section = ""
+    if template_recommendation and source_email_id:
+        template_key = template_recommendation.get("template_key", "Unknown")
+        expected_open_rate = int(template_recommendation.get("expected_open_rate", 0) * 100)
+        expected_ctr = int(template_recommendation.get("expected_ctr", 0) * 100)
+        strategy = template_recommendation.get("strategy", "Unknown")
+
+        template_section = (
+            f"\n\n🎯 IMPORTANT — TWO-VARIANT A/B TESTING:\n"
+            f"After you complete Variant A above, you MUST also create Variant B from the best-practice template.\n"
+            f"\n"
+            f"VARIANT B TEMPLATE INFO:\n"
+            f"  Template: {template_key}\n"
+            f"  Quality: ★★★★★\n"
+            f"  Expected Open Rate: {expected_open_rate}%\n"
+            f"  Expected CTR: {expected_ctr}%\n"
+            f"  Strategy: {strategy}\n"
+            f"  Source: ArgoCon + KeycloakCon Japan 2026\n"
+            f"\nVARIANT B CREATION STEPS (use these values):\n"
+            f"  Source Email ID: {source_email_id}\n"
+            f"  Variant B Email Name: '{email_name} - VariantB'\n"
+            f"  Event Data for Placeholder Filling:\n"
+            f"    [Event Name] = '{url_data.get('event_name', 'Event')}'\n"
+            f"    [City] = '{url_data.get('location', 'TBD')}'\n"
+            f"    [Dates] = '{', '.join(url_data.get('event_dates', []))}'\n"
+            f"\nCREATE VARIANT B:\n"
+            f"  1. Clone email using source_email_id with name: '{email_name} - VariantB'\n"
+            f"  2. Get the best-practice template subject and body\n"
+            f"  3. Fill [Event Name], [City], [Dates] placeholders using values above\n"
+            f"  4. Call update_email_settings with subject (from_name/from_address same as Variant A)\n"
+            f"  5. Call update_email_content with filled body\n"
+        )
+
     prompt = (
-        f"Content provided:\n\n{content_input}\n{variant_note}\n\n"
-        "1. Call fetch_content to process the user content.\n"
-        "2. Call update_email_content to update the email body.\n"
-        "3. Run QA and return final summary with draft URL."
+        f"VARIANT A (User Content):\n"
+        f"Content provided:\n{content_input}\n{variant_note}"
+        f"{template_section}\n\n"
+        "EXECUTION STEPS:\n"
+        "1. Call fetch_content to process the user content → get clean HTML for Variant A.\n"
+        "2. Call update_email_content with Variant A email_id and HTML.\n"
+        "3. IF template info is provided above (VARIANT B section):\n"
+        "   a. Clone source_email_id with Variant B name\n"
+        "   b. Get best-practice template by key\n"
+        "   c. Fill template placeholders (replace [Event Name], [City], [Dates])\n"
+        "   d. Call update_email_settings(variant_b_email_id, subject=filled_subject, ...)\n"
+        "   e. Call update_email_content(variant_b_email_id, filled_body)\n"
+        "4. Return final summary showing:\n"
+        "   - VARIANT A: email_id, subject, link\n"
+        "   - VARIANT B: email_id, subject, template_key, quality_rating, link\n"
+        "   - HubSpot A/B test setup instructions"
     )
     return run_turn(session.messages, prompt)
 
