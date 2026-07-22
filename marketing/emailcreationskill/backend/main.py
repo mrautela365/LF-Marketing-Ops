@@ -545,9 +545,8 @@ def _create_plan_impl(req: PlanRequest, emit=lambda *a, **k: None):
 
     # ── Step B: Call Claude to generate the plan text ──
     emit("📝 Drafting the campaign plan…")
-    combined_context = "\n\n".join(filter(None, [req.extra_context, brand_hint, stage_content_hint]))
     try:
-        text, messages = agent.plan_turn(session, req.url, combined_context or None)
+        text, messages = agent.plan_turn(session, req.url)
     except Exception as exc:
         log.error(f"[PLAN] failed: {exc}\n{traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(exc))
