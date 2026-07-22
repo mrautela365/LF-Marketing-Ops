@@ -50,57 +50,12 @@
           pulls HubSpot send history, and drafts a complete campaign plan for you to review.
         </div>
 
-        <!-- Tab selector: Event URL vs Asana Task -->
-        <div style="display:flex;gap:8px;margin-bottom:16px;border-bottom:1px solid #e2e8f0;padding-bottom:12px">
-          <button class="tab-btn active" id="tab-event" onclick="switchInputMode('event')" style="
-            padding:8px 12px;border:none;background:none;cursor:pointer;font-weight:600;
-            color:var(--gray-600);border-bottom:2px solid transparent;
-          ">
-            📍 Event / Campaign URL
-          </button>
-          <button class="tab-btn" id="tab-asana" onclick="switchInputMode('asana')" style="
-            padding:8px 12px;border:none;background:none;cursor:pointer;font-weight:600;
-            color:var(--gray-400);border-bottom:2px solid transparent;
-          ">
-            ✓ Asana Task
-          </button>
-        </div>
-
         <!-- Event URL input -->
-        <div id="event-input-section">
-          <div class="field">
-            <label>Event / Campaign URL <span style="color:red">*</span></label>
-            <input id="event_url" type="url"
-              placeholder="https://events.linuxfoundation.org/kubecon-europe/" />
-            <div class="hint">Any LF event, registration, or campaign page URL.</div>
-          </div>
-        </div>
-
-        <!-- Asana Task input -->
-        <div id="asana-input-section" class="hidden">
-          <div class="field">
-            <label>Asana Task URL <span style="color:red">*</span></label>
-            <input id="asana_url" type="url"
-              placeholder="https://app.asana.com/0/PROJECT/TASK" />
-            <div class="hint">Paste the Asana task URL. Builder will extract brief, content doc, and audience instructions.</div>
-          </div>
-        </div>
-
-        <div class="field-row">
-          <div class="field">
-            <label>Email Type <span style="color:var(--gray-400)">(optional)</span></label>
-            <select id="email_type">
-              <option value="">— Auto-detect —</option>
-              <option value="Newsletter">Newsletter</option>
-              <option value="Invite">Invite</option>
-              <option value="Reminder">Reminder</option>
-            </select>
-          </div>
-          <div class="field">
-            <label>Additional context <span style="color:var(--gray-400)">(optional)</span></label>
-            <input id="extra_context" type="text"
-              placeholder="e.g. EMEA audience, transactional" />
-          </div>
+        <div class="field">
+          <label>Event / Campaign URL <span style="color:red">*</span></label>
+          <input id="event_url" type="url"
+            placeholder="https://events.linuxfoundation.org/kubecon-europe/" />
+          <div class="hint">Any LF event, registration, or campaign page URL.</div>
         </div>
 
         <div id="step1-status" class="hidden"></div>

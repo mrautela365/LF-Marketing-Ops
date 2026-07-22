@@ -9,7 +9,6 @@ let _subLists = [];           // lists rolled into the master audience (built or
 let _audiencePlanText       = "";     // Phase 1 segment plan, captured for review before any list is created
 let _audiencePlanEventUrl   = "";     // event_url the plan was generated for
 let _audiencePlanStandalone = false;  // true when planned without a campaign session
-let _inputMode              = "event"; // "event" or "asana"
 
 // ── Step navigation ──────────────────────────────────────────────────────────
 
@@ -164,97 +163,8 @@ function showDraftLink(containerId, url) {
   el.classList.remove("hidden");
 }
 
-// ── Step 1: Input mode switching ──────────────────────────────────────────────
-
-function switchInputMode(mode) {
-  _inputMode = mode;
-  const eventSection = document.getElementById("event-input-section");
-  const asanaSection = document.getElementById("asana-input-section");
-  const eventTab = document.getElementById("tab-event");
-  const asanaTab = document.getElementById("tab-asana");
-
-  if (mode === "event") {
-    if (eventSection) eventSection.classList.remove("hidden");
-    if (asanaSection) asanaSection.classList.add("hidden");
-    if (eventTab) {
-      eventTab.style.color = "var(--gray-800)";
-      eventTab.style.borderBottomColor = "var(--blue)";
-    }
-    if (asanaTab) {
-      asanaTab.style.color = "var(--gray-400)";
-      asanaTab.style.borderBottomColor = "transparent";
-    }
-  } else {
-    if (eventSection) eventSection.classList.add("hidden");
-    if (asanaSection) asanaSection.classList.remove("hidden");
-    if (asanaTab) {
-      asanaTab.style.color = "var(--gray-800)";
-      asanaTab.style.borderBottomColor = "var(--blue)";
-    }
-    if (eventTab) {
-      eventTab.style.color = "var(--gray-400)";
-      eventTab.style.borderBottomColor = "transparent";
-    }
-  }
-}
-
 function generatePlanFromActiveMode() {
-  if (_inputMode === "asana") {
-    generatePlanFromAsana();
-  } else {
-    generatePlan();
-  }
-}
-
-async function generatePlanFromAsana() {
-  const url = document.getElementById("asana_url").value.trim();
-
-  if (!url) {
-    showError("step1-status", "Please enter an Asana task URL.");
-    return;
-  }
-  if (!url.startsWith("http")) {
-    showError("step1-status", "Please enter a valid URL starting with http:// or https://");
-    return;
-  }
-
-  clearStatus("step1-status");
-  const token = _newToken();
-  showStep(2);
-  resetBrief();
-  setBriefStatus("running");
-  appendBrief("🚀 Fetching Asana task…");
-  try { renderMessage("plan-message", "_Reading Asana task and generating campaign plan…_"); } catch (_) {}
-  try { _setContentLoading(true); } catch (_) {}
-
-  openBriefStream(token, {
-    onPlanDone: (result) => {
-      if (!result) return;
-      sessionId = result.session_id;
-      try { renderMessage("plan-message", result.message); } catch (_) {}
-      try { renderStageBadge(result.stage); } catch (_) {}
-      try { renderSourceChip(result.source_email); } catch (_) {}
-      try { renderUtmChip(result.utm); } catch (_) {}
-      generateEmailContent(sessionId, "", token).finally(() => {
-        setBriefStatus("done");
-        closeBriefStream();
-      });
-    },
-  });
-
-  try {
-    const resp = await fetch(`${API}/plan-from-asana`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ asana_url: url, progress_token: token }),
-    });
-    const data = await resp.json();
-    if (!resp.ok) throw new Error(data.detail || "Failed to fetch Asana task");
-  } catch (err) {
-    appendBrief("⚠️ " + err.message);
-    setBriefStatus("error");
-    closeBriefStream();
-  }
+  generatePlan();
 }
 
 // ── Step 1: Generate plan ────────────────────────────────────────────────────
@@ -386,8 +296,6 @@ function renderUtmChip(utm) {
 
 async function generatePlan() {
   const url = document.getElementById("event_url").value.trim();
-  const extraContext = document.getElementById("extra_context").value.trim();
-  const emailType = document.getElementById("email_type").value;
 
   if (!url) {
     showError("step1-status", "Please enter an event or campaign URL.");
@@ -428,7 +336,7 @@ async function generatePlan() {
     const resp = await fetch(`${API}/plan-start`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url, extra_context: extraContext || null, email_type: emailType || null, progress_token: token }),
+      body: JSON.stringify({ url, progress_token: token }),
     });
     const data = await resp.json();
     if (!resp.ok) throw new Error(data.detail || "Failed to start campaign brief");
