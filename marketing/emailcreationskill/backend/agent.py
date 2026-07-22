@@ -1584,7 +1584,7 @@ def run_turn(messages: list, user_message: str) -> tuple[str, list]:
     )
 
 
-def plan_turn(session, url: str, extra_context: str = None) -> tuple[str, list]:
+def plan_turn(session, url: str) -> tuple[str, list]:
     prompt = (
         f"The user wants to stage an email for this event URL:\n{url}\n\n"
         "CRITICAL — follow this order STRICTLY:\n"
@@ -1639,10 +1639,8 @@ def plan_turn(session, url: str, extra_context: str = None) -> tuple[str, list]:
         "| **Email Name** | `26QN - Brand - Event - Suffix` |\n"
         "| **From Name** | (from brand history) |\n"
         "| **From Address** | (from brand history) |\n"
-        "| **Email Type** | (from brand history) |\n"
         "| **Subject Line** | *(auto-generated — shown below the plan)* |\n"
-        "| **Preview Text** | *(auto-generated — shown below the plan)* |\n"
-        "| **Send Date** | [REQUIRED — provide below] |\n\n"
+        "| **Preview Text** | *(auto-generated — shown below the plan)* |\n\n"
         "### Audience\n\n"
         "| | |\n"
         "|---|---|\n"
@@ -1656,17 +1654,14 @@ def plan_turn(session, url: str, extra_context: str = None) -> tuple[str, list]:
         "[The agent will call get_variant_strategies(stage) to show available options here]\n\n"
         "- **Recommended**: [variant_id] — [reason]\n"
         "- To choose a different variant, say: \"Use variant [variant_id]\" in your response.\n"
-        "- If you're happy with the recommended variant, just provide the Send Date and proceed.\n\n"
+        "- If you're happy with the recommended variant, just proceed to the next step.\n\n"
         "---\n\n"
-        "Then provide:\n"
-        "1. **Send Date** (the only required field)\n"
-        "2. **Optional Variant Choice** (e.g., \"Use variant v2_urgency_focused\" or leave blank for recommended)\n\n"
-        "Do NOT ask for subject or preview text — those are auto-generated separately.\n"
+        "When ready, say \"Approve\" or \"Let's go\" to proceed to the next step.\n"
+        "Optional: Say \"Use variant [variant_id]\" to select a different messaging approach.\n\n"
+        "Do NOT ask for subject line, preview text, send date, or any other inputs.\n"
         "Do NOT mention cloning, source emails, or templates anywhere.\n"
         "Do NOT say 'the plan above' or 'as shown above' — write everything in this single response."
     )
-    if extra_context:
-        prompt += f"\n\nAdditional context: {extra_context}"
     return run_turn(session.messages, prompt)
 
 
