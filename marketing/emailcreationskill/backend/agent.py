@@ -277,11 +277,13 @@ if not _log.handlers:
     _log.addHandler(_lh)
     _log.propagate = False
 
-# Tracks the email ID cloned in the current session — only this ID may be modified.
+# Tracks email IDs cloned in the current session — only these IDs may be modified.
 # Set by clone_email tool call, checked before any update operation.
+# For A/B testing: session can create Variant A (in clone_turn) and Variant B (in content_turn).
 # NOTE: This is per-process, not per-session. Use session.meta["email_id"] as the
 # authoritative source; this global is a fallback.
 _session_email_id: str | None = None
+_session_email_ids_allowed: set[str] = set()  # For A/B testing: track both Variant A and Variant B
 
 # Tools that are completely forbidden regardless of inputs
 _FORBIDDEN_TOOLS = {"delete_email", "delete_list", "delete_contact", "archive_email"}
@@ -291,7 +293,7 @@ _WRITE_TOOLS = {"update_email_settings", "update_email_content"}
 
 
 def _execute_tool(name: str, inputs: dict, session_email_id: str | None = None) -> str:
-    global _session_email_id  # declared first — used later in clone_email branch
+    global _session_email_id, _session_email_ids_allowed
     _log.info(f"  → TOOL {name}({', '.join(f'{k}={str(v)[:40]!r}' for k,v in inputs.items())})")
 
     # ── Safety gate 1: block any delete/archive tools outright ──────────────
@@ -299,17 +301,18 @@ def _execute_tool(name: str, inputs: dict, session_email_id: str | None = None) 
         _log.warning(f"  ✗ BLOCKED forbidden tool: {name}")
         return json.dumps({"error": f"Tool '{name}' is not permitted. This service never deletes or archives."})
 
-    # ── Safety gate 2: write ops only allowed on the session-created email ──
+    # ── Safety gate 2: write ops only allowed on emails cloned this session ──
     if name in _WRITE_TOOLS:
         target_id = inputs.get("email_id")
-        allowed_id = session_email_id or _session_email_id
-        if not allowed_id:
+        # Allow if: session_email_id provided (explicit param) OR in allowed set (for A/B testing)
+        allowed_ids = _session_email_ids_allowed | ({session_email_id} if session_email_id else {_session_email_id} if _session_email_id else set())
+        if not allowed_ids:
             return json.dumps({"error": "No email has been cloned in this session yet. Clone first."})
-        if target_id != allowed_id:
-            _log.warning(f"  ✗ BLOCKED write to email {target_id} — only {allowed_id} is allowed this session")
+        if target_id not in allowed_ids:
+            _log.warning(f"  ✗ BLOCKED write to email {target_id} — only {allowed_ids} are allowed this session")
             return json.dumps({
                 "error": f"Write blocked: email {target_id} was not created by this session. "
-                         f"Only email {allowed_id} (cloned in this session) may be modified."
+                         f"Only emails {allowed_ids} (cloned in this session) may be modified."
             })
 
     try:
@@ -320,9 +323,11 @@ def _execute_tool(name: str, inputs: dict, session_email_id: str | None = None) 
             )
         elif name == "clone_email":
             result = hubspot_tools.clone_email(inputs["source_email_id"], inputs["clone_name"])
-            # Register the newly created email ID — only this may be modified
-            _session_email_id = result.get("email_id")
-            _log.info(f"  ✓ Session email locked to: {_session_email_id}")
+            # Register the newly created email ID for A/B testing (allow both Variant A and B)
+            new_email_id = result.get("email_id")
+            _session_email_id = new_email_id  # Keep for backward compatibility
+            _session_email_ids_allowed.add(new_email_id)  # Add to allowed set for A/B testing
+            _log.info(f"  ✓ Session email allowed: {new_email_id} (all allowed: {_session_email_ids_allowed})")
         elif name == "update_email_settings":
             email_id = inputs.pop("email_id")
             result = hubspot_tools.update_email_settings(email_id, **inputs)
@@ -1585,8 +1590,9 @@ def plan_turn(session, url: str, extra_context: str = None) -> tuple[str, list]:
 
 
 def clone_turn(session, subject=None, preview_text=None, send_list_id=None) -> tuple[str, list]:
-    global _session_email_id
+    global _session_email_id, _session_email_ids_allowed
     _session_email_id = None
+    _session_email_ids_allowed.clear()  # Reset allowed emails for new session
 
     brand = session.meta.get("brand_history") or extract_brand_history_from_messages(session.messages)
 
