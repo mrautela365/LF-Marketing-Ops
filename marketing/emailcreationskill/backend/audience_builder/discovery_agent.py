@@ -85,8 +85,13 @@ EXACTLY ONE of these 5 signals using both the name and the actual filter shape
    representing all-time registration for this event (e.g. "All Event
    Registrations", "All Registrants"). Includes past-edition registrant lists
    used for regional-expansion targeting.
-4. education_enrollment — membership in an "Education Enrolled" / "LFX Education"
-   style segment scoped to this event's topic area.
+4. education_enrollment — LIST_MEMBERSHIP/IN_LIST or UNIFIED_EVENTS filter
+   (fixed eventTypeId "6-58204655") representing enrollment in "Education
+   Enrolled" / "LFX Education" courses, scoped to this event's own brand/
+   foundation (e.g. via a CONTAINS filter on a course/topic property, or a
+   list name naming the specific brand). If the list's filter or name shows
+   it covers ALL LFX Education courses with no brand/topic scoping, treat it
+   as uncertain instead — note the missing brand scoping in its reason.
 5. page_view — a PAGE_VIEW filterType (operator like GTE 0/1) on this event's page,
    or a project-specific page-view segment. May be named "Page Views" or similar.
 

@@ -1658,6 +1658,21 @@ From the reference list you inspected above, confirm:
   (Education Enrolled). In the reference pattern these do NOT carry the master-list
   gate (they're behavioral/event data, not a geographic contact-property filter).
 
+── Education topic/brand-fit investigation (mandatory, not optional) ──
+If the plan includes the Education Enrolled event-history branch (eventTypeId
+"6-58204655"), call hubspot_get_event_types once and find that eventTypeId's
+properties for one that plausibly holds a course/topic/subject name (its name
+or label containing something like "course", "topic", "subject", "program",
+"curriculum"). If such a property exists, note its exact property name — the
+build phase will add a domain-fit CONTAINS filter on it, using the FOUNDATION/
+BRAND resolved in STEP 1 (e.g. brand "cncf" → keywords like "Kubernetes",
+"Cloud Native", "CNCF") so the Education Enrolled branch only counts enrollment
+in THIS brand's own courses, not any LFX Education course enrollment broadly.
+If no such property exists, do NOT silently drop this requirement: build the
+branch with the existing city/country filter only, and add a line under "Open
+questions / flags" noting Education Enrolled could not be brand-scoped because
+no topic/course property was found on eventTypeId "6-58204655".
+
 ═══════════════════════════════════════════════════
 STEP 3 — Flag the mailability gap for the user to decide
 ═══════════════════════════════════════════════════
@@ -1698,7 +1713,9 @@ Write a complete structured report using this format:
 **Reference list inspected** — name + ID of the closest existing example you found.
 **Proposed list(s)** — name(s), and for each a filter-branch sketch:
   - contact-property branches (gated by the master list)
-  - event-history branches (UNIFIED_EVENTS, gated per the STEP 3 decision)
+  - event-history branches (UNIFIED_EVENTS, gated per the STEP 3 decision;
+    Education Enrolled additionally scoped to this brand's own courses via the
+    STEP 2 topic/brand-fit investigation, when a topic/course property was found)
 **Mailability gap decision** — (a) or (b) from STEP 3, pending the user's answer.
 **Suppression decision** — apply hygiene suppressions, or match the reference (none) — pending the user's answer.
 **Estimated list size** — the closest example list's size as a ballpark, if found.
@@ -1870,6 +1887,18 @@ Repeat this branch shape with property "user_city" + eventTypeId "6-58204655"
 (Education Enrolled). If the plan's scope is broad, add the "event_country" /
 "user_country" equivalents using the country value — match the exact case used in
 the reference list you inspected (these properties can be case-sensitive).
+
+── Brand-fit filter on the Education Enrolled (6-58204655) branch ──
+If the plan's STEP 2 topic/brand-fit investigation found a course/topic property
+on eventTypeId "6-58204655", add ONE domain-fit filter inside THAT branch's
+UNIFIED_EVENTS node's "filterBranches" (currently [] in the shape above) — one
+AND branch with a "filters" entry using that exact property name, operator
+"CONTAINS", and values populated with domain-compatible course/topic keywords
+for the plan's FOUNDATION/BRAND (from STEP 1 of the plan). This keeps the
+Education Enrolled branch scoped to enrollments in THIS brand's own courses,
+not any LFX Education course. If the plan's STEP 2 investigation found no such
+property, leave this branch's "filterBranches" empty (city/country filter only)
+— this should already be flagged under ## FLAGGED FOR REVIEW per the plan.
 
 Name each list per the plan's "Proposed list(s)" section (e.g. "[Quarter] [Year] -
 [Location] - Mailable Contacts - [named events]").

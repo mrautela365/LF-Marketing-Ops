@@ -1,4 +1,50 @@
 /* ── Audience Builder tab: existing-list discovery card grid ── */
+
+/* Lightweight step wayfinding (1/2/3) — visually distinct from the Campaign
+   Builder wizard's .step/.step-circle, which showStep() re-indexes by class;
+   reusing that class here would make this page's badges show up in the
+   wizard's step-counting logic, so this page gets its own class instead. */
+.ab-card-title-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 4px; }
+.ab-step-badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; border-radius: 50%; flex-shrink: 0;
+  background: var(--gray-900); color: white;
+  font-size: 12px; font-weight: 700;
+}
+.ab-step-optional {
+  font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px;
+  color: var(--gray-400);
+  border: 1px solid var(--gray-200); border-radius: 5px; padding: 2px 6px;
+}
+
+/* Discovery/build log — same light, line-by-line reading experience as
+   #brief-log's .brief-line rows elsewhere in the app, scoped to this page's
+   own markup instead of reusing that id-bound component. */
+.ab-log {
+  margin-top: 14px;
+  max-height: 260px; overflow-y: auto;
+  border: 1px solid var(--gray-200); border-radius: var(--radius-sm);
+  background: var(--gray-50);
+}
+.ab-log-line {
+  font-size: 12.5px; color: var(--gray-600); font-family: ui-monospace, monospace;
+  padding: 8px 14px; border-bottom: 1px solid var(--gray-200);
+  word-break: break-word; white-space: pre-wrap;
+}
+.ab-log-line:last-child { border-bottom: none; color: var(--gray-900); font-weight: 500; }
+
+/* Standardized success state — mirrors .error-box/.loading, which had no
+   green counterpart anywhere in the app. */
+.success-box {
+  background: var(--green-light);
+  border: 1px solid #86efac;
+  border-radius: var(--radius);
+  padding: 12px 16px;
+  font-size: 14px;
+  color: #166534;
+}
+.success-box a { color: #15803d; font-weight: 600; }
+
 .ab-toolbar {
   display: flex;
   align-items: center;

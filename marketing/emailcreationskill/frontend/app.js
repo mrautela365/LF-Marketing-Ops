@@ -1478,10 +1478,20 @@ async function approveCustomAudiencePlan(scope = "step3") {
         _markMaster(mid, msg.master_list_url, scope);
         if (planActions) planActions.classList.add("hidden");
         const link = _masterListLinkHtml(mid, msg.master_list_url);
+
+        // scope="builder" only — if this build was kicked off from a missing-
+        // signal "Create list" click, fold the new list into the discovery
+        // grid (selected, under its signal). Returns null otherwise.
+        let _abSignal = null;
+        if (scope === "builder" && typeof AudienceBuilder !== "undefined") {
+          const sub = _subLists.find(s => s.id === String(mid));
+          _abSignal = AudienceBuilder.onCustomListBuilt({ list_id: mid, name: sub && sub.name });
+        }
+
         if (statusEl) {
           statusEl.classList.remove("hidden");
           statusEl.innerHTML = scope === "builder"
-            ? `<span style="color:#166534">✅ Master audience ready (${link}). Use it as the send list for any campaign.</span>`
+            ? `<div class="success-box">✅ Master audience ready (${link})${_abSignal ? " — added to your selection above." : ". Use it as the send list for any campaign."}</div>`
             : standalone
               ? `<span style="color:#166534">✅ Master audience ready (${link}). Start a campaign plan (Step 1) to attach it to an email.</span>`
               : `<span style="color:#166534">✅ Master audience ready (${link}). It is attached to the email when you start implementation.</span>`;
@@ -1497,6 +1507,99 @@ async function approveCustomAudiencePlan(scope = "step3") {
       if (badge)      { badge.textContent = `⚠ Build error: ${escapeHtml(msg.text || "unknown")}`; badge.style.color = "#dc2626"; }
       if (approveBtn) approveBtn.disabled = false;
     },
+  });
+}
+
+// Audience Builder missing-signal "Create list" — skips the plan-review gate
+// entirely. Calls /api/audience/custom-run directly with an empty plan, which
+// makes the backend chain planning + building in one job (see
+// audience_tools._run_custom_two_phase) instead of stopping for approval —
+// appropriate here because these signals resolve to one deterministic filter
+// shape (custom event / contact property / subscription), not an open-ended
+// audience needing user review.
+async function runDirectSignalBuild(request, scope = "builder") {
+  const ids = _AUD_UI_SCOPES[scope] || _AUD_UI_SCOPES.step3;
+  clearStatus(ids.urlStatus);
+
+  _activeAudienceFlow = "custom";
+  _masterListId = "";
+  _subLists = [];
+  _customAudienceRequest = request;
+  _customAudiencePlanText = "";
+  renderSubLists(scope);
+  clearAudienceQuestions(scope);
+
+  const badge       = document.getElementById(ids.statusBadge);
+  const buildBtn    = document.getElementById(ids.buildBtn);
+  const ticker      = document.getElementById(ids.ticker);
+  const statusEl    = document.getElementById(ids.statusEl);
+  const planActions = document.getElementById(ids.planActions);
+
+  if (badge)       { badge.textContent = "⏳ Building list directly (custom event / contact property / subscription)…"; badge.style.color = "var(--gray-500)"; }
+  if (buildBtn)    buildBtn.disabled = true;
+  if (planActions) planActions.classList.add("hidden");
+  if (ticker)   { ticker.textContent = ""; ticker.classList.remove("hidden"); }
+  if (statusEl) { statusEl.classList.add("hidden"); statusEl.innerHTML = ""; }
+
+  const fail = (message) => {
+    if (badge)    { badge.textContent = "⚠ Build failed — " + escapeHtml(message); badge.style.color = "#dc2626"; }
+    if (buildBtn) buildBtn.disabled = false;
+    if (scope === "builder" && typeof AudienceBuilder !== "undefined") AudienceBuilder.onCustomBuildFailed();
+  };
+
+  const standalone = !sessionId;
+  let jobId = null;
+  try {
+    const resp = await fetch(`${API}/audience/custom-run`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ request, session_id: standalone ? "" : sessionId, plan: "", qa: _audienceQA }),
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({ detail: resp.statusText }));
+      throw new Error(err.detail || "Failed to start audience build");
+    }
+    const data = await resp.json();
+    jobId = data.job_id;
+  } catch (e) {
+    if (ticker) ticker.classList.add("hidden");
+    fail(e.message);
+    return;
+  }
+
+  _openAudienceStream(jobId, standalone ? "" : sessionId, {
+    onDelta: (text) => {
+      if (!ticker) return;
+      ticker.textContent += text;
+      ticker.scrollTop = ticker.scrollHeight;
+    },
+    onOutput: (text) => {
+      _parseSubList(text, scope);
+    },
+    onComplete: (msg) => {
+      if (buildBtn) buildBtn.disabled = false;
+      const mid = msg.master_list_id;
+      if (!mid || msg.success === false) {
+        fail("list ID not found — see log above");
+        return;
+      }
+      _masterListId = String(mid);
+      _markMaster(mid, msg.master_list_url, scope);
+      const link = _masterListLinkHtml(mid, msg.master_list_url);
+
+      let _abSignal = null;
+      if (scope === "builder" && typeof AudienceBuilder !== "undefined") {
+        const sub = _subLists.find(s => s.id === String(mid));
+        _abSignal = AudienceBuilder.onCustomListBuilt({ list_id: mid, name: sub && sub.name });
+      }
+
+      if (statusEl) {
+        statusEl.classList.remove("hidden");
+        statusEl.innerHTML = `<div class="success-box">✅ List ready (${link})${_abSignal ? " — added to your selection above." : "."}</div>`;
+      }
+      if (badge) { badge.textContent = `✓ List ready (ID ${escapeHtml(mid)})`; badge.style.color = "#166534"; }
+    },
+    onError: (msg) => fail(msg.text || "unknown"),
   });
 }
 

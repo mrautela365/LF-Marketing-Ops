@@ -418,26 +418,42 @@
   <div id="flow-audience-builder" class="hidden">
 
     <div class="card">
-      <div class="card-title">Discover Existing Lists</div>
+      <div class="ab-card-title-row">
+        <span class="ab-step-badge">1</span>
+        <div class="card-title" style="margin:0">Discover Existing Lists</div>
+      </div>
       <div class="card-desc">
         Paste an event or campaign URL. The agent searches HubSpot for lists that already exist for
         this event and classifies them by signal (Project Opt-In, LF Newsletter Opt-In, Event
         Registration, Education Enrollment, Page View) — nothing is created or modified.
       </div>
 
-      <div class="field-row" style="margin-top:8px">
+      <div class="section-subhead">Event / Campaign URL</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
         <input id="ab-event-url" type="url" placeholder="https://events.linuxfoundation.org/kubecon-europe/"
-          style="flex:1" autocomplete="off" />
+          style="flex:1;min-width:260px" autocomplete="off" />
         <button class="btn btn-primary" id="ab-discover-btn" onclick="AudienceBuilder.discover()">
           Discover Existing Lists
         </button>
       </div>
+      <div class="hint" style="margin-top:6px">
+        Any LF event, registration, or campaign page URL. Discovery is read-only — nothing is created
+        or modified in HubSpot at this step.
+      </div>
       <div id="ab-discover-status" class="hidden" style="margin-top:8px"></div>
 
-      <div id="ab-discover-ticker" class="hidden" style="margin-top:14px;padding:10px;background:#0f172a;border-radius:8px;font-family:ui-monospace,monospace;font-size:11px;color:#e2e8f0;max-height:260px;overflow-y:auto;white-space:pre-wrap;word-break:break-all"></div>
+      <div id="ab-discover-ticker" class="ab-log hidden"></div>
     </div>
 
     <div class="card hidden" id="ab-results">
+      <div class="ab-card-title-row">
+        <span class="ab-step-badge">2</span>
+        <div class="card-title" style="margin:0">Review &amp; Build Master List</div>
+      </div>
+      <div class="card-desc">
+        Lists are grouped by signal below. Review what was found, select the ones to include, then
+        combine your selection into one new HubSpot list.
+      </div>
       <div class="ab-toolbar">
         <div class="ab-toolbar-stats">
           <div class="ab-toolbar-stat">
@@ -471,6 +487,7 @@
             oninput="AudienceBuilder.onSearch(this.value)" autocomplete="off" />
           <div id="ab-search-dropdown" class="list-dropdown hidden"></div>
         </div>
+        <div class="hint">Type at least 2 characters to search all HubSpot lists, not just this event's.</div>
       </div>
 
       <div class="btn-row" style="margin-top:18px">
@@ -484,15 +501,19 @@
     <div class="card hidden" id="ab-missing-section">
       <div class="card-title">Qualifying Lists Not Found</div>
       <div class="card-desc">
-        No existing list was found for these signals. Create one from scratch below.
+        We searched HubSpot but couldn't find an existing list for these signals. Use "Create list" to
+        pre-fill a request for it in Build From Scratch below, or skip if you don't need it for this
+        campaign.
       </div>
       <div class="ab-card-grid" id="ab-missing-grid"></div>
     </div>
 
     <!-- ── Build From Scratch: reuses the Custom Audience flow via scope="builder" ── -->
     <div class="card">
-      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px">
+      <div class="ab-card-title-row" style="margin-bottom:6px">
+        <span class="ab-step-badge">3</span>
         <div class="card-title" style="margin:0">Build From Scratch</div>
+        <span class="ab-step-optional">Optional</span>
         <span id="ab-custom-status-badge" style="font-size:12px;color:var(--gray-400)">— describe an audience in your own words</span>
       </div>
       <div class="card-desc">
@@ -502,6 +523,7 @@
 
       <textarea id="ab-custom-request" rows="3" style="width:100%;margin-top:8px;font-family:inherit;font-size:14px;padding:10px;border-radius:var(--radius-sm);border:1px solid var(--gray-200)"
         placeholder="All mailable contacts located in Seoul, set up for mailing (this is for OSS Korea and MCP Dev Summit Seoul)"></textarea>
+      <div class="hint" style="margin-top:6px">Be specific: audience criteria, geography, and which event(s) this is for.</div>
       <div class="btn-row" style="margin-top:8px">
         <button class="btn btn-primary" id="ab-custom-build-btn" onclick="runCustomAudienceBuild('builder')">
           <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
@@ -540,7 +562,7 @@
 
 </div><!-- /container -->
 
-<script src="/static/app.js?v=12"></script>
-<script src="/static/audience-builder/audience-builder.js?v=1"></script>
+<script src="/static/app.js?v=13"></script>
+<script src="/static/audience-builder/audience-builder.js?v=2"></script>
 </body>
 </html>

@@ -77,6 +77,8 @@ const AudienceBuilder = (() => {
   let _missingSignals = [];
   let _searchTimer = null;
   let _discoverES = null;
+  let _pendingMissingSignal = null; // signal key the direct-build request below is for
+  let _buildingSignals = new Set(); // signal keys with a direct build currently in flight
 
   function _cardHtml(c) {
     const id = String(c.list_id);
@@ -143,6 +145,7 @@ const AudienceBuilder = (() => {
     }
     grid.innerHTML = _missingSignals.map(sig => {
       const info = SIGNAL_INFO[sig] || { label: sig, description: "" };
+      const building = _buildingSignals.has(sig);
       return `
         <div class="ab-card ab-card-missing">
           <div class="ab-card-top">
@@ -150,24 +153,76 @@ const AudienceBuilder = (() => {
           </div>
           <div class="ab-card-reason" style="border-top:none;padding-top:0;margin-top:0">${escapeHtml(info.description)}</div>
           <div class="btn-row" style="margin-top:10px">
-            <button class="btn btn-outline" type="button" onclick="AudienceBuilder.createMissingSignal('${sig}')">Create list</button>
+            <button class="btn btn-outline" type="button" ${building ? "disabled" : ""} onclick="AudienceBuilder.createMissingSignal('${sig}')">${building ? "Building…" : "Create list"}</button>
           </div>
         </div>`;
     }).join("");
     section.classList.remove("hidden");
   }
 
-  function createMissingSignal(signalKey) {
+  // These 5 signals each resolve to one deterministic filter shape (a custom
+  // event, a contact property, or a subscription-type property) — so "Create
+  // list" skips the plan-generation/review step entirely and calls
+  // runDirectSignalBuild() (app.js) to build straight from a pre-set request,
+  // via /api/audience/custom-run with an empty plan (chains planning+building
+  // in one job, no approval gate).
+  async function createMissingSignal(signalKey) {
     const info = SIGNAL_INFO[signalKey];
-    if (!info) return;
+    if (!info || _buildingSignals.has(signalKey)) return;
+    _pendingMissingSignal = signalKey;
+    _buildingSignals.add(signalKey);
+    renderMissingSignals(_missingSignals);
+
     const urlInput = document.getElementById("ab-event-url");
     const eventUrl = ((urlInput && urlInput.value) || "").trim();
+    const request = info.prompt(eventUrl);
     const textarea = document.getElementById("ab-custom-request");
-    if (textarea) {
-      textarea.value = info.prompt(eventUrl);
-      textarea.scrollIntoView({ behavior: "smooth", block: "center" });
-      textarea.focus();
+    if (textarea) textarea.value = request;
+    const ticker = document.getElementById("ab-custom-ticker");
+    (ticker || textarea)?.scrollIntoView({ behavior: "smooth", block: "center" });
+
+    if (typeof runDirectSignalBuild === "function") {
+      await runDirectSignalBuild(request, "builder");
     }
+  }
+
+  // Called by app.js's runDirectSignalBuild() (scope="builder" only) once a
+  // directly-built list finishes. Folds the new list straight into the
+  // discovery grid — selected, under its signal — instead of leaving it
+  // stranded only in the Build From Scratch result panel. Returns the signal
+  // key it attached to, or null if this build wasn't for a missing signal (so
+  // app.js's confirmation message can vary accordingly).
+  function onCustomListBuilt({ list_id, name }) {
+    const signal = _pendingMissingSignal;
+    _pendingMissingSignal = null;
+    if (!signal) return null;
+    _buildingSignals.delete(signal);
+
+    const id = String(list_id);
+    if (!_cards.some(c => String(c.list_id) === id)) {
+      _cards.push({
+        list_id: id,
+        name: name || `List ${id}`,
+        signal,
+        size: null,
+        reason: "Created via Build From Scratch",
+      });
+    }
+    _selected.add(id);
+    renderMissingSignals(_missingSignals.filter(s => s !== signal));
+    document.getElementById("ab-results").classList.remove("hidden");
+    renderCards();
+    return signal;
+  }
+
+  // Called by app.js's runDirectSignalBuild() when a direct build fails —
+  // clears the in-flight state so the missing-signal card's button resets to
+  // "Create list" instead of staying stuck on "Building…".
+  function onCustomBuildFailed() {
+    const signal = _pendingMissingSignal;
+    _pendingMissingSignal = null;
+    if (signal) _buildingSignals.delete(signal);
+    renderMissingSignals(_missingSignals);
   }
 
   function updateSummary() {
@@ -250,8 +305,11 @@ const AudienceBuilder = (() => {
       try { msg = JSON.parse(evt.data); } catch (_) { return; }
 
       if (msg.type === "output") {
-        if (ticker) {
-          ticker.textContent += (ticker.textContent ? "\n" : "") + (msg.text || "");
+        if (ticker && msg.text) {
+          const line = document.createElement("div");
+          line.className = "ab-log-line";
+          line.textContent = msg.text;
+          ticker.appendChild(line);
           ticker.scrollTop = ticker.scrollHeight;
         }
       } else if (msg.type === "discovered") {
@@ -346,7 +404,10 @@ const AudienceBuilder = (() => {
       const el = document.getElementById("ab-build-status");
       if (el) {
         el.classList.remove("hidden");
-        el.innerHTML = `<span style="color:#166534">✅ Master list ready — <a href="${escapeHtml(data.hubspot_url || "#")}" target="_blank" rel="noopener">${escapeHtml(data.name || "view in HubSpot")}</a> (List ID ${escapeHtml(String(data.list_id))})</span>`;
+        const sizeText = data.size != null && data.size !== "unknown"
+          ? ` · ${escapeHtml(String(Number(data.size).toLocaleString?.() || data.size))} contacts`
+          : "";
+        el.innerHTML = `<div class="success-box">✅ Master list ready — <a href="${escapeHtml(data.hubspot_url || "#")}" target="_blank" rel="noopener">${escapeHtml(data.name || "view in HubSpot")}</a> (List ID ${escapeHtml(String(data.list_id))}${sizeText})</div>`;
       }
     } catch (e) {
       showError("ab-build-status", e.message);
@@ -356,6 +417,7 @@ const AudienceBuilder = (() => {
   }
 
   function discardCustomPlan() {
+    _pendingMissingSignal = null;
     const planActions = document.getElementById("ab-custom-plan-actions");
     if (planActions) planActions.classList.add("hidden");
     clearAudienceQuestions("builder");
@@ -373,5 +435,8 @@ const AudienceBuilder = (() => {
     if (buildBtn) buildBtn.disabled = false;
   }
 
-  return { discover, selectAll, selectNone, toggleCard, onSearch, addFromSearch, buildMaster, discardCustomPlan, createMissingSignal };
+  return {
+    discover, selectAll, selectNone, toggleCard, onSearch, addFromSearch, buildMaster,
+    discardCustomPlan, createMissingSignal, onCustomListBuilt, onCustomBuildFailed,
+  };
 })();
