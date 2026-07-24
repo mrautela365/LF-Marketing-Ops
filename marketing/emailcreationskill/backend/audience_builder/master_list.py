@@ -66,9 +66,9 @@ def compose_master_list_from_ids(list_ids: list[str], name: str = "", event_url:
                                   brand_short: str = "", event_name: str = "",
                                   event_dates: list[str] | None = None) -> dict:
     """Build the master list from a set of already-discovered/selected HubSpot
-    list IDs. If a list with the resolved name already exists, update its
-    filters in place instead of erroring (mirrors audience_tools' own RULE 10
-    reuse-don't-duplicate behavior)."""
+    list IDs. If a list with the resolved name already exists, create a new
+    list with a timestamp appended to the name rather than overwriting
+    whichever list currently holds that name."""
     if not list_ids:
         raise ValueError("list_ids must not be empty")
 
@@ -82,16 +82,8 @@ def compose_master_list_from_ids(list_ids: list[str], name: str = "", event_url:
     except RuntimeError as exc:
         if "already exist" not in str(exc).lower():
             raise
-        search_resp = audience_tools.hubspot_search_lists(resolved_name)
-        match = next(
-            (r for r in search_resp.get("results", []) if r.get("name") == resolved_name),
-            None,
-        )
-        if not match:
-            raise
-        result = audience_tools.hubspot_update_list_filters(match["listId"], filter_branch)
-        result.setdefault("name", resolved_name)
-        result.setdefault("size", match.get("size", "unknown"))
+        resolved_name = f"{resolved_name} ({datetime.datetime.now().strftime('%Y-%m-%d %H:%M')})"
+        result = audience_tools.hubspot_create_list(resolved_name, filter_branch)
 
     return {
         "list_id": result.get("listId"),

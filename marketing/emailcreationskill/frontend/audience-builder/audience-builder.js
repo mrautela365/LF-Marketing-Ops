@@ -12,49 +12,175 @@ const AudienceBuilder = (() => {
     added: "Manually Added",
   };
 
+  const SIGNAL_INFO = {
+    project_opt_in: {
+      label: "Project Opt-In",
+      description: "Contacts opted into this project's own email subscription type (not the general LF newsletter).",
+      prompt: (eventUrl) => `Build a list of contacts opted into this project's own email subscription type (project-specific opt-in, not the general Linux Foundation newsletter) for the event at ${eventUrl}.`,
+    },
+    lf_newsletter_opt_in: {
+      label: "LF Newsletter Opt-In",
+      description: "Contacts opted into the Linux Foundation Newsletter subscription type.",
+      prompt: (eventUrl) => `Build a list of contacts opted into the Linux Foundation Newsletter subscription type, relevant to the event at ${eventUrl}.`,
+    },
+    event_registration: {
+      label: "Event Registration",
+      description: "All-time registrants for this event, across all past editions.",
+      prompt: (eventUrl) => `Build a list of all-time registrants (all editions) for the event at ${eventUrl}.`,
+    },
+    education_enrollment: {
+      label: "Education Enrollment",
+      description: "Contacts enrolled in LFX Education courses related to this event's topic area.",
+      prompt: (eventUrl) => `Build a list of contacts enrolled in LFX Education courses related to the topic area of the event at ${eventUrl}.`,
+    },
+    page_view: {
+      label: "Page View",
+      description: "Contacts who viewed this event's page (page-view based segment).",
+      prompt: (eventUrl) => `Build a page-view based list of contacts who viewed the event page at ${eventUrl}.`,
+    },
+  };
+
+  // Section-grouping order + per-section accent/caption — mirrors the
+  // layered "Layer 1 / Layer 2 / Layer 3" grouping from the audience-engine
+  // reference, applied over our own 5-signal taxonomy instead of its
+  // lookalike/intent/profile-fit buckets.
+  const SIGNAL_ORDER = [
+    "event_registration",
+    "project_opt_in",
+    "lf_newsletter_opt_in",
+    "education_enrollment",
+    "page_view",
+    "uncertain",
+    "added",
+  ];
+  const SIGNAL_DESC = {
+    project_opt_in: "Opted into this project's own subscription type",
+    lf_newsletter_opt_in: "Opted into the Linux Foundation newsletter",
+    event_registration: "All-time registrants for this event",
+    education_enrollment: "Enrolled in related education content",
+    page_view: "Viewed this event's page",
+    uncertain: "Needs manual review before including",
+    added: "Manually added via search",
+  };
+  const SIGNAL_ACCENT = {
+    project_opt_in: "var(--blue)",
+    lf_newsletter_opt_in: "#6d28d9",
+    event_registration: "#166534",
+    education_enrollment: "var(--yellow)",
+    page_view: "#be185d",
+    uncertain: "var(--gray-400)",
+    added: "var(--gray-500)",
+  };
+
   let _cards = [];
   let _selected = new Set();
+  let _missingSignals = [];
   let _searchTimer = null;
   let _discoverES = null;
 
-  function _signalBadge(signal) {
-    const label = SIGNAL_LABELS[signal] || signal;
-    return `<span class="ab-signal-badge ab-signal-${escapeHtml(signal)}">${escapeHtml(label)}</span>`;
+  function _cardHtml(c) {
+    const id = String(c.list_id);
+    const selected = _selected.has(id);
+    const stats = [
+      { label: "Contacts", value: c.size != null ? Number(c.size).toLocaleString() : "—" },
+    ];
+    if (c.list_type) stats.push({ label: "List type", value: c.list_type });
+    const statsHtml = stats.map(s => `
+      <div class="ab-stat-box">
+        <div class="ab-stat-label">${escapeHtml(s.label)}</div>
+        <div class="ab-stat-value">${escapeHtml(String(s.value))}</div>
+      </div>`).join("");
+    return `
+      <div class="ab-card${selected ? " selected" : ""}" onclick="AudienceBuilder.toggleCard('${id}')">
+        <div class="ab-card-top">
+          <span class="ab-card-check"></span>
+        </div>
+        <div class="ab-card-name">${escapeHtml(c.name || "(untitled list)")}</div>
+        <div class="ab-card-meta"><span>ID ${escapeHtml(id)}</span></div>
+        <div class="ab-stat-row">${statsHtml}</div>
+        ${c.reason ? `<div class="ab-card-reason">${escapeHtml(c.reason)}</div>` : ""}
+      </div>`;
   }
 
   function renderCards() {
-    const grid = document.getElementById("ab-card-grid");
-    if (!grid) return;
-    grid.innerHTML = _cards.map(c => {
-      const id = String(c.list_id);
-      const selected = _selected.has(id);
-      const stats = [
-        { label: "Contacts", value: c.size != null ? Number(c.size).toLocaleString() : "—" },
-      ];
-      if (c.list_type) stats.push({ label: "List type", value: c.list_type });
-      const statsHtml = stats.map(s => `
-        <div class="ab-stat-box">
-          <div class="ab-stat-label">${escapeHtml(s.label)}</div>
-          <div class="ab-stat-value">${escapeHtml(String(s.value))}</div>
-        </div>`).join("");
+    const container = document.getElementById("ab-card-sections");
+    if (!container) return;
+
+    const bySignal = new Map();
+    _cards.forEach(c => {
+      const sig = c.signal || "uncertain";
+      if (!bySignal.has(sig)) bySignal.set(sig, []);
+      bySignal.get(sig).push(c);
+    });
+
+    container.innerHTML = SIGNAL_ORDER.filter(sig => bySignal.has(sig)).map(sig => {
+      const group = bySignal.get(sig);
+      const cardsHtml = group.map(_cardHtml).join("");
+      const accent = SIGNAL_ACCENT[sig] || "var(--gray-300)";
       return `
-        <div class="ab-card${selected ? " selected" : ""}" onclick="AudienceBuilder.toggleCard('${id}')">
-          <div class="ab-card-top">
-            <span class="ab-card-check"></span>
-            ${_signalBadge(c.signal || "uncertain")}
+        <div class="ab-section">
+          <div class="ab-section-header" style="border-left-color:${accent}">
+            <span class="ab-section-title">${escapeHtml(SIGNAL_LABELS[sig] || sig)}</span>
+            <span class="ab-section-count">${group.length} list${group.length === 1 ? "" : "s"}</span>
+            <span class="ab-section-desc">${escapeHtml(SIGNAL_DESC[sig] || "")}</span>
           </div>
-          <div class="ab-card-name">${escapeHtml(c.name || "(untitled list)")}</div>
-          <div class="ab-card-meta"><span>ID ${escapeHtml(id)}</span></div>
-          <div class="ab-stat-row">${statsHtml}</div>
-          ${c.reason ? `<div class="ab-card-reason">${escapeHtml(c.reason)}</div>` : ""}
+          <div class="ab-card-grid">${cardsHtml}</div>
         </div>`;
     }).join("");
+
     updateSummary();
   }
 
+  function renderMissingSignals(missing) {
+    _missingSignals = missing || [];
+    const section = document.getElementById("ab-missing-section");
+    const grid = document.getElementById("ab-missing-grid");
+    if (!section || !grid) return;
+    if (!_missingSignals.length) {
+      section.classList.add("hidden");
+      grid.innerHTML = "";
+      return;
+    }
+    grid.innerHTML = _missingSignals.map(sig => {
+      const info = SIGNAL_INFO[sig] || { label: sig, description: "" };
+      return `
+        <div class="ab-card ab-card-missing">
+          <div class="ab-card-top">
+            <span class="ab-signal-badge ab-signal-${escapeHtml(sig)}">${escapeHtml(info.label)}</span>
+          </div>
+          <div class="ab-card-reason" style="border-top:none;padding-top:0;margin-top:0">${escapeHtml(info.description)}</div>
+          <div class="btn-row" style="margin-top:10px">
+            <button class="btn btn-outline" type="button" onclick="AudienceBuilder.createMissingSignal('${sig}')">Create list</button>
+          </div>
+        </div>`;
+    }).join("");
+    section.classList.remove("hidden");
+  }
+
+  function createMissingSignal(signalKey) {
+    const info = SIGNAL_INFO[signalKey];
+    if (!info) return;
+    const urlInput = document.getElementById("ab-event-url");
+    const eventUrl = ((urlInput && urlInput.value) || "").trim();
+    const textarea = document.getElementById("ab-custom-request");
+    if (textarea) {
+      textarea.value = info.prompt(eventUrl);
+      textarea.scrollIntoView({ behavior: "smooth", block: "center" });
+      textarea.focus();
+    }
+  }
+
   function updateSummary() {
-    const summary = document.getElementById("ab-summary");
-    if (summary) summary.textContent = `${_cards.length} list(s) found — ${_selected.size} selected`;
+    const segEl = document.getElementById("ab-stat-segments");
+    if (segEl) segEl.textContent = String(_cards.length);
+
+    const totalContacts = _cards.reduce((sum, c) => sum + (typeof c.size === "number" ? c.size : 0), 0);
+    const totalEl = document.getElementById("ab-stat-contacts");
+    if (totalEl) totalEl.textContent = totalContacts ? totalContacts.toLocaleString() : "—";
+
+    const selEl = document.getElementById("ab-stat-selected");
+    if (selEl) selEl.textContent = String(_selected.size);
+
     const buildBtn = document.getElementById("ab-build-master-btn");
     if (buildBtn) buildBtn.disabled = _selected.size === 0;
   }
@@ -88,6 +214,7 @@ const AudienceBuilder = (() => {
     _cards = [];
     _selected = new Set();
     renderCards();
+    renderMissingSignals([]);
     document.getElementById("ab-results").classList.add("hidden");
 
     const discoverBtn = document.getElementById("ab-discover-btn");
@@ -133,12 +260,14 @@ const AudienceBuilder = (() => {
         _cards = found.concat(uncertain);
         document.getElementById("ab-results").classList.remove("hidden");
         renderCards();
+        renderMissingSignals(msg.missing_signals);
       }
 
       if (msg.done) {
         _discoverES.close();
         _discoverES = null;
         if (discoverBtn) discoverBtn.disabled = false;
+        renderMissingSignals(msg.missing_signals);
         if (msg.success === false && !_cards.length) {
           showError("ab-discover-status", "Discovery finished without finding any lists — see the log above.");
         }
@@ -244,5 +373,5 @@ const AudienceBuilder = (() => {
     if (buildBtn) buildBtn.disabled = false;
   }
 
-  return { discover, selectAll, selectNone, toggleCard, onSearch, addFromSearch, buildMaster, discardCustomPlan };
+  return { discover, selectAll, selectNone, toggleCard, onSearch, addFromSearch, buildMaster, discardCustomPlan, createMissingSignal };
 })();

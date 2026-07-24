@@ -82,8 +82,9 @@ async def search_lists(q: str = ""):
 
 @router.post("/compose-master")
 async def compose_master(req: ComposeMasterListRequest):
-    """Build (or update in place, if it already exists) the master list from the
-    selected/added list IDs, as an OR-of-IN_LIST filterBranch."""
+    """Build the master list from the selected/added list IDs, as an
+    OR-of-IN_LIST filterBranch. If a list with the resolved name already
+    exists, a new list is created with a timestamp appended to the name."""
     if not req.list_ids:
         raise HTTPException(status_code=400, detail="list_ids must not be empty")
 

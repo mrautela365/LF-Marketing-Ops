@@ -2,7 +2,14 @@
 Pure-logic tests for master_list.py — no HubSpot/network calls.
 Run: pytest backend/audience_builder/test_master_list.py -v
 """
-from audience_builder.master_list import build_in_list_or_branch, build_master_list_name
+import pytest
+
+import audience_tools
+from audience_builder.master_list import (
+    build_in_list_or_branch,
+    build_master_list_name,
+    compose_master_list_from_ids,
+)
 
 
 class TestBuildInListOrBranch:
@@ -74,3 +81,34 @@ class TestBuildMasterListName:
         name = build_master_list_name()
         assert name.endswith("Audience - Master")
         assert name[2] == "Q"
+
+
+class TestComposeMasterListNameCollision:
+    def test_retries_with_timestamp_on_name_collision(self, monkeypatch):
+        calls = []
+
+        def fake_create(name, filter_branch):
+            calls.append(name)
+            if len(calls) == 1:
+                raise RuntimeError("HubSpot 400: a list with this name already exists")
+            return {"listId": "999", "name": name, "size": 42, "hubspot_url": "https://example.com"}
+
+        monkeypatch.setattr(audience_tools, "hubspot_create_list", fake_create)
+
+        result = compose_master_list_from_ids(["111", "222"], name="Existing Name")
+
+        assert len(calls) == 2
+        assert calls[0] == "Existing Name"
+        assert calls[1] != "Existing Name"
+        assert calls[1].startswith("Existing Name (")
+        assert result["name"] == calls[1]
+        assert result["list_id"] == "999"
+
+    def test_reraises_non_collision_errors(self, monkeypatch):
+        def fake_create(name, filter_branch):
+            raise RuntimeError("HubSpot 500: internal error")
+
+        monkeypatch.setattr(audience_tools, "hubspot_create_list", fake_create)
+
+        with pytest.raises(RuntimeError, match="internal error"):
+            compose_master_list_from_ids(["111"], name="Whatever")

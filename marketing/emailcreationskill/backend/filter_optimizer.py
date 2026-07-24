@@ -208,9 +208,24 @@ class FilterOptimizer:
 
         # Check each filter position across all branches
         for filter_idx, ref_filter in enumerate(ref_filters):
-            # Skip IN_LIST/NOT_IN_LIST — values are identifiers, not combinable
-            if ref_filter.get("filterType") in ("IN_LIST",):
-                # In_LIST values are list IDs (identifiers), not combinable
+            # IN_LIST/NOT_IN_LIST filters are only safe to fold away (keep the
+            # template's copy, drop the rest) when every branch references the
+            # SAME listId — i.e. it's a shared gate alongside a differing
+            # PROPERTY filter. The branch signature doesn't capture listId, so
+            # branches with genuinely DIFFERENT listIds (e.g. one AND-branch per
+            # selected list, each IN_LIST being the only filter) would otherwise
+            # look "identical" and silently collapse down to just the first
+            # branch's listId, dropping every other list. Guard against that here.
+            if ref_filter.get("filterType") in ("IN_LIST", "NOT_IN_LIST"):
+                ref_list_id = str(ref_filter.get("listId"))
+                for branch in branches[1:]:
+                    other_filter = branch.get("filters", [])[filter_idx]
+                    if str(other_filter.get("listId")) != ref_list_id:
+                        self._log(
+                            f"  Skipping: filter {filter_idx} is IN_LIST but listId "
+                            f"differs between branches"
+                        )
+                        return False
                 continue
 
             # Check PROPERTY filters

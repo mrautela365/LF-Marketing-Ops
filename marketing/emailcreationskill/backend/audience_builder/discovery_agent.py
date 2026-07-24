@@ -29,6 +29,14 @@ if not log.handlers:
 
 _jobs: dict[str, queue.Queue] = {}
 
+ALL_SIGNALS = [
+    "project_opt_in",
+    "lf_newsletter_opt_in",
+    "event_registration",
+    "education_enrollment",
+    "page_view",
+]
+
 DISCOVERY_TOOLS = llm_gateway.openai_tools_to_anthropic(TOOL_DEFS_OPENAI)
 
 DISCOVERY_SYSTEM = (
@@ -123,6 +131,13 @@ def _normalize_list_items(items: list) -> list:
     return normalized
 
 
+def _compute_missing_signals(lists: list) -> list:
+    """Which of the 5 qualifying signals had zero matched lists — surfaced in the
+    UI as a separate 'create this list' panel rather than left implicit."""
+    found = {item.get("signal") for item in (lists or [])}
+    return [s for s in ALL_SIGNALS if s not in found]
+
+
 def _discovery_execute(name: str, tool_input: dict) -> str:
     handler = TOOL_HANDLERS.get(name)
     if not handler:
@@ -163,8 +178,9 @@ def _run_discovery_agent(prompt: str, q: queue.Queue) -> None:
                 inp = ev.get("input") or {}
                 lists = _normalize_list_items(inp.get("lists"))
                 uncertain = _normalize_list_items(inp.get("uncertain"))
+                missing_signals = _compute_missing_signals(lists)
                 q.put({"type": "output", "text": f"✅ {len(lists)} list(s) discovered, {len(uncertain)} uncertain"})
-                q.put({"type": "discovered", "lists": lists, "uncertain": uncertain})
+                q.put({"type": "discovered", "lists": lists, "uncertain": uncertain, "missing_signals": missing_signals})
             elif name == "snowflake_query":
                 q.put({"type": "output", "text": f"🔧 {name}:\n{ev.get('input', {}).get('sql', '')}"})
             else:
@@ -184,12 +200,14 @@ def _run_discovery_agent(prompt: str, q: queue.Queue) -> None:
         )
         log.info(f"[DISCOVERY] done — {len(discovered['lists'])} lists, {len(discovered['uncertain'])} uncertain")
         q.put({"type": "done", "done": True, "success": True,
-               "lists": discovered["lists"], "uncertain": discovered["uncertain"]})
+               "lists": discovered["lists"], "uncertain": discovered["uncertain"],
+               "missing_signals": _compute_missing_signals(discovered["lists"])})
     except Exception as exc:
         log.error(f"[DISCOVERY] fatal error: {exc}", exc_info=True)
         q.put({"type": "output", "text": f"❌ Discovery error: {exc}"})
         q.put({"type": "done", "done": True, "success": False,
-               "lists": discovered["lists"], "uncertain": discovered["uncertain"]})
+               "lists": discovered["lists"], "uncertain": discovered["uncertain"],
+               "missing_signals": _compute_missing_signals(discovered["lists"])})
 
 
 def start_discovery_job(event_url: str, qa: str = "") -> str:

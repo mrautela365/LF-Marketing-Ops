@@ -439,14 +439,27 @@
 
     <div class="card hidden" id="ab-results">
       <div class="ab-toolbar">
-        <div class="ab-summary" id="ab-summary">0 lists found</div>
+        <div class="ab-toolbar-stats">
+          <div class="ab-toolbar-stat">
+            <div class="ab-toolbar-stat-label">Segments</div>
+            <div class="ab-toolbar-stat-value" id="ab-stat-segments">0</div>
+          </div>
+          <div class="ab-toolbar-stat">
+            <div class="ab-toolbar-stat-label">Total Contacts</div>
+            <div class="ab-toolbar-stat-value" id="ab-stat-contacts">—</div>
+          </div>
+          <div class="ab-toolbar-stat">
+            <div class="ab-toolbar-stat-label">Selected</div>
+            <div class="ab-toolbar-stat-value" id="ab-stat-selected">0</div>
+          </div>
+        </div>
         <div class="ab-toolbar-right">
           <button class="btn btn-outline" type="button" onclick="AudienceBuilder.selectAll()">Select All</button>
           <button class="btn btn-outline" type="button" onclick="AudienceBuilder.selectNone()">Clear</button>
         </div>
       </div>
 
-      <div class="ab-card-grid" id="ab-card-grid"></div>
+      <div class="ab-sections" id="ab-card-sections"></div>
 
       <div style="margin-top:20px">
         <div class="section-subhead">Add another list</div>
@@ -466,6 +479,14 @@
         </button>
       </div>
       <div id="ab-build-status" class="hidden" style="margin-top:10px;font-size:13px"></div>
+    </div>
+
+    <div class="card hidden" id="ab-missing-section">
+      <div class="card-title">Qualifying Lists Not Found</div>
+      <div class="card-desc">
+        No existing list was found for these signals. Create one from scratch below.
+      </div>
+      <div class="ab-card-grid" id="ab-missing-grid"></div>
     </div>
 
     <!-- ── Build From Scratch: reuses the Custom Audience flow via scope="builder" ── -->
