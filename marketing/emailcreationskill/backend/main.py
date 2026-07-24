@@ -24,6 +24,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from models import PlanRequest, CloneRequest, ContentRequest, ChatRequest, GenerateContentRequest, StagingBriefRequest, AsanaPlanRequest, AudiencePlanRequest, AudienceRunRequest, BuildAudienceRequest, SetSendListRequest, UpdateSectionsRequest, CustomAudiencePlanRequest, CustomAudienceRunRequest
 import session_store
 import agent
+from core import agent as core_agent
 import audience_tools
 from audience_builder.routes import router as audience_builder_router
 from config import ANTHROPIC_API_KEY, HUBSPOT_PORTAL_ID, INTERNAL_API_TOKEN, ASANA_ACCESS_TOKEN, LITELLM_BASE_URL, LITELLM_API_KEY
@@ -824,7 +825,7 @@ async def clone_email(req: CloneRequest):
     # Verify a real clone happened — use only the ID set during THIS turn
     # agent._session_email_id is reset to None at the start of clone_turn, so
     # any value here was set by the clone_email tool call in this request.
-    real_email_id = agent._session_email_id
+    real_email_id = core_agent._session_email_id
     if not real_email_id:
         log.error("[CLONE] No email_id found — Claude may have hallucinated the response without calling clone_email")
         raise HTTPException(
@@ -1000,7 +1001,7 @@ async def stage_from_brief(req: StagingBriefRequest):
         clone_result = hubspot_tools.clone_email(req.clone_base_id, req.email_name)
         new_email_id = clone_result["email_id"]
         draft_url    = clone_result["draft_url"]
-        agent._session_email_id = new_email_id   # register safety lock
+        core_agent._session_email_id = new_email_id   # register safety lock
         log.info(f"[BRIEF] cloned → {new_email_id}")
 
         # ── Step 2: Apply settings ───────────────────────────────────────────
