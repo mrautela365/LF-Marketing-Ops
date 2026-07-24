@@ -33,6 +33,21 @@ from config import (
     tag_asset_name,
 )
 import llm_gateway   # ALL AI calls route through this single deterministic gateway
+from filter_optimizer import FilterOptimizer
+
+
+def _optimize_filter_branch(filter_branch: dict) -> dict:
+    """
+    Apply automatic filter optimization to reduce redundant conditions.
+
+    Combines multiple AND branches with identical structure but different
+    values into a single combined branch using MULTISTRING values.
+    """
+    optimizer = FilterOptimizer(verbose=True)
+    optimized = optimizer.optimize(filter_branch)
+    if optimizer.optimizations_applied:
+        log.info(optimizer.summary())
+    return optimized
 
 
 def _json_default(obj):
@@ -172,6 +187,9 @@ def hubspot_get_list(list_id: str) -> dict:
 
 def hubspot_create_list(name: str, filter_branch: dict) -> dict:
     """Create a new dynamic HubSpot contact list."""
+    # Apply automatic filter optimization
+    filter_branch = _optimize_filter_branch(filter_branch)
+
     url = f"{_HS_BASE}/crm/v3/lists/"
     payload = {
         "name": tag_asset_name(name),
@@ -185,7 +203,7 @@ def hubspot_create_list(name: str, filter_branch: dict) -> dict:
     data = r.json()
     list_id = data.get("listId") or data.get("list", {}).get("listId")
     hs_url = (
-        f"https://app.hubspot.com/contacts/{HUBSPOT_PORTAL_ID}/lists/{list_id}"
+        f"https://app.hubspot.com/contacts/{HUBSPOT_PORTAL_ID}/objectLists/{list_id}/filters"
         if list_id else None
     )
     return {
@@ -198,11 +216,14 @@ def hubspot_create_list(name: str, filter_branch: dict) -> dict:
 
 def hubspot_update_list_filters(list_id: str, filter_branch: dict) -> dict:
     """Replace the filter branch on an existing HubSpot list."""
+    # Apply automatic filter optimization
+    filter_branch = _optimize_filter_branch(filter_branch)
+
     url = f"{_HS_BASE}/crm/v3/lists/{list_id}/filter-branch"
     r = requests.put(url, headers=_hs_headers(), json={"filterBranch": filter_branch}, timeout=15)
     if not r.ok:
         raise RuntimeError(f"HubSpot {r.status_code}: {r.text[:500]}")
-    hs_url = f"https://app.hubspot.com/contacts/{HUBSPOT_PORTAL_ID}/lists/{list_id}"
+    hs_url = f"https://app.hubspot.com/contacts/{HUBSPOT_PORTAL_ID}/objectLists/{list_id}/filters"
     return {"listId": list_id, "updated": True, "hubspot_url": hs_url}
 
 
@@ -327,13 +348,18 @@ TOOL_DEFS_OPENAI = [
         ["url"]),
 
     _fn("hubspot_search_campaigns",
-        "Search HubSpot marketing emails by keyword (name or subject). Use to find prior sends for an event.",
-        {"query": {"type": "string", "description": "Search keyword, e.g. 'KubeCon North America 2025'"}},
+        "Search HubSpot marketing emails by keyword (name or subject). Use to find prior sends for an event. "
+        "Query broad first (event series name alone, e.g. 'Open Source Summit') — this returns every edition/"
+        "country in one call. Only narrow the query if the broad one returns nothing; don't guess quarter/"
+        "country/year permutations one at a time.",
+        {"query": {"type": "string", "description": "Search keyword — event series name alone, e.g. 'KubeCon' not 'KubeCon North America 26Q3'"}},
         ["query"]),
 
     _fn("hubspot_search_lists",
-        "Search HubSpot contact lists by name keyword.",
-        {"query": {"type": "string", "description": "List name keyword to search"}},
+        "Search HubSpot contact lists by name keyword. Query broad first (event series name alone) to see "
+        "every edition/country/quarter variant in one call, then pick the match you need — don't iterate "
+        "narrow guesses one at a time.",
+        {"query": {"type": "string", "description": "List name keyword — event series name alone, not a full quarter+country guess"}},
         ["query"]),
 
     _fn("hubspot_get_list",
@@ -385,6 +411,34 @@ TOOL_DEFS_OPENAI = [
         ),
         {"filename": {"type": "string", "description": "Filename only, e.g. 'brand-master-lists.md' or 'region-map.md'"}},
         ["filename"]),
+
+    _fn("present_open_questions",
+        (
+            "Present open/blocking questions to the user as selectable UI instead of plain text. "
+            "Call this ONCE, during PLANNING only, when something must be confirmed before the "
+            "segment plan can be finalized (location scope, which event(s), job-title approval, "
+            "mailability gate, suppressions to apply, etc). After calling it, stop your turn — "
+            "do not keep building further plan detail past this point; the user's answers will be "
+            "appended to a new planning pass."
+        ),
+        {
+            "questions": {
+                "type": "array",
+                "description": "One entry per open question.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "question":     {"type": "string", "description": "The question text"},
+                        "why_it_blocks": {"type": "string", "description": "Why this blocks the build"},
+                        "options":      {"type": "array", "items": {"type": "string"},
+                                          "description": "Selectable options, e.g. ['Yes', 'No', 'Seoul only', 'Seoul + South Korea']"},
+                        "allow_custom": {"type": "boolean", "description": "Whether a free-text 'Other' answer is allowed (default true)"},
+                    },
+                    "required": ["question", "options"],
+                },
+            },
+        },
+        ["questions"]),
 ]
 
 TOOL_HANDLERS: dict = {
@@ -397,7 +451,15 @@ TOOL_HANDLERS: dict = {
     "hubspot_get_event_types":     lambda i: hubspot_get_event_types(),
     "snowflake_query":             lambda i: snowflake_query(i["sql"]),
     "read_reference_file":         lambda i: read_reference_file(i["filename"]),
+    "present_open_questions":      lambda i: present_open_questions(i["questions"]),
 }
+
+
+def present_open_questions(questions: list) -> dict:
+    """No side effects here — the SSE 'question' event is emitted by _run_agent's
+    on_event handler (which has queue access). This just acks the tool call so the
+    agent loop can continue/stop cleanly."""
+    return {"presented": len(questions or [])}
 
 # ── Gateway integration ───────────────────────────────────────────────────────
 # The same 9 tools in the canonical (Anthropic) format the gateway consumes, plus a
@@ -529,6 +591,17 @@ hubspot_search_campaigns / hubspot_search_lists for sibling events (other
 countries in the same region, current cycle) to identify candidates for the
 Expanded Web Visitors and [Region] Event Registrants lists.
 
+Search efficiently — do NOT brute-force many quarter/country/keyword permutations
+one query at a time (e.g. "26Q3 United States", "26Q3 26Q4 US registrants",
+"Open Source Summit US 2026", "Open Source Summit North America 2026", ...).
+List names follow the pattern "(Segment) <Quarter> - <Event Series Name> <Year> -
+<Country> Geo", so ONE broad query on just the event SERIES name (e.g.
+"Open Source Summit", no quarter/country/year) returns every edition/country in
+one shot — inspect that result set for the sibling country you need instead of
+re-querying with a new guess each time a query comes back empty. Same for
+hubspot_search_campaigns: query the series name alone first. Only issue a second,
+more specific query if the broad one returns nothing at all.
+
 For groups 5 and 7, factor in this event's domain bucket + project/technology
 focus (from STEP 1) when evaluating candidates. Group 5's exact past EVENT_NAME
 values will be re-queried fresh from Snowflake in the BUILDING phase (per the
@@ -646,6 +719,14 @@ Do not recommend rebuilding, replacing, or reusing any of them.
 
 **Open questions / flags** — anything to confirm before building.
 
+If any open question is genuinely blocking (something the build cannot proceed
+without confirming — location scope, which event(s), job-title approval,
+mailability gate, suppressions to apply), ALSO call the present_open_questions
+tool with one entry per blocking question (question text, why it blocks, and a
+short list of selectable options) so the user can answer via the UI instead of
+free text. Call it once, after finishing the rest of this plan output, and stop
+your turn immediately after — do not keep narrating past it.
+
 End with: "Ready to proceed? Say yes and I'll build the segment in HubSpot."
 """
 
@@ -693,9 +774,15 @@ detail you need is genuinely missing from the data above.
 """
 
 
-def build_planning_prompt(url: str, prescraped: dict | None = None) -> str:
+def build_planning_prompt(url: str, prescraped: dict | None = None, qa: str = "") -> str:
     step1 = _format_prescraped_step1(prescraped) if prescraped else _STEP1_SCRAPE
-    return PLANNING_PROMPT_TEMPLATE.format(url=url, step1=step1)
+    prompt = PLANNING_PROMPT_TEMPLATE.format(url=url, step1=step1)
+    if qa:
+        prompt += (
+            f"\n\nThe user has already answered these clarifying questions from a prior "
+            f"planning pass — incorporate the answers directly, do not ask them again:\n{qa}\n"
+        )
+    return prompt
 
 
 BUILDING_PROMPT = """Build ALL the HubSpot audience lists for this Linux Foundation event.
@@ -728,12 +815,14 @@ RULE 2 — communitySeg lists MUST NEVER be used, referenced, or rebuilt:
 RULE 3 — Print ## BUILD PLAN before creating anything in HubSpot.
   Number each list to create. State its filter type and logic.
 
-RULE 4 — MASTER LIST IS MANDATORY. You MUST always build the master list as the final step.
-  Even if some inclusion lists failed, build the master from whatever IDs you DO have.
-  Never end without creating the master list. It is the primary deliverable.
+RULE 4 — MASTER LIST IS MANDATORY. You MUST always build (create OR, per RULE 10,
+  update-in-place) the master list as the final step. Even if some inclusion lists
+  failed, build the master from whatever IDs you DO have. Never end without a master
+  list. It is the primary deliverable.
 
 RULE 5 — After EVERY successful hubspot_create_list call print:
   ✅ [List name] created — ID: [listId] — [hubspot_url]
+  (see RULE 10 for the update-in-place case, which prints a different line)
 
 RULE 6 — If unsure about anything → skip and add to ## FLAGGED FOR REVIEW.
 
@@ -770,6 +859,78 @@ RULE 9 — PRODUCT/TECHNOLOGY DOMAIN FIT IS MANDATORY for groups 4, 5, and 7
   4, apply it only if/when a topic-level property is found (see STEP 2 below)
   — otherwise group 4 keeps its existing country-only filter and the gap is
   flagged, not silently dropped.
+
+RULE 10 — REUSE, DON'T DUPLICATE. Before calling hubspot_create_list for ANY list in
+  this build (each inclusion list in STEP 4, the Combined Suppression list in STEP 5B,
+  and the Master list in STEP 6), call hubspot_search_lists with that list's exact
+  intended name FIRST. If a list with that EXACT name already exists — this happens
+  when an event's build is re-run after an earlier run (e.g. to pick up a plan fix or
+  a retry) — call hubspot_update_list_filters on its existing ID with the new
+  filterBranch instead of calling hubspot_create_list and making a duplicate. Print
+  🔁 [List name] updated in place — ID: [listId] — [hubspot_url]
+  instead of the RULE 5 "created" line for that list. Only call hubspot_create_list
+  when hubspot_search_lists finds no exact-name match. This keeps re-running a build
+  for the same event idempotent instead of littering the portal with duplicate
+  inclusion/suppression/master lists every time.
+
+RULE 11 — USER-ADDED FILTERS. If the Segment Plan below contains a
+  "## USER-ADDED FILTERS" section, each line there is an extra condition the user
+  typed in during plan review (e.g. Property "job_title" contains "director"). Add
+  EVERY listed condition as an additional PROPERTY filter inside EACH inclusion
+  list's AND branch(es) you build in STEP 4 (ANDed with that branch's existing
+  filters — same nesting used for the RULE 9 domain-fit filter). Translate the
+  plain-English operator to the matching HubSpot PROPERTY operation: "is equal to"
+  → IS_EQUAL_TO, "contains" → CONTAINS_TOKEN, "is any of" → IS_ANY_OF, "is not any
+  of" → NOT_ANY_OF, "is known" → HAS_PROPERTY (no value), "is unknown" →
+  NOT_HAS_PROPERTY (no value); operationType "MULTISTRING" unless the property is a
+  HubSpot enumeration property, in which case use "ENUMERATION". Apply to inclusion
+  lists only — never to the Combined Suppression list. If a listed property name
+  isn't a real HubSpot contact property, do NOT guess a similar-sounding one — skip
+  it and add to ## FLAGGED FOR REVIEW with reason "unknown property".
+
+═══════════════════════════════════════════════════
+PRE-BUILD CHECK — Reuse Existing Lists (MANDATORY)
+═══════════════════════════════════════════════════
+CRITICAL: Before building ANY new list, ALWAYS search for existing lists from
+PRIOR email campaigns/sends for THIS SAME EVENT. Do NOT create new lists by default.
+
+WORKFLOW:
+1. Search for prior campaigns: hubspot_search_campaigns("[event_name]")
+   - Look for campaigns that mention this event
+   - Note which lists were used as email recipients
+2. If no campaigns found, search for emails sent to this event:
+   - Query email send history (if available) to identify lists used
+   - Campaigns can be deleted but email records remain
+3. Identify ALL lists used in prior sends for this event
+4. Report findings to user in a structured table:
+   | List Name | Size | Last Modified | Used In Campaign/Email | Still Valid? |
+5. Ask user to choose: REUSE existing / UPDATE existing / or CREATE new
+   - REUSE: Use the existing list as-is for this send
+   - UPDATE: CLONE the list first, modify the clone, use the new version
+   - CREATE: Only if no suitable prior lists exist OR user explicitly requests new
+
+WHY REUSE?
+- Reduces HubSpot portal clutter (same event, same segment = one list, not 10)
+- Maintains audit trail (can track list evolution across sends)
+- Cleaner list naming: "PyTorch NA 2026 - Newsletter" v2, v3 (cloned versions)
+  instead of: "PyTorch NA 2026 - Newsletter", "PyTorch Newsletter 2026 Updated",
+  "PyTorch Conf Newsletter (new)", etc.
+- Efficiency: one decision per segment per event, not one list per send
+
+WHEN TO CLONE (UPDATE):
+If the user wants to modify a prior list but keep the original for reference:
+1. Clone the existing list: hubspot_create_list("[original name] (v2 - [reason])", filter)
+2. Modify the cloned version based on user request
+3. Use the cloned version for the new send
+4. Keep original as historical reference
+
+WHEN TO CREATE NEW:
+Only if:
+- No prior lists found for this event, OR
+- User explicitly says "create a new list for this" (not an update/reuse scenario)
+
+Document the decision in the BUILD PLAN: "Reusing [List ID] from [prior send]" or
+"Cloning [List ID] and updating based on: [user request]" or "Creating new because: [reason]"
 
 ═══════════════════════════════════════════════════
 STEP 1 — Query Snowflake for past editions
@@ -842,6 +1003,41 @@ Inclusion strategy in the Segment Plan. Include:
   technology domain line) and, for groups 5/7, which candidate event names
   (or the topic property, for group 4) were kept vs excluded for domain
   mismatch per RULE 9
+
+═══════════════════════════════════════════════════
+COMBINING CONDITIONS INTELLIGENTLY — MULTISTRING VALUES
+═══════════════════════════════════════════════════
+CRITICAL: When building filters with multiple similar values that share the SAME
+gates/structure, COMBINE them into a single AND branch using MULTISTRING values
+instead of creating separate branches.
+
+EXAMPLE — What NOT to do (inefficient):
+  Group 13: AND [jobtitle CONTAINS "microservices", IN_LIST 26716]
+  Group 14: AND [jobtitle CONTAINS "solutions architect", IN_LIST 26716]
+  (Creates 2 redundant branches with identical structure)
+
+EXAMPLE — What TO do (efficient):
+  Group 13: AND [jobtitle CONTAINS ["microservices", "solutions architect"], IN_LIST 26716]
+  (Single branch with MULTISTRING values, same logic)
+
+WHEN TO COMBINE:
+- Same AND branch structure: identical filter types, operators, and gates
+- Only VALUES differ: the property values (e.g., different job titles) are different
+- Use MULTISTRING operationType: "values": ["value_1", "value_2", ...] with
+  deduplicated, sorted values for deterministic output
+
+WHEN NOT TO COMBINE:
+- Different filter structures: e.g., one branch has IN_LIST gate, another doesn't
+- Different properties: e.g., one filters "jobtitle", another filters "country"
+- Nested structures: UNIFIED_EVENTS with complex filterBranches (keep separate)
+- Identifier values: IN_LIST values are list IDs — never combine those
+
+APPLY THIS PATTERN TO:
+- Job title / function filters (e.g., "cloud native", "kubernetes", "devops")
+- Topic/tag filters (e.g., multiple course topics, event categories)
+- Property CONTAINS filters with identical secondary gates
+The automatic filter optimizer will catch redundancies you miss, but building
+combined filters from the start is cleaner and more efficient.
 
 ═══════════════════════════════════════════════════
 STEP 4 — Build ALL inclusion lists (one per inclusion source)
@@ -1213,11 +1409,20 @@ Save all created list IDs.
 ═══════════════════════════════════════════════════
 STEP 5 — Look up standard suppression list IDs
 ═══════════════════════════════════════════════════
-Every suppression found here is combined into ONE "Combined Suppression" list in
-STEP 5B, and that single list is then applied as a NOT_IN_LIST exclusion in each
-inclusion branch of the master list (STEP 6). Do NOT add the individual suppression
-lists into the inclusion groups. They are ALSO reported in the ## SUPPRESSION LISTS
-section so they can be applied at email send time. Your job here is to find their IDs.
+Your job here is to FIND suppression list IDs, but you will NOT build them
+automatically — user approval is MANDATORY before any suppressions are applied.
+
+After finding all suppressions (standard + event-specific), you will present them in a
+structured table and ask the user to EXPLICITLY APPROVE which ones to include in the
+Combined Suppression list. Never assume suppressions should be applied — different
+events have different strategies (GDPR varies by region, event-specific opt-outs vary,
+etc.). The user must have final say.
+
+Every suppression found is combined into ONE "Combined Suppression" list in STEP 5B
+(only AFTER user approval), and that single list is then applied as a NOT_IN_LIST
+exclusion in each inclusion branch of the master list (STEP 6). Do NOT add the
+individual suppression lists into the inclusion groups. They are ALSO reported in the
+## SUPPRESSION LISTS section so they can be applied at email send time.
 
 Use hubspot_search_lists to find the current list ID for each standard suppression.
 Search by the key term shown — take the most recently updated match.
@@ -1262,12 +1467,22 @@ list) and the ## SUPPRESSION LISTS section. If a search returns no match, note i
 ## FLAGGED FOR REVIEW.
 
 ═══════════════════════════════════════════════════
-STEP 5B — Build the Combined Suppression list (one list holding ALL suppressions)
+STEP 5B — Build the Combined Suppression list (USER APPROVAL REQUIRED)
 ═══════════════════════════════════════════════════
-Create ONE dynamic list whose members are every contact in ANY suppression list found
-in STEP 5. This is a pure OR of IN_LIST membership filters — one AND branch per
-suppression list. STEP 6 references this single list as the only exclusion, so the
-suppression set is defined in exactly ONE place instead of being repeated in every group.
+CRITICAL: Before building the Combined Suppression list, STOP and ask the user to
+EXPLICITLY APPROVE which suppression lists to include. Never auto-add suppressions.
+
+Present all found suppression lists in a structured table format:
+  | List Name | Size | Include? |
+  Suppressions control WHO GETS EXCLUDED from email sends — this is critical business
+  logic that must have explicit user approval. Different events have different suppression
+  strategies (GDPR varies by region, event-specific opt-outs vary, etc.).
+
+ONLY when the user explicitly approves suppression(s), create ONE dynamic list whose
+members are every contact in ANY approved suppression list. This is a pure OR of IN_LIST
+membership filters — one AND branch per approved suppression list. STEP 6 references
+this single list as the only exclusion, so the suppression set is defined in exactly
+ONE place instead of being repeated in every group.
 
 CRITICAL: membership filters MUST use filterType "IN_LIST" (NOT "LIST_MEMBERSHIP",
 which HubSpot rejects). The root MUST be "OR" with AND sub-branches.
@@ -1363,7 +1578,7 @@ After success print:
 🏆 Master list created — ID: [listId] — [hubspot_url]
 
 If this step fails for any reason, print the exact HubSpot error and add it to ## FLAGGED FOR REVIEW.
-DO NOT end without attempting to create the master list.
+DO NOT end without attempting to create (or, per RULE 10, update-in-place) the master list.
 
 ═══════════════════════════════════════════════════
 STEP 7 — Final summary
@@ -1390,6 +1605,302 @@ Then print:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# Custom Request flow — free-form, usually location-based "mailable contacts"
+# audiences built for the context of one or more named events, rather than a
+# single event's own registrant/master list. Modeled on two live reference
+# lists (HubSpot list IDs 29911, 29913 — "Mailable Contacts" for Seoul).
+# ══════════════════════════════════════════════════════════════════════════════
+
+CUSTOM_PLANNING_PROMPT_TEMPLATE = """You are an experienced LF email audience strategist.
+
+Plan a CUSTOM HubSpot audience segment from this free-form request. Unlike the
+event-URL flow, this is not one event's registrant list — it is usually a
+LOCATION-based "mailable contacts" audience built for the CONTEXT of one or more
+named events, reusable across whichever of them needs to send mail.
+
+Request:
+{request}
+
+Two real, live examples of this exact pattern already exist in HubSpot — use them
+as your model, not a hypothetical:
+  - "26Q3 - Seoul - Mailable Contacts - OSS Korea + MCP Dev Summit Seoul"
+  - "26Q3 - Seoul and South Korea - Mailable Contacts - OSS Korea + MCP Dev Summit Seoul"
+Use hubspot_search_lists("[location] mailable") to find the closest existing example
+(or one for a different location, if none matches yet), then hubspot_get_list to
+inspect its exact filterBranch — confirm property names, operators, and eventTypeIds
+still match before proposing anything; do not assume they are frozen.
+
+═══════════════════════════════════════════════════
+STEP 1 — Parse the request
+═══════════════════════════════════════════════════
+- LOCATION(s): the city, and — only if the request clearly implies broader reach
+  ("...and South Korea", "...APAC", a country named alongside the city) — the
+  country/region too. Default to city-only (the narrower scope) when in doubt;
+  note the choice and let the user widen it in review rather than guessing broad.
+- NAMED EVENT(s): contextual only — they explain WHY this audience is being built
+  and feed the list name. Do NOT filter to only past registrants of these specific
+  events unless the request explicitly says so (e.g. "only people who registered
+  for X") — the proven pattern is a broader location audience, not an attendee list.
+- FOUNDATION / BRAND: derive from the named event(s) via
+  read_reference_file("brand-master-lists.md") (e.g. Open Source Summit / MCP Dev
+  Summit → brand key "lf", master list 26716). This determines the master-list gate.
+
+═══════════════════════════════════════════════════
+STEP 2 — Confirm the filter shape against a live reference
+═══════════════════════════════════════════════════
+From the reference list you inspected above, confirm:
+- Contact-property branches (city / ip_city, plus country_dropdown / ip_country if
+  the scope is broad) are gated by IN_LIST on the brand master list — mandatory,
+  since these are regional/geographic contact-property filters.
+- Event-history branches (UNIFIED_EVENTS on event_city / user_city, or
+  event_country / user_country if broad) use the fixed portal-wide eventTypeIds
+  "6-48984571" (Event Registered — completion of ANY past event) and "6-58204655"
+  (Education Enrolled). In the reference pattern these do NOT carry the master-list
+  gate (they're behavioral/event data, not a geographic contact-property filter).
+
+═══════════════════════════════════════════════════
+STEP 3 — Flag the mailability gap for the user to decide
+═══════════════════════════════════════════════════
+The reference lists are named "Mailable Contacts" but their event-history branches
+are not gated by the brand master list — so someone who registered for a past event
+in this location but was never in the master list (no opt-in, or later suppressed)
+could still be pulled in through those branches alone. Surface this explicitly under
+"Open questions / flags" and ask the user to pick:
+  (a) Match the reference pattern exactly — proven, faster, but not 100% opt-in-gated.
+  (b) Add the master-list IN_LIST gate to the event-history branches too, for a
+      stricter definition of "mailable".
+Do not choose silently.
+
+═══════════════════════════════════════════════════
+STEP 4 — Suppressions
+═══════════════════════════════════════════════════
+This audience isn't tied to one upcoming event, so there is no "current registrants"
+exclusion to build (that's specific to the event-URL flow). Still ask whether to
+apply the standard hygiene suppressions (LF Global Opt-Outs, LF Events GDPR
+Suppression if EU-adjacent, 23Q1 LF Master Exclusion List) via a combined
+NOT_IN_LIST exclusion, or to leave them off to match the reference pattern exactly
+(neither 29911 nor 29913 has any). Ask — don't assume.
+
+Flag any communitySeg / community_seg lists found along the way. They are retired —
+exclude them entirely; never rebuild or reuse their logic.
+
+═══════════════════════════════════════════════════
+STEP 5 — Produce the Segment Plan Report
+═══════════════════════════════════════════════════
+Write a complete structured report using this format:
+
+### 📋 Custom Audience Plan: [short description]
+
+**Request summary** — what was asked, in one sentence.
+**Purpose / named events** — event(s) this audience will be used to mail; context only.
+**Location scope** — city (and country/region if broad), with reasoning for the choice.
+**Brand / master-list gate** — brand key + master list ID (from brand-master-lists.md).
+**Reference list inspected** — name + ID of the closest existing example you found.
+**Proposed list(s)** — name(s), and for each a filter-branch sketch:
+  - contact-property branches (gated by the master list)
+  - event-history branches (UNIFIED_EVENTS, gated per the STEP 3 decision)
+**Mailability gap decision** — (a) or (b) from STEP 3, pending the user's answer.
+**Suppression decision** — apply hygiene suppressions, or match the reference (none) — pending the user's answer.
+**Estimated list size** — the closest example list's size as a ballpark, if found.
+**communitySeg lists** — list each one found and confirm it is excluded from this plan.
+**Open questions / flags** — anything else to confirm before building.
+
+If any open question is genuinely blocking, ALSO call the present_open_questions
+tool with one entry per blocking question (question text, why it blocks, and a
+short list of selectable options) so the user can answer via the UI instead of
+free text. Call it once, after finishing the rest of this plan output, and stop
+your turn immediately after — do not keep narrating past it.
+
+End with: "Ready to proceed? Say yes and I'll build this list in HubSpot."
+"""
+
+
+def build_custom_planning_prompt(request_text: str, qa: str = "") -> str:
+    prompt = CUSTOM_PLANNING_PROMPT_TEMPLATE.format(request=request_text)
+    if qa:
+        prompt += (
+            f"\n\nThe user has already answered these clarifying questions from a prior "
+            f"planning pass — incorporate the answers directly, do not ask them again:\n{qa}\n"
+        )
+    return prompt
+
+
+CUSTOM_BUILDING_PROMPT = """Build the CUSTOM HubSpot audience list(s) from this approved plan.
+
+Original request: {request}
+
+The planning phase is COMPLETE — use the plan below, including its answers to the
+mailability-gap and suppression questions. Do NOT re-parse the request from scratch.
+
+--- SEGMENT PLAN ---
+{plan}
+--- END SEGMENT PLAN ---
+{qa_section}
+═══════════════════════════════════════════════════
+CRITICAL RULES (enforce throughout all steps)
+═══════════════════════════════════════════════════
+RULE 1 — communitySeg lists MUST NEVER be used, referenced, or rebuilt. Skip any
+  found and add to ## FLAGGED FOR REVIEW with reason "communitySeg — excluded per policy".
+RULE 2 — Print ## BUILD PLAN before creating anything in HubSpot. Number each list,
+  its filter shape, and why.
+RULE 3 — After EVERY successful hubspot_create_list call print:
+  ✅ [List name] created — ID: [listId] — [hubspot_url]
+  (see RULE 6 for the update-in-place case, which prints a different line)
+RULE 4 — Membership filters MUST use filterType "IN_LIST" (never "LIST_MEMBERSHIP",
+  which HubSpot rejects). The root filterBranch MUST be "OR" with AND sub-branches
+  (HubSpot rejects an AND root and rejects nested OR branches).
+RULE 5 — If unsure about anything → skip and add to ## FLAGGED FOR REVIEW rather than guessing.
+RULE 6 — REUSE, DON'T DUPLICATE. Before calling hubspot_create_list for STEP 1's
+  list(s) or STEP 2's Combined Suppression list, call hubspot_search_lists with the
+  exact intended name FIRST. If a list with that EXACT name already exists — this
+  request is being rebuilt after an earlier run — call hubspot_update_list_filters on
+  its existing ID instead of creating a duplicate, and print
+  🔁 [List name] updated in place — ID: [listId] — [hubspot_url]
+  instead of the RULE 3 "created" line. Only call hubspot_create_list when no
+  exact-name match is found.
+RULE 7 — USER-ADDED FILTERS. If the Segment Plan below contains a
+  "## USER-ADDED FILTERS" section, each line there is an extra condition the user
+  typed in during plan review (e.g. Property "job_title" contains "director"). Add
+  EVERY listed condition as an additional PROPERTY filter inside EACH AND branch of
+  STEP 1's list(s) (ANDed with that branch's existing filters). Translate the
+  plain-English operator to the matching HubSpot PROPERTY operation: "is equal to"
+  → IS_EQUAL_TO, "contains" → CONTAINS_TOKEN, "is any of" → IS_ANY_OF, "is not any
+  of" → NOT_ANY_OF, "is known" → HAS_PROPERTY (no value), "is unknown" →
+  NOT_HAS_PROPERTY (no value); operationType "MULTISTRING" unless the property is a
+  HubSpot enumeration property, in which case use "ENUMERATION". Never apply to the
+  Combined Suppression list. If a listed property name isn't a real HubSpot contact
+  property, do NOT guess a similar-sounding one — skip it and add to
+  ## FLAGGED FOR REVIEW with reason "unknown property".
+
+RULE 8 — COMBINE CONDITIONS INTELLIGENTLY. When building filters with multiple similar
+  property values that share the SAME AND branch structure, COMBINE them using MULTISTRING
+  operationType instead of creating separate AND branches. Example: if building a custom
+  list for "Cloud Native job functions", combine all job titles into ONE branch:
+    [PROPERTY jobtitle CONTAINS ["cloud native", "kubernetes", "devops", ...], IN_LIST master]
+  NOT separate branches like:
+    [PROPERTY jobtitle="cloud native", IN_LIST master] OR [PROPERTY jobtitle="kubernetes", IN_LIST master]
+  This reduces redundancy, improves efficiency, and is automatically optimized anyway.
+  Apply this pattern to job titles, topics, tags, and any multi-value PROPERTY filters
+  that share identical secondary gates (IN_LIST, location filters, etc.).
+
+═══════════════════════════════════════════════════
+PRE-BUILD CHECK — Reuse Existing Lists (MANDATORY)
+═══════════════════════════════════════════════════
+CRITICAL: Before building ANY new list, ALWAYS search for existing lists that could
+be reused or updated. Do NOT create new lists by default — this is especially important
+for location-based custom audiences that may be used across multiple events.
+
+WORKFLOW:
+1. Search HubSpot for similar lists using:
+   - hubspot_search_lists("[location]") — find location-based audiences
+   - hubspot_search_lists("[audience type]") — find by function (mailable contacts, etc.)
+   - Look for prior campaigns mentioning this location
+   - Check email send history for this location (campaigns may be deleted)
+2. Identify ALL lists that have been used for this location/audience type before
+3. Report findings in a structured table:
+   | List Name | Size | Last Modified | Used In Campaign/Email | Reusable? |
+4. Ask user to choose:
+   - REUSE: Use existing list as-is for current request
+   - UPDATE: Clone the list, modify the clone, use new version
+   - CREATE: Only if no suitable lists exist OR user explicitly requests new
+
+WHEN TO REUSE:
+- If an existing list matches the current request scope (e.g., prior "Seoul - Mailable
+  Contacts" list can be reused for a new event targeting Seoul)
+- If the audience definition hasn't changed
+
+WHEN TO UPDATE (Clone + Modify):
+- If the existing list is 80% right but needs adjustments (add/remove a location,
+  adjust eligibility criteria, different suppression scope)
+- Clone first, modify the clone, keep original as historical reference
+- Clone naming: "[original name] (v2 - [reason])" or "[original name] (updated [date])"
+
+WHEN TO CREATE:
+- Only if no prior lists exist for this location/audience type, OR
+- User explicitly requests a new list (not a reuse/update scenario)
+
+Document the decision in the BUILD PLAN: "Reusing [List ID] from [context]" or
+"Cloning [List ID] and updating: [changes]" or "Creating new because: [reason]"
+
+═══════════════════════════════════════════════════
+STEP 1 — Build the primary location + event-history list
+═══════════════════════════════════════════════════
+One dynamic list per variant the plan proposed (usually one; build two only if the
+plan explicitly proposed a narrow + broad pair). Root filterBranch is OR of AND
+branches — one branch per source the plan approved:
+
+── Contact-property branches (city / ip_city, +country if broad) — gated ──
+{{
+  "filterBranchType": "AND",
+  "filterBranches": [],
+  "filters": [
+    {{"filterType": "PROPERTY", "property": "city", "operation": {{"operator": "IS_EQUAL_TO",
+       "includeObjectsWithNoValueSet": false, "values": ["[city]"], "operationType": "MULTISTRING"}}}},
+    {{"filterType": "IN_LIST", "listId": "[master_list_id]", "operator": "IN_LIST"}}
+  ]
+}}
+Repeat this branch shape with property "ip_city" (same value). If the plan's scope
+is broad, add two more branches the same way with property "country_dropdown"
+(operator "IS_ANY_OF", operationType "ENUMERATION") and "ip_country" (operator
+"IS_EQUAL_TO", operationType "MULTISTRING") — all four gated by the same
+[master_list_id] IN_LIST filter.
+
+── Event-history branches (UNIFIED_EVENTS) — gated per the plan's STEP 3 decision ──
+{{
+  "filterBranchType": "AND",
+  "filterBranches": [
+    {{
+      "filterBranchType": "UNIFIED_EVENTS",
+      "operator": "HAS_COMPLETED",
+      "eventTypeId": "6-48984571",
+      "filterBranches": [],
+      "filters": [
+        {{"filterType": "PROPERTY", "property": "event_city", "operation": {{"operator": "IS_EQUAL_TO",
+           "includeObjectsWithNoValueSet": false, "values": ["[city]"], "operationType": "MULTISTRING"}}}}
+      ]
+    }}
+  ],
+  "filters": []
+}}
+If the plan's mailability decision was (b), add
+{{"filterType": "IN_LIST", "listId": "[master_list_id]", "operator": "IN_LIST"}}
+to this branch's "filters" array (sibling to the UNIFIED_EVENTS sub-branch, same
+level as the empty [] shown above) — if (a), leave "filters" empty as shown.
+Repeat this branch shape with property "user_city" + eventTypeId "6-58204655"
+(Education Enrolled). If the plan's scope is broad, add the "event_country" /
+"user_country" equivalents using the country value — match the exact case used in
+the reference list you inspected (these properties can be case-sensitive).
+
+Name each list per the plan's "Proposed list(s)" section (e.g. "[Quarter] [Year] -
+[Location] - Mailable Contacts - [named events]").
+
+═══════════════════════════════════════════════════
+STEP 2 — Suppressions (only if the plan's Suppression decision says to apply them)
+═══════════════════════════════════════════════════
+If the plan said to leave suppressions off (matching the reference pattern), skip
+this step — STEP 1's list is the final deliverable as built.
+If the plan said to apply hygiene suppressions: use hubspot_search_lists to find
+each one, combine them into one "[Quarter] [Year] - [Location] - Mailable Contacts
+- Combined Suppression" list (OR of AND branches, one IN_LIST filter per
+suppression — same shape as RULE 4), then call hubspot_update_list_filters on
+STEP 1's list to add a NOT_IN_LIST filter on this combined suppression list to
+every AND branch.
+
+═══════════════════════════════════════════════════
+STEP 3 — Final summary
+═══════════════════════════════════════════════════
+Print a markdown table of every list created:
+
+| # | List name | HubSpot ID | Link | Notes |
+|---|-----------|------------|------|-------|
+
+Then print:
+## FLAGGED FOR REVIEW
+(skipped communitySeg lists, ambiguous locations, missing IDs, unresolvable filters, etc.)
+"""
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # Agent loop — routed entirely through llm_gateway (single deterministic path).
 # The former OpenAI-SDK client + model helpers were removed; the gateway owns the
 # backend choice, model, and sampling params.
@@ -1402,16 +1913,17 @@ def _run_agent(prompt: str, q: queue.Queue) -> None:
              f"model={llm_gateway.resolve_model()!r} prompt_len={len(prompt)}")
     q.put({"type": "output", "text": f"🚀 Starting agent (backend={llm_gateway.backend_name()})…"})
 
-    # Ground-truth list IDs, captured directly from each hubspot_create_list
-    # tool result — not parsed from the model's free-text narration, which can
-    # misreport the ID it just printed. RULE 4 in the building prompt guarantees
-    # the master list is always the LAST list created, so the last entry here
-    # is unambiguously the master list.
+    # Ground-truth list IDs, captured directly from each hubspot_create_list (or,
+    # per RULE 10/RULE 6 reuse-check, hubspot_update_list_filters) tool result —
+    # not parsed from the model's free-text narration, which can misreport the ID
+    # it just printed. RULE 4 in the building prompt guarantees the master list is
+    # always the LAST list touched, so the last entry here is unambiguously the
+    # master list — whether it was freshly created or updated in place on a rebuild.
     created_lists: list[dict] = []
 
     def _execute_and_track(name: str, tool_input: dict) -> str:
         result_json = _audience_execute(name, tool_input)
-        if name == "hubspot_create_list":
+        if name in ("hubspot_create_list", "hubspot_update_list_filters"):
             try:
                 parsed = json.loads(result_json)
                 if parsed.get("listId"):
@@ -1434,7 +1946,11 @@ def _run_agent(prompt: str, q: queue.Queue) -> None:
                 q.put({"type": "output", "text": text, "delta": True})
         elif etype == "tool":
             name = ev.get("name")
-            if name == "snowflake_query":
+            if name == "present_open_questions":
+                questions = (ev.get("input") or {}).get("questions", [])
+                q.put({"type": "output", "text": f"❓ {len(questions)} open question(s) — see selection above"})
+                q.put({"type": "question", "questions": questions})
+            elif name == "snowflake_query":
                 q.put({"type": "output", "text": f"🔧 {name}:\n{ev.get('input', {}).get('sql', '')}"})
             else:
                 q.put({"type": "output",
@@ -1471,18 +1987,21 @@ def _run_agent(prompt: str, q: queue.Queue) -> None:
 # Public API
 # ══════════════════════════════════════════════════════════════════════════════
 
-def start_plan_job(event_url: str, prescraped: dict | None = None) -> str:
+def start_plan_job(event_url: str, prescraped: dict | None = None, qa: str = "") -> str:
     """Phase 1 — start segment planning job. Returns job_id for SSE polling.
     Always routes through the deterministic gateway (SDK or CLI, chosen inside it).
 
     `prescraped` — event data already scraped during the Email Content stage
     (session.meta["url_data"]). When present, the planning agent reuses it
-    instead of re-fetching the event page."""
+    instead of re-fetching the event page.
+
+    `qa` — answers to clarifying questions from a prior planning pass (see
+    present_open_questions); folded into the prompt so this pass doesn't ask again."""
     job_id = str(uuid.uuid4())
     q: queue.Queue = queue.Queue()
     _jobs[job_id] = q
     log.info(f"[AUDIENCE] plan job {job_id[:8]} — backend={llm_gateway.backend_name()!r} — url={event_url!r} reuse_scrape={bool(prescraped)}")
-    prompt = build_planning_prompt(event_url, prescraped)
+    prompt = build_planning_prompt(event_url, prescraped, qa=qa)
     threading.Thread(target=_run_agent, args=(prompt, q), daemon=True).start()
     return job_id
 
@@ -1558,6 +2077,83 @@ def _run_two_phase(event_url: str, qa: str, q: queue.Queue, prescraped: dict | N
     log.info("[AUDIENCE] two-phase: Phase 2 complete")
 
 
+def start_custom_plan_job(request_text: str, qa: str = "") -> str:
+    """Custom Request flow — Phase 1. Free-form location/context description
+    instead of an event URL. Returns job_id for SSE polling.
+
+    `qa` — answers to clarifying questions from a prior planning pass (see
+    present_open_questions); folded into the prompt so this pass doesn't ask again."""
+    job_id = str(uuid.uuid4())
+    q: queue.Queue = queue.Queue()
+    _jobs[job_id] = q
+    log.info(f"[AUDIENCE] custom plan job {job_id[:8]} — backend={llm_gateway.backend_name()!r} "
+             f"request={request_text[:80]!r}")
+    prompt = build_custom_planning_prompt(request_text, qa=qa)
+    threading.Thread(target=_run_agent, args=(prompt, q), daemon=True).start()
+    return job_id
+
+
+def start_custom_build_job(request_text: str, plan: str = "", qa: str = "") -> str:
+    """
+    Custom Request flow — start list building. Returns job_id for SSE polling.
+
+    - plan provided  → Phase 2 only (building from existing plan)
+    - plan empty     → Phase 1 + Phase 2 chained automatically in one job
+    """
+    job_id = str(uuid.uuid4())
+    q: queue.Queue = queue.Queue()
+    _jobs[job_id] = q
+    if plan:
+        log.info(f"[AUDIENCE] custom build job {job_id[:8]} — Phase 2 only (plan provided, {len(plan)} chars) "
+                 f"— backend={llm_gateway.backend_name()!r}")
+        qa_section = f"\nUser answers to clarifying questions:\n{qa}\n" if qa else ""
+        prompt = CUSTOM_BUILDING_PROMPT.format(request=request_text, plan=plan, qa_section=qa_section)
+        threading.Thread(target=_run_agent, args=(prompt, q), daemon=True).start()
+    else:
+        log.info(f"[AUDIENCE] custom build job {job_id[:8]} — two-phase (no plan provided) "
+                 f"— backend={llm_gateway.backend_name()!r}")
+        threading.Thread(target=_run_custom_two_phase, args=(request_text, qa, q), daemon=True).start()
+    return job_id
+
+
+def _run_custom_two_phase(request_text: str, qa: str, q: queue.Queue) -> None:
+    """
+    Run CUSTOM_PLANNING_PROMPT then CUSTOM_BUILDING_PROMPT in sequence within a
+    single job. Phase 1 output is captured and passed as {plan} to Phase 2.
+    """
+    log.info("[AUDIENCE] custom two-phase: starting Phase 1 (planning)")
+    q.put({"type": "output", "text": "═══ Phase 1: Segment Planning ═══"})
+    plan_q: queue.Queue = queue.Queue()
+    plan_prompt = build_custom_planning_prompt(request_text)
+    threading.Thread(target=_run_agent, args=(plan_prompt, plan_q), daemon=True).start()
+
+    plan_lines: list[str] = []
+    plan_success = False
+    while True:
+        item = plan_q.get()
+        if item.get("type") == "output":
+            plan_lines.append(item.get("text", ""))
+            q.put(item)          # stream planning output to UI
+        elif item.get("done"):
+            plan_success = item.get("success", False)
+            log.info(f"[AUDIENCE] custom Phase 1 done — success={plan_success} lines={len(plan_lines)}")
+            break                # do NOT forward done — continue to phase 2
+
+    if not plan_success:
+        log.warning("[AUDIENCE] custom Phase 1 failed — aborting two-phase job")
+        q.put({"type": "output", "text": "⚠ Planning phase failed — cannot continue to building."})
+        q.put({"type": "done", "done": True, "success": False})
+        return
+
+    log.info(f"[AUDIENCE] custom two-phase: starting Phase 2 (building) with plan={len(plan_lines)} lines")
+    q.put({"type": "output", "text": "\n═══ Phase 2: Building HubSpot Lists ═══"})
+    plan_text = "\n".join(plan_lines)
+    qa_section = f"\nUser answers to clarifying questions:\n{qa}\n" if qa else ""
+    build_prompt = CUSTOM_BUILDING_PROMPT.format(request=request_text, plan=plan_text, qa_section=qa_section)
+    _run_agent(build_prompt, q)   # puts done=True when building completes
+    log.info("[AUDIENCE] custom two-phase: Phase 2 complete")
+
+
 def get_job_queue(job_id: str) -> queue.Queue | None:
     return _jobs.get(job_id)
 
@@ -1574,6 +2170,11 @@ def extract_master_list_id(text: str) -> str:
     """
     # lf-event-studio: "🏆 Master list created — ID: 12345 — https://..."
     m = re.search(r"🏆[^\n]*?ID:\s*(\d+)", text)
+    if m:
+        return m.group(1)
+
+    # RULE 10/RULE 6 reuse-check: "🔁 [Master list name] updated in place — ID: 12345 — https://..."
+    m = re.search(r"(?i)🔁[^\n]*?master[^\n]*?ID:\s*(\d+)", text)
     if m:
         return m.group(1)
 

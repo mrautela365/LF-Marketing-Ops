@@ -21,10 +21,11 @@ if not log.handlers:
     log.propagate = False
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
-from models import PlanRequest, CloneRequest, ContentRequest, ChatRequest, GenerateContentRequest, StagingBriefRequest, AsanaPlanRequest, AudiencePlanRequest, AudienceRunRequest, BuildAudienceRequest, SetSendListRequest, UpdateSectionsRequest
+from models import PlanRequest, CloneRequest, ContentRequest, ChatRequest, GenerateContentRequest, StagingBriefRequest, AsanaPlanRequest, AudiencePlanRequest, AudienceRunRequest, BuildAudienceRequest, SetSendListRequest, UpdateSectionsRequest, CustomAudiencePlanRequest, CustomAudienceRunRequest
 import session_store
 import agent
 import audience_tools
+from audience_builder.routes import router as audience_builder_router
 from config import ANTHROPIC_API_KEY, HUBSPOT_PORTAL_ID, INTERNAL_API_TOKEN, ASANA_ACCESS_TOKEN, LITELLM_BASE_URL, LITELLM_API_KEY
 import asana_tools
 import json
@@ -1266,7 +1267,7 @@ async def start_audience_plan(req: AudiencePlanRequest):
 
     # Reuse the scrape done during the Email Content stage if it's for this same URL.
     prescraped = cached if cached.get("url") == event_url else None
-    job_id = audience_tools.start_plan_job(event_url, prescraped=prescraped)
+    job_id = audience_tools.start_plan_job(event_url, prescraped=prescraped, qa=req.qa)
     log.info(f"[AUDIENCE-PLAN] job started: {job_id[:8]} url={event_url!r} reuse_scrape={bool(prescraped)}")
     return {"job_id": job_id, "event_url": event_url}
 
@@ -1309,7 +1310,7 @@ async def start_audience_plan_standalone(req: AudienceRunRequest):
     if not event_url:
         raise HTTPException(status_code=400, detail="event_url is required")
 
-    job_id = audience_tools.start_plan_job(event_url)
+    job_id = audience_tools.start_plan_job(event_url, qa=req.qa)
     log.info(f"[AUDIENCE-PLAN] standalone job {job_id[:8]} url={event_url!r}")
     return {"job_id": job_id, "event_url": event_url}
 
@@ -1329,6 +1330,39 @@ async def run_audience_standalone(req: AudienceRunRequest):
     job_id = audience_tools.start_build_job(event_url, plan=req.plan, qa=req.qa)
     log.info(f"[AUDIENCE-RUN] standalone job {job_id[:8]} url={event_url!r} plan={'yes' if req.plan else 'no'}")
     return {"job_id": job_id, "event_url": event_url}
+
+
+@app.post("/api/audience/custom-plan")
+async def start_custom_audience_plan(req: CustomAudiencePlanRequest):
+    """
+    Custom Request flow — Phase 1. Free-form audience description (e.g. a
+    location combined with one or more named events for context) instead of
+    a single event URL. Produces a Segment Plan; creates no HubSpot lists yet.
+    Returns job_id — poll /api/audience-stream/{job_id} for SSE output.
+    """
+    request_text = req.request.strip()
+    if not request_text:
+        raise HTTPException(status_code=400, detail="request is required")
+
+    job_id = audience_tools.start_custom_plan_job(request_text, qa=req.qa)
+    log.info(f"[AUDIENCE-CUSTOM-PLAN] job {job_id[:8]} request={request_text[:80]!r}")
+    return {"job_id": job_id}
+
+
+@app.post("/api/audience/custom-run")
+async def run_custom_audience(req: CustomAudienceRunRequest):
+    """
+    Custom Request flow — builds the audience list(s) from the approved plan,
+    or runs the full plan+build sequence in one job if no plan text is supplied.
+    Stream output via GET /api/audience-stream/{job_id}.
+    """
+    request_text = req.request.strip()
+    if not request_text:
+        raise HTTPException(status_code=400, detail="request is required")
+
+    job_id = audience_tools.start_custom_build_job(request_text, plan=req.plan, qa=req.qa)
+    log.info(f"[AUDIENCE-CUSTOM-RUN] job {job_id[:8]} plan={'yes' if req.plan else 'no'}")
+    return {"job_id": job_id}
 
 
 @app.get("/api/audience/status")
@@ -1404,15 +1438,21 @@ async def stream_audience_build(job_id: str, session_id: str = ""):
                             # Email was already cloned before build finished — apply send list now
                             if sess.email_id:
                                 try:
-                                    suppression_ids = (sess.meta.get("brand_history") or {}).get("suppression_list_ids", [])
+                                    history_ids = (sess.meta.get("brand_history") or {}).get("suppression_list_ids", [])
+                                    fresh_ids   = [row["list_id"] for row in suppression_lists if row.get("list_id")]
+                                    suppression_ids = list(dict.fromkeys(history_ids + fresh_ids))
                                     sls = hubspot_tools.set_email_send_list(sess.email_id, master_id, suppression_ids)
                                     posthoc_applied = sls.get("success", False)
                                     log.info(f"[AUDIENCE] post-hoc send list: email={sess.email_id} list={master_id} success={posthoc_applied}")
                                 except Exception as exc:
                                     log.warning(f"[AUDIENCE] post-hoc send list failed: {exc}")
 
+                    master_list_url = (
+                        f"https://app.hubspot.com/contacts/{HUBSPOT_PORTAL_ID}/objectLists/{master_id}/filters"
+                        if master_id else ""
+                    )
                     log.info(f"[AUDIENCE] build complete — master_id={master_id!r} posthoc_applied={posthoc_applied} suppressions={len(suppression_lists)}")
-                    yield f"data: {json.dumps({'type':'complete','done':True,'master_list_id':master_id,'suppression_lists':suppression_lists,'posthoc_applied':posthoc_applied,'success':item.get('success',False)})}\n\n"
+                    yield f"data: {json.dumps({'type':'complete','done':True,'master_list_id':master_id,'master_list_url':master_list_url,'suppression_lists':suppression_lists,'posthoc_applied':posthoc_applied,'success':item.get('success',False)})}\n\n"
                 except Exception as exc:
                     log.error(f"[AUDIENCE] completion handling error: {exc}")
                     yield f"data: {json.dumps({'type':'complete','done':True,'master_list_id':'','suppression_lists':[],'posthoc_applied':False,'success':False})}\n\n"
@@ -1425,6 +1465,12 @@ async def stream_audience_build(job_id: str, session_id: str = ""):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+# ── Audience Builder tab (existing-list discovery + master list composer) ─────
+# Own router/package (backend/audience_builder/) — registered before the static
+# mount/catch-all below so its routes aren't shadowed by the SPA fallback.
+app.include_router(audience_builder_router)
 
 
 # ── Serve frontend ───────────────────────────────────────────────────────────
