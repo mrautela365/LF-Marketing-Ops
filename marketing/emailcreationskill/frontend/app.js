@@ -10,6 +10,70 @@ let _audiencePlanText       = "";     // Phase 1 segment plan, captured for revi
 let _audiencePlanEventUrl   = "";     // event_url the plan was generated for
 let _audiencePlanStandalone = false;  // true when planned without a campaign session
 
+let _activeAudienceFlow      = "event";  // "event" | "custom" — which tab's plan the shared Approve/Discard buttons act on
+let _customAudienceRequest   = "";       // free-text request the custom plan was generated for
+let _customAudiencePlanText  = "";       // Phase 1 segment plan for the Custom Request flow
+
+let _extraFilters = [];  // user-added filters from the plan-review screen: {property, operator, value}
+
+let _audienceQA           = "";    // accumulated Q&A text across replanning rounds — appended to future plan/build prompts
+let _pendingQuestions      = null;  // structured questions[] awaiting a user answer (blocks Approve until cleared)
+let _pendingQuestionsFlow  = "";    // "event" | "custom" — which flow's re-plan to call on submit
+let _pendingQuestionsScope = "step3"; // which screen's DOM ids the pending questions were rendered into
+
+// Element-id lookup so the Custom Audience flow (runCustomAudienceBuild, approveCustomAudiencePlan,
+// renderAudienceQuestions, etc.) can be re-hosted verbatim in the Audience Builder tab's "Build From
+// Scratch" section without duplicating logic — every scoped function takes a `scope` param (default
+// "step3" = today's exact ids, so Step 3's existing behavior is completely unchanged) and looks up its
+// DOM ids here instead of hardcoding them. "builder" ids that have no counterpart in the Audience
+// Builder markup (e.g. startImplBtn — that screen never clones an email) map to "" and getElementById("")
+// safely returns null, which every caller already guards against.
+const _AUD_UI_SCOPES = {
+  step3: {
+    requestInput:     "custom_audience_request",
+    urlStatus:        "custom-audience-url-status",
+    buildBtn:         "custom-build-btn",
+    statusBadge:      "audience-status-badge",
+    ticker:           "audience-ticker",
+    statusEl:         "audience-status",
+    planActions:      "audience-plan-actions",
+    approveBtn:       "approve-plan-btn",
+    startImplBtn:     "start-impl-btn",
+    questionsWrap:    "audience-questions",
+    submitAnswersBtn: "submit-answers-btn",
+    sublistsWrap:     "audience-sublists-wrap",
+    sublists:         "audience-sublists",
+  },
+  builder: {
+    requestInput:     "ab-custom-request",
+    urlStatus:        "ab-custom-status",
+    buildBtn:         "ab-custom-build-btn",
+    statusBadge:      "ab-custom-status-badge",
+    ticker:           "ab-custom-ticker",
+    statusEl:         "ab-custom-result",
+    planActions:      "ab-custom-plan-actions",
+    approveBtn:       "ab-custom-approve-btn",
+    startImplBtn:     "",
+    questionsWrap:    "ab-custom-questions",
+    submitAnswersBtn: "ab-submit-answers-btn",
+    sublistsWrap:     "ab-custom-sublists-wrap",
+    sublists:         "ab-custom-sublists",
+  },
+};
+
+// ── Top-level screen switcher: Campaign Builder wizard vs. Audience Builder tab ──
+
+function switchTopTab(tab) {
+  const campaignScreen = document.getElementById("flow-event");
+  const builderScreen  = document.getElementById("flow-audience-builder");
+  const campaignPill   = document.getElementById("top-tab-campaign");
+  const builderPill    = document.getElementById("top-tab-audience-builder");
+  if (campaignScreen) campaignScreen.classList.toggle("hidden", tab !== "campaign");
+  if (builderScreen)  builderScreen.classList.toggle("hidden", tab !== "audience-builder");
+  if (campaignPill) campaignPill.classList.toggle("active", tab === "campaign");
+  if (builderPill)  builderPill.classList.toggle("active", tab === "audience-builder");
+}
+
 // ── Step navigation ──────────────────────────────────────────────────────────
 
 function showStep(n) {
@@ -416,7 +480,7 @@ function _applyGeneratedContent(data) {
 
   badge.textContent = "✅ Ready";
   badge.style.color = "#16a34a";
-  if (audBtn)    { audBtn.disabled = false; audBtn.textContent = "Build audience →"; }
+  if (audBtn)    { audBtn.disabled = false; audBtn.textContent = "Continue to Audience Preview →"; }
   if (updateBtn) updateBtn.disabled = false;
 }
 
@@ -451,7 +515,7 @@ async function generateEmailContent(sid, changeRequest = "", token = "") {
     if (frameB) frameB.srcdoc = errHtml;
     badge.textContent      = "⚠️ Drafting failed";
     badge.style.color      = "#dc2626";
-    if (audBtn)    { audBtn.disabled = false; audBtn.textContent = "Build audience →"; }
+    if (audBtn)    { audBtn.disabled = false; audBtn.textContent = "Continue to Audience Preview →"; }
     if (updateBtn) updateBtn.disabled = false;
     showError("change-status", err.message);
   }
@@ -544,6 +608,21 @@ function goToAudienceTab() {
   updateAudienceUrlPrompt();
 }
 
+// Switch between the "Event Audience" (event URL) and "Custom Audience" (free text)
+// tabs. Purely a UI toggle — never clears in-progress plan/ticker state, so
+// switching tabs and back doesn't silently discard work in either flow.
+function switchAudienceTab(tab) {
+  _activeAudienceFlow = tab;
+  const eventPanel  = document.getElementById("audience-flow-event");
+  const customPanel = document.getElementById("audience-flow-custom");
+  const eventBtn    = document.getElementById("audience-tab-event");
+  const customBtn   = document.getElementById("audience-tab-custom");
+  if (eventPanel)  eventPanel.classList.toggle("hidden", tab !== "event");
+  if (customPanel) customPanel.classList.toggle("hidden", tab !== "custom");
+  if (eventBtn)  { eventBtn.classList.toggle("btn-primary", tab === "event");   eventBtn.classList.toggle("btn-outline", tab !== "event"); }
+  if (customBtn) { customBtn.classList.toggle("btn-primary", tab === "custom"); customBtn.classList.toggle("btn-outline", tab !== "custom"); }
+}
+
 // Show the "paste a URL" prompt whenever no event page has been scraped yet
 // (no campaign session — e.g. Audience Preview was opened without Step 1/2).
 function updateAudienceUrlPrompt() {
@@ -578,11 +657,22 @@ function resetAudienceUI() {
   _audiencePlanText = "";
   _audiencePlanEventUrl = "";
   _audiencePlanStandalone = false;
+  _customAudienceRequest = "";
+  _customAudiencePlanText = "";
+  _extraFilters = [];
+  _audienceQA = "";
+  clearAudienceQuestions("step3");
+  renderExtraFilters();
+  switchAudienceTab("event");
   clearList();
   const options = document.getElementById("audience-options");
   if (options) options.style.display = "";
   const startBuild = document.getElementById("start-build-btn");
   if (startBuild) startBuild.disabled = false;
+  const customBuild = document.getElementById("custom-build-btn");
+  if (customBuild) customBuild.disabled = false;
+  const customTextarea = document.getElementById("custom_audience_request");
+  if (customTextarea) customTextarea.value = "";
   const ticker = document.getElementById("audience-ticker");
   if (ticker) { ticker.textContent = ""; ticker.classList.add("hidden"); }
   const planActions = document.getElementById("audience-plan-actions");
@@ -596,7 +686,7 @@ function resetAudienceUI() {
   const badge = document.getElementById("audience-status-badge");
   if (badge) { badge.textContent = "— choose how to set the send audience"; badge.style.color = "var(--gray-400)"; }
   const startImpl = document.getElementById("start-impl-btn");
-  if (startImpl) { startImpl.disabled = true; startImpl.textContent = "Start Implementation →"; }
+  if (startImpl) { startImpl.disabled = true; startImpl.textContent = "Create Campaign Draft →"; }
 }
 
 // Skip audience entirely — create the email only (no send list attached).
@@ -611,7 +701,7 @@ async function startImplementation() {
   const previewText = document.getElementById("preview_text").value.trim();
 
   const startBtn = document.getElementById("start-impl-btn");
-  if (startBtn) { startBtn.disabled = true; startBtn.textContent = "⏳ Implementing…"; }
+  if (startBtn) { startBtn.disabled = true; startBtn.textContent = "⏳ Creating Draft…"; }
 
   showStep(4);
   const badge = document.getElementById("impl-status-badge");
@@ -669,7 +759,7 @@ async function startImplementation() {
     if (badge) { badge.textContent = "⚠ Failed"; badge.style.color = "#dc2626"; }
     renderMessage("done-message", `⚠️ Implementation failed: ${escapeHtml(err.message)}`);
     showStep(3);
-    if (startBtn) { startBtn.disabled = false; startBtn.textContent = "Start Implementation →"; }
+    if (startBtn) { startBtn.disabled = false; startBtn.textContent = "Create Campaign Draft →"; }
   }
 }
 
@@ -815,7 +905,7 @@ function selectList(id, name, size) {
   const badge = document.getElementById("audience-status-badge");
   if (badge) { badge.textContent = "✓ Existing list selected"; badge.style.color = "#166534"; }
   const startImpl = document.getElementById("start-impl-btn");
-  if (startImpl) { startImpl.disabled = false; startImpl.textContent = "Start Implementation →"; }
+  if (startImpl) { startImpl.disabled = false; startImpl.textContent = "Create Campaign Draft →"; }
 }
 
 function clearList() {
@@ -841,9 +931,10 @@ function clearList() {
 
 const _LIST_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>';
 
-function renderSubLists() {
-  const wrap = document.getElementById("audience-sublists-wrap");
-  const box  = document.getElementById("audience-sublists");
+function renderSubLists(scope = "step3") {
+  const ids  = _AUD_UI_SCOPES[scope] || _AUD_UI_SCOPES.step3;
+  const wrap = document.getElementById(ids.sublistsWrap);
+  const box  = document.getElementById(ids.sublists);
   if (!box) return;
   if (!_subLists.length) {
     box.innerHTML = "";
@@ -855,32 +946,215 @@ function renderSubLists() {
     const tag = s.kind === "master"   ? '<span class="sublist-tag master">Master</span>'
               : s.kind === "selected" ? '<span class="sublist-tag selected">Selected</span>'
               : "";
+    const idHtml = s.url
+      ? `<a class="sublist-id" href="${escapeHtml(s.url)}" target="_blank" rel="noopener">ID ${escapeHtml(s.id)}</a>`
+      : `<span class="sublist-id">ID ${escapeHtml(s.id)}</span>`;
     return `<div class="sublist-row">
       <span class="sublist-ico">${_LIST_SVG}</span>
       <span class="sublist-name">${escapeHtml(s.name)}</span>
-      <span class="sublist-id">ID ${escapeHtml(s.id)}</span>
+      ${idHtml}
       ${tag}
     </div>`;
   }).join("");
 }
 
-// Parse "✅ <name> created — ID: <id>" lines from the build log into sub-list rows.
-function _parseSubList(text) {
-  const m = String(text).match(/✅\s*(.+?)\s+created\s*[—\-:]+\s*ID:?\s*(\d{3,})/i);
+// Parse "✅ <name> created — ID: <id> — <url>" or "🔁 <name> updated in place — ID: <id> — <url>"
+// lines from the build log into sub-list rows (RULE 10/RULE 6 reuse-check prints the latter).
+function _parseSubList(text, scope = "step3") {
+  const m = String(text).match(/(?:✅|🔁)\s*(.+?)\s+(?:created|updated in place)\s*[—\-:]+\s*ID:?\s*(\d{3,})(?:\s*[—\-]+\s*(\S+))?/i);
   if (!m) return;
   const name = m[1].trim().replace(/^\[|\]$/g, "");
   const id   = m[2];
-  if (_subLists.some(s => s.id === id)) return;
-  _subLists.push({ name, id, kind: "created" });
-  renderSubLists();
+  const url  = m[3] || "";
+  const existing = _subLists.find(s => s.id === id);
+  if (existing) { if (url) existing.url = url; return; }
+  _subLists.push({ name, id, url, kind: "created" });
+  renderSubLists(scope);
 }
 
-function _markMaster(id) {
+// ── Plan-review "add more filters" panel ─────────────────────────────────────
+// Lets the user tack extra property conditions onto the plan before approving;
+// they get folded into the plan text sent to the build phase (see
+// _extraFiltersPlanText()) so the agent ANDs each one into every inclusion group.
+
+const _EXTRA_FILTER_NO_VALUE_OPS = new Set(["is known", "is unknown"]);
+
+function _toggleExtraFilterValueInput() {
+  const op  = document.getElementById("extra-filter-operator");
+  const val = document.getElementById("extra-filter-value");
+  if (!op || !val) return;
+  const noValue = _EXTRA_FILTER_NO_VALUE_OPS.has(op.value);
+  val.disabled = noValue;
+  val.placeholder = noValue ? "(no value needed)" : "Value (comma-separate for multiple)";
+  if (noValue) val.value = "";
+}
+
+function addExtraFilter() {
+  const propEl = document.getElementById("extra-filter-property");
+  const opEl   = document.getElementById("extra-filter-operator");
+  const valEl  = document.getElementById("extra-filter-value");
+  if (!propEl || !opEl || !valEl) return;
+
+  const property = propEl.value.trim();
+  const operator = opEl.value;
+  const value    = valEl.value.trim();
+  const needsValue = !_EXTRA_FILTER_NO_VALUE_OPS.has(operator);
+
+  if (!property) { showError("custom-audience-url-status", "Enter a property name for the filter."); return; }
+  if (needsValue && !value) { showError("custom-audience-url-status", "Enter a value for this filter, or pick 'is known'/'is unknown'."); return; }
+  clearStatus("custom-audience-url-status");
+
+  _extraFilters.push({ property, operator, value: needsValue ? value : "" });
+  propEl.value = "";
+  valEl.value  = "";
+  renderExtraFilters();
+}
+
+function removeExtraFilter(index) {
+  _extraFilters.splice(index, 1);
+  renderExtraFilters();
+}
+
+function renderExtraFilters() {
+  const box = document.getElementById("extra-filter-list");
+  if (!box) return;
+  box.innerHTML = _extraFilters.map((f, i) => `
+    <span class="sublist-tag" style="background:var(--gray-100);color:var(--gray-700);display:inline-flex;align-items:center;gap:6px;padding:5px 8px">
+      ${escapeHtml(f.property)} ${escapeHtml(f.operator)}${f.value ? ` "${escapeHtml(f.value)}"` : ""}
+      <a href="#" onclick="removeExtraFilter(${i});return false;" style="color:var(--gray-500);text-decoration:none;font-weight:700">✕</a>
+    </span>`).join("");
+}
+
+// Rendered as a plan addendum the building-phase prompt (RULE 11 / RULE 7)
+// knows to parse and AND into every inclusion group it builds.
+function _extraFiltersPlanText() {
+  if (!_extraFilters.length) return "";
+  const lines = _extraFilters.map(f =>
+    `- Property "${f.property}" ${f.operator}${f.value ? ` "${f.value}"` : ""}`);
+  return `\n\n## USER-ADDED FILTERS\n${lines.join("\n")}\n`;
+}
+
+function _masterListLinkHtml(mid, url) {
+  return url
+    ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener">List ID ${escapeHtml(mid)}</a>`
+    : `List ID ${escapeHtml(mid)}`;
+}
+
+function _markMaster(id, url, scope = "step3") {
   id = String(id);
   let found = false;
-  _subLists.forEach(s => { if (s.id === id) { s.kind = "master"; found = true; } });
-  if (!found) _subLists.push({ name: "Master Audience", id, kind: "master" });
-  renderSubLists();
+  _subLists.forEach(s => { if (s.id === id) { s.kind = "master"; if (url) s.url = url; found = true; } });
+  if (!found) _subLists.push({ name: "Master Audience", id, url: url || "", kind: "master" });
+  renderSubLists(scope);
+}
+
+// ── Structured clarifying questions (present_open_questions tool) ───────────
+// When the planning agent has open/blocking questions, it calls the
+// present_open_questions tool instead of only printing an "Open questions /
+// flags" table. The backend forwards that as an SSE {type:'question'} event;
+// we render it as selectable buttons (+ optional free-text "Other") here,
+// then fold the answers into _audienceQA and re-run planning so the agent
+// incorporates them into a revised plan before the user approves the build.
+
+let _questionAnswers = [];  // parallel array to _pendingQuestions — selected/typed answer per question, "" until answered
+
+function renderAudienceQuestions(questions, flow, scope = "step3") {
+  const ids  = _AUD_UI_SCOPES[scope] || _AUD_UI_SCOPES.step3;
+  const wrap = document.getElementById(ids.questionsWrap);
+  if (!wrap) return;
+  if (!questions || !questions.length) { clearAudienceQuestions(scope); return; }
+
+  _pendingQuestions = questions;
+  _pendingQuestionsFlow = flow;
+  _pendingQuestionsScope = scope;
+  _questionAnswers = questions.map(() => "");
+
+  const approveBtn = document.getElementById(ids.approveBtn);
+  if (approveBtn) approveBtn.disabled = true;
+
+  wrap.innerHTML = questions.map((qq, i) => {
+    const opts = (qq.options || []).map(opt => `
+      <button type="button" class="btn btn-outline audience-q-opt" data-qi="${i}" data-val="${escapeHtml(opt)}"
+        onclick="selectAudienceAnswer(${i}, this)" style="margin:3px 6px 3px 0">${escapeHtml(opt)}</button>
+    `).join("");
+    const customInput = qq.allow_custom !== false ? `
+      <input type="text" placeholder="Other — type your own answer" data-qi="${i}"
+        oninput="typeAudienceAnswer(${i}, this.value)"
+        style="margin-top:6px;width:100%;max-width:360px;font-size:13px;padding:6px 9px" />
+    ` : "";
+    return `
+      <div class="audience-question" data-qi="${i}" style="margin-bottom:14px;padding:10px 12px;background:#fffbeb;border:1px solid #fcd34d;border-radius:6px">
+        <div style="font-weight:600;font-size:13px;color:var(--gray-800)">${i + 1}. ${escapeHtml(qq.question || "")}</div>
+        ${qq.why_it_blocks ? `<div style="font-size:12px;color:var(--gray-500);margin-top:2px">${escapeHtml(qq.why_it_blocks)}</div>` : ""}
+        <div style="margin-top:8px">${opts}</div>
+        ${customInput}
+      </div>
+    `;
+  }).join("") + `
+    <div class="btn-row" style="margin-top:4px">
+      <button class="btn btn-primary" id="${ids.submitAnswersBtn}" onclick="submitAudienceAnswers()" disabled>
+        Submit Answers &amp; Regenerate Plan
+      </button>
+    </div>
+  `;
+  wrap.classList.remove("hidden");
+  wrap.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+function _refreshSubmitAnswersBtn(scope = _pendingQuestionsScope) {
+  const ids = _AUD_UI_SCOPES[scope] || _AUD_UI_SCOPES.step3;
+  const btn = document.getElementById(ids.submitAnswersBtn);
+  if (btn) btn.disabled = _questionAnswers.some(a => !a);
+}
+
+function selectAudienceAnswer(qi, btnEl) {
+  _questionAnswers[qi] = btnEl.dataset.val;
+  const group = btnEl.closest(".audience-question");
+  if (group) {
+    group.querySelectorAll(".audience-q-opt").forEach(b => {
+      b.classList.toggle("btn-primary", b === btnEl);
+      b.classList.toggle("btn-outline", b !== btnEl);
+    });
+    const custom = group.querySelector("input[type=text]");
+    if (custom) custom.value = "";
+  }
+  _refreshSubmitAnswersBtn();
+}
+
+function typeAudienceAnswer(qi, value, scope = _pendingQuestionsScope) {
+  _questionAnswers[qi] = value.trim();
+  const ids = _AUD_UI_SCOPES[scope] || _AUD_UI_SCOPES.step3;
+  const group = document.querySelector(`#${ids.questionsWrap} .audience-question[data-qi="${qi}"]`);
+  if (group && value.trim()) {
+    group.querySelectorAll(".audience-q-opt").forEach(b => b.classList.replace("btn-primary", "btn-outline"));
+  }
+  _refreshSubmitAnswersBtn(scope);
+}
+
+function clearAudienceQuestions(scope = _pendingQuestionsScope) {
+  _pendingQuestions = null;
+  _pendingQuestionsFlow = "";
+  _questionAnswers = [];
+  const ids = _AUD_UI_SCOPES[scope] || _AUD_UI_SCOPES.step3;
+  const wrap = document.getElementById(ids.questionsWrap);
+  if (wrap) { wrap.innerHTML = ""; wrap.classList.add("hidden"); }
+  const approveBtn = document.getElementById(ids.approveBtn);
+  if (approveBtn) approveBtn.disabled = false;
+}
+
+function submitAudienceAnswers(scope = _pendingQuestionsScope) {
+  if (!_pendingQuestions || _questionAnswers.some(a => !a)) return;
+  const qaBlock = _pendingQuestions.map((qq, i) =>
+    `Q: ${qq.question}\nA: ${_questionAnswers[i]}`
+  ).join("\n");
+  _audienceQA = _audienceQA ? `${_audienceQA}\n${qaBlock}` : qaBlock;
+  const flow = _pendingQuestionsFlow;
+  clearAudienceQuestions(scope);
+  if (flow === "custom") {
+    runCustomAudienceBuild(scope);
+  } else {
+    runAudienceBuild(_audiencePlanEventUrl);
+  }
 }
 
 // ── Step 3: Audience Preview — plan the segment, then build only after approval ──
@@ -922,6 +1196,10 @@ function _openAudienceStream(jobId, streamSessionId, handlers) {
       }
       return;
     }
+    if (msg.type === "question") {
+      handlers.onQuestion && handlers.onQuestion(msg.questions || []);
+      return;
+    }
     if (msg.type === "complete") {
       if (lineBuf.trim()) { handlers.onOutput && handlers.onOutput(lineBuf); lineBuf = ""; }
       es.close(); handlers.onComplete && handlers.onComplete(msg); return;
@@ -940,6 +1218,7 @@ async function runAudienceBuild(urlOverride) {
   const standalone = !sessionId;  // no campaign session → nothing scraped yet, no email to attach to later
   if (standalone && !eventUrl) { updateAudienceUrlPrompt(); return; }
 
+  _activeAudienceFlow = "event";
   _masterListId = "";
   _subLists = [];
   _audiencePlanText = "";
@@ -958,11 +1237,12 @@ async function runAudienceBuild(urlOverride) {
   if (badge)       { badge.textContent = "⏳ Planning audience segment…"; badge.style.color = "var(--gray-500)"; }
   if (buildBtn)    { buildBtn.disabled = true; }
   if (planActions) planActions.classList.add("hidden");
-  if (startImpl)   { startImpl.disabled = true; startImpl.textContent = "Start Implementation →"; }
+  if (startImpl)   { startImpl.disabled = true; startImpl.textContent = "Create Campaign Draft →"; }
   ticker.textContent = "";
   ticker.classList.remove("hidden");
   statusEl.classList.add("hidden");
   statusEl.innerHTML = "";
+  clearAudienceQuestions();
 
   let jobId = null;
   try {
@@ -970,8 +1250,8 @@ async function runAudienceBuild(urlOverride) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(standalone
-        ? { event_url: eventUrl }
-        : { session_id: sessionId, event_url: eventUrl }),
+        ? { event_url: eventUrl, qa: _audienceQA }
+        : { session_id: sessionId, event_url: eventUrl, qa: _audienceQA }),
     });
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({ detail: resp.statusText }));
@@ -994,6 +1274,7 @@ async function runAudienceBuild(urlOverride) {
       ticker.textContent += text;
       ticker.scrollTop = ticker.scrollHeight;
     },
+    onQuestion: (questions) => renderAudienceQuestions(questions, "event"),
     onComplete: (msg) => {
       if (buildBtn) buildBtn.disabled = false;
       _audiencePlanText = ticker.textContent.trim();
@@ -1030,14 +1311,16 @@ async function approveAudiencePlan() {
   ticker.textContent += "\n── Building approved plan ──\n";
   ticker.scrollTop = ticker.scrollHeight;
 
+  const planWithExtras = _audiencePlanText + _extraFiltersPlanText();
+
   let jobId = null;
   try {
     const resp = await fetch(`${API}/${standalone ? "audience/run" : "build-audience"}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(standalone
-        ? { event_url: _audiencePlanEventUrl, plan: _audiencePlanText }
-        : { session_id: sessionId, event_url: _audiencePlanEventUrl, plan: _audiencePlanText }),
+        ? { event_url: _audiencePlanEventUrl, plan: planWithExtras, qa: _audienceQA }
+        : { session_id: sessionId, event_url: _audiencePlanEventUrl, plan: planWithExtras, qa: _audienceQA }),
     });
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({ detail: resp.statusText }));
@@ -1048,7 +1331,7 @@ async function approveAudiencePlan() {
   } catch (e) {
     if (badge)      { badge.textContent = "⚠ Build failed — " + escapeHtml(e.message); badge.style.color = "#dc2626"; }
     if (approveBtn) approveBtn.disabled = false;
-    if (startImpl)  { startImpl.disabled = true; startImpl.textContent = "Start Implementation →"; }
+    if (startImpl)  { startImpl.disabled = true; startImpl.textContent = "Create Campaign Draft →"; }
     return;
   }
 
@@ -1065,20 +1348,21 @@ async function approveAudiencePlan() {
       const mid = msg.master_list_id;
       if (mid) {
         _masterListId = String(mid);
-        _markMaster(mid);
+        _markMaster(mid, msg.master_list_url);
         if (planActions) planActions.classList.add("hidden");
+        const link = _masterListLinkHtml(mid, msg.master_list_url);
         if (statusEl) {
           statusEl.classList.remove("hidden");
           statusEl.innerHTML = standalone
-            ? `<span style="color:#166534">✅ Master audience ready (List ID ${escapeHtml(mid)}). Start a campaign plan (Step 1) to attach it to an email.</span>`
-            : `<span style="color:#166534">✅ Master audience ready (List ID ${escapeHtml(mid)}). It is attached to the email when you start implementation.</span>`;
+            ? `<span style="color:#166534">✅ Master audience ready (${link}). Start a campaign plan (Step 1) to attach it to an email.</span>`
+            : `<span style="color:#166534">✅ Master audience ready (${link}). It is attached to the email when you start implementation.</span>`;
         }
         if (badge) { badge.textContent = `✓ Audience ready (ID ${escapeHtml(mid)})`; badge.style.color = "#166534"; }
         // Implementation clones/attaches against a campaign session — nothing to attach to yet in standalone mode.
-        if (startImpl) { startImpl.disabled = standalone; startImpl.textContent = "Start Implementation →"; }
+        if (startImpl) { startImpl.disabled = standalone; startImpl.textContent = "Create Campaign Draft →"; }
       } else {
         if (badge)     { badge.textContent = "⚠ Build finished but list ID not found — pick an existing list or skip"; badge.style.color = "#92400e"; }
-        if (startImpl) { startImpl.disabled = true; startImpl.textContent = "Start Implementation →"; }
+        if (startImpl) { startImpl.disabled = true; startImpl.textContent = "Create Campaign Draft →"; }
       }
     },
     onError: (msg) => {
@@ -1088,10 +1372,285 @@ async function approveAudiencePlan() {
   });
 }
 
+// ── Custom Request flow — free-text description instead of an event URL ─────
+// Mirrors runAudienceBuild()/approveAudiencePlan() exactly; only the request
+// payload and endpoint paths differ. Shares the same ticker/plan-actions/
+// sub-lists/status UI, dispatched via _activeAudienceFlow.
+
+async function runCustomAudienceBuild(scope = "step3") {
+  const ids = _AUD_UI_SCOPES[scope] || _AUD_UI_SCOPES.step3;
+  const textarea = document.getElementById(ids.requestInput);
+  const request = ((textarea && textarea.value) || "").trim();
+  if (!request) {
+    showError(ids.urlStatus, "Please describe the audience you need.");
+    return;
+  }
+  clearStatus(ids.urlStatus);
+
+  _activeAudienceFlow = "custom";
+  _masterListId = "";
+  _subLists = [];
+  _customAudienceRequest = request;
+  _customAudiencePlanText = "";
+  renderSubLists(scope);
+  if (scope === "step3") clearList();
+
+  const badge       = document.getElementById(ids.statusBadge);
+  const buildBtn    = document.getElementById(ids.buildBtn);
+  const ticker      = document.getElementById(ids.ticker);
+  const statusEl    = document.getElementById(ids.statusEl);
+  const planActions = document.getElementById(ids.planActions);
+  const startImpl   = document.getElementById(ids.startImplBtn);
+
+  if (badge)       { badge.textContent = "⏳ Planning audience segment…"; badge.style.color = "var(--gray-500)"; }
+  if (buildBtn)    buildBtn.disabled = true;
+  if (planActions) planActions.classList.add("hidden");
+  if (startImpl)   { startImpl.disabled = true; startImpl.textContent = "Create Campaign Draft →"; }
+  if (ticker)   { ticker.textContent = ""; ticker.classList.remove("hidden"); }
+  if (statusEl) { statusEl.classList.add("hidden"); statusEl.innerHTML = ""; }
+  clearAudienceQuestions(scope);
+
+  const standalone = !sessionId;
+  let jobId = null;
+  try {
+    const resp = await fetch(`${API}/audience/custom-plan`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ request, session_id: standalone ? "" : sessionId, qa: _audienceQA }),
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({ detail: resp.statusText }));
+      throw new Error(err.detail || "Failed to start planning");
+    }
+    const data = await resp.json();
+    jobId = data.job_id;
+  } catch (e) {
+    if (ticker) ticker.classList.add("hidden");
+    if (badge)    { badge.textContent = "⚠ Planning failed — " + escapeHtml(e.message); badge.style.color = "#dc2626"; }
+    if (buildBtn) buildBtn.disabled = false;
+    return;
+  }
+
+  _openAudienceStream(jobId, standalone ? "" : sessionId, {
+    onDelta: (text) => {
+      if (!ticker) return;
+      ticker.textContent += text;
+      ticker.scrollTop = ticker.scrollHeight;
+    },
+    onQuestion: (questions) => renderAudienceQuestions(questions, "custom", scope),
+    onComplete: (msg) => {
+      if (buildBtn) buildBtn.disabled = false;
+      _customAudiencePlanText = (ticker ? ticker.textContent : "").trim();
+      if (!_customAudiencePlanText || msg.success === false) {
+        if (badge) { badge.textContent = "⚠ Planning failed — see log above"; badge.style.color = "#dc2626"; }
+        return;
+      }
+      if (badge) { badge.textContent = "📝 Plan ready — review below, then approve to create lists"; badge.style.color = "#92400e"; }
+      if (planActions) planActions.classList.remove("hidden");
+    },
+    onError: (msg) => {
+      if (badge)    { badge.textContent = `⚠ Planning error: ${escapeHtml(msg.text || "unknown")}`; badge.style.color = "#dc2626"; }
+      if (buildBtn) buildBtn.disabled = false;
+    },
+  });
+}
+
+async function approveCustomAudiencePlan(scope = "step3") {
+  if (!_customAudiencePlanText) return;
+  const ids = _AUD_UI_SCOPES[scope] || _AUD_UI_SCOPES.step3;
+  const standalone = !sessionId;
+
+  const badge       = document.getElementById(ids.statusBadge);
+  const ticker      = document.getElementById(ids.ticker);
+  const statusEl    = document.getElementById(ids.statusEl);
+  const planActions = document.getElementById(ids.planActions);
+  const approveBtn  = document.getElementById(ids.approveBtn);
+  const startImpl   = document.getElementById(ids.startImplBtn);
+
+  if (approveBtn) approveBtn.disabled = true;
+  if (badge)      { badge.textContent = "⏳ Creating HubSpot lists…"; badge.style.color = "var(--gray-500)"; }
+  if (startImpl)  { startImpl.disabled = true; startImpl.textContent = "⏳ Building audience…"; }
+  if (ticker) { ticker.textContent += "\n── Building approved plan ──\n"; ticker.scrollTop = ticker.scrollHeight; }
+
+  let jobId = null;
+  try {
+    const resp = await fetch(`${API}/audience/custom-run`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        request: _customAudienceRequest,
+        session_id: standalone ? "" : sessionId,
+        plan: _customAudiencePlanText + _extraFiltersPlanText(),
+        qa: _audienceQA,
+      }),
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({ detail: resp.statusText }));
+      throw new Error(err.detail || "Failed to start audience build");
+    }
+    const data = await resp.json();
+    jobId = data.job_id;
+  } catch (e) {
+    if (badge)      { badge.textContent = "⚠ Build failed — " + escapeHtml(e.message); badge.style.color = "#dc2626"; }
+    if (approveBtn) approveBtn.disabled = false;
+    if (startImpl)  { startImpl.disabled = true; startImpl.textContent = "Create Campaign Draft →"; }
+    return;
+  }
+
+  _openAudienceStream(jobId, standalone ? "" : sessionId, {
+    onDelta: (text) => {
+      if (!ticker) return;
+      ticker.textContent += text;
+      ticker.scrollTop = ticker.scrollHeight;
+    },
+    onOutput: (text) => {
+      _parseSubList(text, scope);
+    },
+    onComplete: (msg) => {
+      if (approveBtn) approveBtn.disabled = false;
+      const mid = msg.master_list_id;
+      if (mid) {
+        _masterListId = String(mid);
+        _markMaster(mid, msg.master_list_url, scope);
+        if (planActions) planActions.classList.add("hidden");
+        const link = _masterListLinkHtml(mid, msg.master_list_url);
+
+        // scope="builder" only — if this build was kicked off from a missing-
+        // signal "Create list" click, fold the new list into the discovery
+        // grid (selected, under its signal). Returns null otherwise.
+        let _abSignal = null;
+        if (scope === "builder" && typeof AudienceBuilder !== "undefined") {
+          const sub = _subLists.find(s => s.id === String(mid));
+          _abSignal = AudienceBuilder.onCustomListBuilt({ list_id: mid, name: sub && sub.name });
+        }
+
+        if (statusEl) {
+          statusEl.classList.remove("hidden");
+          statusEl.innerHTML = scope === "builder"
+            ? `<div class="success-box">✅ Master audience ready (${link})${_abSignal ? " — added to your selection above." : ". Use it as the send list for any campaign."}</div>`
+            : standalone
+              ? `<span style="color:#166534">✅ Master audience ready (${link}). Start a campaign plan (Step 1) to attach it to an email.</span>`
+              : `<span style="color:#166534">✅ Master audience ready (${link}). It is attached to the email when you start implementation.</span>`;
+        }
+        if (badge) { badge.textContent = `✓ Audience ready (ID ${escapeHtml(mid)})`; badge.style.color = "#166534"; }
+        if (startImpl) { startImpl.disabled = standalone; startImpl.textContent = "Create Campaign Draft →"; }
+      } else {
+        if (badge)     { badge.textContent = "⚠ Build finished but list ID not found — pick an existing list or skip"; badge.style.color = "#92400e"; }
+        if (startImpl) { startImpl.disabled = true; startImpl.textContent = "Create Campaign Draft →"; }
+      }
+    },
+    onError: (msg) => {
+      if (badge)      { badge.textContent = `⚠ Build error: ${escapeHtml(msg.text || "unknown")}`; badge.style.color = "#dc2626"; }
+      if (approveBtn) approveBtn.disabled = false;
+    },
+  });
+}
+
+// Audience Builder missing-signal "Create list" — skips the plan-review gate
+// entirely. Calls /api/audience/custom-run directly with an empty plan, which
+// makes the backend chain planning + building in one job (see
+// audience_tools._run_custom_two_phase) instead of stopping for approval —
+// appropriate here because these signals resolve to one deterministic filter
+// shape (custom event / contact property / subscription), not an open-ended
+// audience needing user review.
+async function runDirectSignalBuild(request, scope = "builder") {
+  const ids = _AUD_UI_SCOPES[scope] || _AUD_UI_SCOPES.step3;
+  clearStatus(ids.urlStatus);
+
+  _activeAudienceFlow = "custom";
+  _masterListId = "";
+  _subLists = [];
+  _customAudienceRequest = request;
+  _customAudiencePlanText = "";
+  renderSubLists(scope);
+  clearAudienceQuestions(scope);
+
+  const badge       = document.getElementById(ids.statusBadge);
+  const buildBtn    = document.getElementById(ids.buildBtn);
+  const ticker      = document.getElementById(ids.ticker);
+  const statusEl    = document.getElementById(ids.statusEl);
+  const planActions = document.getElementById(ids.planActions);
+
+  if (badge)       { badge.textContent = "⏳ Building list directly (custom event / contact property / subscription)…"; badge.style.color = "var(--gray-500)"; }
+  if (buildBtn)    buildBtn.disabled = true;
+  if (planActions) planActions.classList.add("hidden");
+  if (ticker)   { ticker.textContent = ""; ticker.classList.remove("hidden"); }
+  if (statusEl) { statusEl.classList.add("hidden"); statusEl.innerHTML = ""; }
+
+  const fail = (message) => {
+    if (badge)    { badge.textContent = "⚠ Build failed — " + escapeHtml(message); badge.style.color = "#dc2626"; }
+    if (buildBtn) buildBtn.disabled = false;
+    if (scope === "builder" && typeof AudienceBuilder !== "undefined") AudienceBuilder.onCustomBuildFailed();
+  };
+
+  const standalone = !sessionId;
+  let jobId = null;
+  try {
+    const resp = await fetch(`${API}/audience/custom-run`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ request, session_id: standalone ? "" : sessionId, plan: "", qa: _audienceQA }),
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({ detail: resp.statusText }));
+      throw new Error(err.detail || "Failed to start audience build");
+    }
+    const data = await resp.json();
+    jobId = data.job_id;
+  } catch (e) {
+    if (ticker) ticker.classList.add("hidden");
+    fail(e.message);
+    return;
+  }
+
+  _openAudienceStream(jobId, standalone ? "" : sessionId, {
+    onDelta: (text) => {
+      if (!ticker) return;
+      ticker.textContent += text;
+      ticker.scrollTop = ticker.scrollHeight;
+    },
+    onOutput: (text) => {
+      _parseSubList(text, scope);
+    },
+    onComplete: (msg) => {
+      if (buildBtn) buildBtn.disabled = false;
+      const mid = msg.master_list_id;
+      if (!mid || msg.success === false) {
+        fail("list ID not found — see log above");
+        return;
+      }
+      _masterListId = String(mid);
+      _markMaster(mid, msg.master_list_url, scope);
+      const link = _masterListLinkHtml(mid, msg.master_list_url);
+
+      let _abSignal = null;
+      if (scope === "builder" && typeof AudienceBuilder !== "undefined") {
+        const sub = _subLists.find(s => s.id === String(mid));
+        _abSignal = AudienceBuilder.onCustomListBuilt({ list_id: mid, name: sub && sub.name });
+      }
+
+      if (statusEl) {
+        statusEl.classList.remove("hidden");
+        statusEl.innerHTML = `<div class="success-box">✅ List ready (${link})${_abSignal ? " — added to your selection above." : "."}</div>`;
+      }
+      if (badge) { badge.textContent = `✓ List ready (ID ${escapeHtml(mid)})`; badge.style.color = "#166534"; }
+    },
+    onError: (msg) => fail(msg.text || "unknown"),
+  });
+}
+
+// Shared Approve button dispatches to whichever tab's plan is active.
+function approveActiveAudiencePlan() {
+  if (_activeAudienceFlow === "custom") approveCustomAudiencePlan();
+  else approveAudiencePlan();
+}
+
 // Discard the reviewed plan without building anything, back to the initial choice state.
 function discardAudiencePlan() {
+  const flow = _activeAudienceFlow;
   resetAudienceUI();
-  updateAudienceUrlPrompt();
+  if (flow === "custom") switchAudienceTab("custom");
+  else updateAudienceUrlPrompt();
 }
 
 // Close dropdown when clicking outside

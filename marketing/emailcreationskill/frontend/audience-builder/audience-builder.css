@@ -1,0 +1,173 @@
+/* ── Audience Builder tab: existing-list discovery card grid ── */
+
+/* Lightweight step wayfinding (1/2/3) — visually distinct from the Campaign
+   Builder wizard's .step/.step-circle, which showStep() re-indexes by class;
+   reusing that class here would make this page's badges show up in the
+   wizard's step-counting logic, so this page gets its own class instead. */
+.ab-card-title-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 4px; }
+.ab-step-badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; border-radius: 50%; flex-shrink: 0;
+  background: var(--gray-900); color: white;
+  font-size: 12px; font-weight: 700;
+}
+.ab-step-optional {
+  font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px;
+  color: var(--gray-400);
+  border: 1px solid var(--gray-200); border-radius: 5px; padding: 2px 6px;
+}
+
+/* Discovery/build log — same light, line-by-line reading experience as
+   #brief-log's .brief-line rows elsewhere in the app, scoped to this page's
+   own markup instead of reusing that id-bound component. */
+.ab-log {
+  margin-top: 14px;
+  max-height: 260px; overflow-y: auto;
+  border: 1px solid var(--gray-200); border-radius: var(--radius-sm);
+  background: var(--gray-50);
+}
+.ab-log-line {
+  font-size: 12.5px; color: var(--gray-600); font-family: ui-monospace, monospace;
+  padding: 8px 14px; border-bottom: 1px solid var(--gray-200);
+  word-break: break-word; white-space: pre-wrap;
+}
+.ab-log-line:last-child { border-bottom: none; color: var(--gray-900); font-weight: 500; }
+
+/* Standardized success state — mirrors .error-box/.loading, which had no
+   green counterpart anywhere in the app. */
+.success-box {
+  background: var(--green-light);
+  border: 1px solid #86efac;
+  border-radius: var(--radius);
+  padding: 12px 16px;
+  font-size: 14px;
+  color: #166534;
+}
+.success-box a { color: #15803d; font-weight: 600; }
+
+.ab-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.ab-summary { font-size: 13px; color: var(--gray-600); font-weight: 500; }
+.ab-toolbar-right { display: flex; gap: 8px; }
+
+.ab-toolbar-stats { display: flex; gap: 10px; flex-wrap: wrap; }
+.ab-toolbar-stat {
+  background: var(--gray-50);
+  border: 1px solid var(--gray-200);
+  border-radius: var(--radius-sm);
+  padding: 8px 14px;
+  min-width: 90px;
+}
+.ab-toolbar-stat-label {
+  font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px;
+  color: var(--gray-400); margin-bottom: 2px;
+}
+.ab-toolbar-stat-value { font-size: 18px; font-weight: 700; color: var(--gray-900); }
+
+.ab-sections { display: flex; flex-direction: column; gap: 20px; }
+.ab-section-header {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  border-left: 3px solid var(--gray-300);
+  padding-left: 10px;
+  margin-bottom: 10px;
+}
+.ab-section-title { font-size: 14px; font-weight: 700; color: var(--gray-900); }
+.ab-section-count { font-size: 12px; color: var(--gray-400); font-weight: 500; }
+.ab-section-desc { font-size: 12px; color: var(--gray-400); margin-left: auto; }
+
+.ab-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 12px;
+}
+
+.ab-card {
+  border: 1px solid var(--gray-200);
+  border-radius: var(--radius-sm);
+  background: white;
+  padding: 14px 16px;
+  cursor: pointer;
+  transition: border-color .15s, box-shadow .15s, background .15s;
+  position: relative;
+}
+.ab-card:hover { border-color: var(--gray-300); box-shadow: var(--shadow); }
+.ab-card.selected { border-color: var(--blue); background: var(--blue-light); box-shadow: 0 0 0 1px var(--blue); }
+
+.ab-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.ab-card-check {
+  width: 18px; height: 18px; border-radius: 5px;
+  border: 1px solid var(--gray-300); background: white;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 700; color: white; flex-shrink: 0;
+}
+.ab-card.selected .ab-card-check { background: var(--blue); border-color: var(--blue); }
+.ab-card.selected .ab-card-check::after { content: "✓"; }
+
+.ab-signal-badge {
+  font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px;
+  padding: 3px 8px; border-radius: 6px; white-space: nowrap;
+}
+.ab-signal-project_opt_in       { background: var(--blue-light);   color: var(--blue-dark); }
+.ab-signal-lf_newsletter_opt_in { background: #ede9fe;             color: #6d28d9; }
+.ab-signal-event_registration   { background: var(--green-light);  color: #166534; }
+.ab-signal-education_enrollment { background: var(--yellow-light); color: var(--yellow); }
+.ab-signal-page_view            { background: #fce7f3;             color: #be185d; }
+.ab-signal-uncertain            { background: var(--gray-100);     color: var(--gray-500); }
+.ab-signal-added                { background: var(--gray-100);     color: var(--gray-700); }
+.ab-signal-suppression          { background: #fee2e2;             color: #b91c1c; }
+.ab-signal-current_registrants  { background: #fee2e2;             color: #b91c1c; }
+
+.ab-card-name {
+  font-size: 13.5px; font-weight: 600; color: var(--gray-900);
+  margin-bottom: 6px; word-break: break-word;
+}
+.ab-card-meta {
+  display: flex; gap: 10px; align-items: center;
+  font-size: 11.5px; color: var(--gray-400); font-family: ui-monospace, monospace;
+}
+
+.ab-stat-row {
+  display: flex; gap: 8px; margin-top: 10px;
+}
+.ab-stat-box {
+  flex: 1;
+  background: var(--gray-50);
+  border: 1px solid var(--gray-200);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+}
+.ab-stat-label {
+  font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px;
+  color: var(--gray-400); margin-bottom: 2px;
+}
+.ab-stat-value {
+  font-size: 13px; font-weight: 700; color: var(--gray-900);
+}
+.ab-card-missing {
+  cursor: default;
+  border-style: dashed;
+  border-color: var(--gray-300);
+  background: var(--gray-50);
+}
+.ab-card-missing:hover { box-shadow: none; }
+
+.ab-card-reason {
+  margin-top: 8px; font-size: 11.5px; color: var(--gray-500);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Inter, sans-serif;
+  border-top: 1px dashed var(--gray-200); padding-top: 6px;
+}

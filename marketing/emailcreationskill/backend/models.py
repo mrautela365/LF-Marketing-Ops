@@ -79,6 +79,7 @@ class AudiencePlanRequest(BaseModel):
     """Payload for POST /api/audience-plan — starts a segment planning job (Phase 1)."""
     session_id: str
     event_url: str = ""  # override; falls back to session's url_data if blank
+    qa: str = ""         # optional user answers to clarifying questions (re-plan round)
 
 
 class AudienceRunRequest(BaseModel):
@@ -95,6 +96,25 @@ class BuildAudienceRequest(BaseModel):
     event_url: str = ""  # override; falls back to session's url_data if blank
     plan: str = ""       # segment plan output from Phase 1 (PLANNING_PROMPT)
     qa: str = ""         # optional user answers to clarifying questions
+
+
+class CustomAudiencePlanRequest(BaseModel):
+    """Payload for POST /api/audience/custom-plan — starts a Custom Request segment
+    planning job (Phase 1). Free-form description instead of an event URL, e.g. a
+    location combined with one or more named events for context."""
+    request: str
+    session_id: str = ""  # optional — if provided, master_list_id stored in session
+    qa: str = ""          # optional user answers to clarifying questions (re-plan round)
+
+
+class CustomAudienceRunRequest(BaseModel):
+    """Payload for POST /api/audience/custom-run — builds the Custom Request
+    audience list(s). Runs Phase 1+2 chained if plan is blank, Phase 2 only if
+    plan text (from a prior /api/audience/custom-plan run) is supplied."""
+    request: str
+    session_id: str = ""  # optional — if provided, master_list_id stored in session
+    plan: str = ""         # optional — skip planning phase if provided
+    qa: str = ""           # optional clarifying answers
 
 
 class SetSendListRequest(BaseModel):
