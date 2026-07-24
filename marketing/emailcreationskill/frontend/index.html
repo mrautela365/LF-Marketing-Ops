@@ -4,7 +4,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>LF Email Automation — Campaign Builder</title>
-  <link rel="stylesheet" href="/static/style.css?v=8" />
+  <link rel="stylesheet" href="/static/style.css?v=9" />
+  <link rel="stylesheet" href="/static/audience-builder/audience-builder.css?v=2" />
 </head>
 <body>
 
@@ -15,6 +16,12 @@
 
 <div id="mode-banner" class="hidden"></div>
 <div class="container">
+
+  <!-- Top-level screen switcher -->
+  <div class="top-tabs">
+    <div class="top-tab active" id="top-tab-campaign" onclick="switchTopTab('campaign')">Campaign Builder</div>
+    <div class="top-tab" id="top-tab-audience-builder" onclick="switchTopTab('audience-builder')">Audience Builder</div>
+  </div>
 
   <!-- ══════════════════════════════════════════════════════════════════
        Campaign flow: From Event / Campaign URL
@@ -43,7 +50,6 @@
 
     <!-- ── Step 1: Configure ── -->
     <div id="step-1" class="step-panel">
-
       <div class="card">
         <div class="card-title">Start Campaign Request</div>
         <div class="card-desc">
@@ -51,7 +57,6 @@
           pulls HubSpot send history, and drafts a complete campaign plan for you to review.
         </div>
 
-        <!-- Event URL input -->
         <div class="field">
           <label>Event / Campaign URL <span style="color:red">*</span></label>
           <input id="event_url" type="url"
@@ -59,11 +64,28 @@
           <div class="hint">Any LF event, registration, or campaign page URL.</div>
         </div>
 
+        <div class="field-row">
+          <div class="field">
+            <label>Email Type <span style="color:var(--gray-400)">(optional)</span></label>
+            <select id="email_type">
+              <option value="">— Auto-detect —</option>
+              <option value="Newsletter">Newsletter</option>
+              <option value="Invite">Invite</option>
+              <option value="Reminder">Reminder</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Additional context <span style="color:var(--gray-400)">(optional)</span></label>
+            <input id="extra_context" type="text"
+              placeholder="e.g. EMEA audience, transactional" />
+          </div>
+        </div>
+
         <div id="step1-status" class="hidden"></div>
 
         <div class="btn-row">
-          <button class="btn btn-primary" id="plan-btn" onclick="generatePlanFromActiveMode()">
-            Campaign brief →
+          <button class="btn btn-primary" id="plan-btn" onclick="generatePlan()">
+            Generate Campaign Brief →
           </button>
         </div>
       </div>
@@ -122,86 +144,44 @@
         </div>
       </div>
 
-      <!-- Generated content card — shows both A/B variants side by side -->
+      <!-- Generated content card — shows subject, preview, and full email HTML -->
       <div class="card" id="content-review-card">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
-          <div class="card-title" style="margin:0">Email Content — A/B Preview</div>
+          <div class="card-title" style="margin:0">Email Content</div>
           <span id="content-status-badge" style="font-size:12px;color:var(--gray-500)">⏳ Drafting…</span>
         </div>
-        <div class="card-desc" style="margin:-8px 0 14px">
-          Both variants below will be created as a real, linked HubSpot A/B test at Implementation.
+
+        <!-- Subject display -->
+        <div style="margin-bottom:12px">
+          <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--gray-500);margin-bottom:4px">Subject Line</div>
+          <div id="subject-display" style="
+            padding:10px 14px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;
+            font-size:15px;font-weight:500;color:var(--gray-800);min-height:38px;
+          ">⏳ Drafting…</div>
         </div>
 
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
-
-          <!-- Variant A — AI Template (read-only, fully automatic) -->
-          <div>
-            <div style="
-              display:inline-block;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:700;
-              background:#ede9fe;color:#6d28d9;margin-bottom:10px;
-            ">VARIANT A — AI TEMPLATE</div>
-
-            <div style="margin-bottom:12px">
-              <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--gray-500);margin-bottom:4px">Subject Line</div>
-              <div id="subject-display-a" style="
-                padding:10px 14px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;
-                font-size:15px;font-weight:500;color:var(--gray-800);min-height:38px;
-              ">⏳ Drafting…</div>
-            </div>
-
-            <div style="margin-bottom:16px">
-              <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--gray-500);margin-bottom:4px">Preview Text</div>
-              <div id="preview-display-a" style="
-                padding:10px 14px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;
-                font-size:13px;color:var(--gray-600);min-height:34px;
-              ">⏳ Drafting…</div>
-            </div>
-
-            <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--gray-500);margin:16px 0 6px">Full Email Preview</div>
-            <iframe id="email-preview-frame-a"
-              sandbox="allow-same-origin allow-popups"
-              style="width:100%;height:500px;border:1px solid #e2e8f0;border-radius:6px;background:#f9fafb"
-            ></iframe>
-          </div>
-
-          <!-- Variant B — Existing Flow (editable) -->
-          <div>
-            <div style="
-              display:inline-block;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:700;
-              background:#dbeafe;color:#1d4ed8;margin-bottom:10px;
-            ">VARIANT B — EXISTING FLOW</div>
-
-            <div style="margin-bottom:12px">
-              <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--gray-500);margin-bottom:4px">Subject Line</div>
-              <div id="subject-display-b" style="
-                padding:10px 14px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;
-                font-size:15px;font-weight:500;color:var(--gray-800);min-height:38px;
-              ">⏳ Drafting…</div>
-            </div>
-
-            <div style="margin-bottom:16px">
-              <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--gray-500);margin-bottom:4px">Preview Text</div>
-              <div id="preview-display-b" style="
-                padding:10px 14px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;
-                font-size:13px;color:var(--gray-600);min-height:34px;
-              ">⏳ Drafting…</div>
-            </div>
-
-            <!-- Editable content sections — each can be removed -->
-            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
-              <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--gray-500)">Content Sections</div>
-              <span style="font-size:11px;color:var(--gray-400)">Remove any block with the 🗑 icon</span>
-            </div>
-            <div id="sections-editor"></div>
-
-            <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--gray-500);margin:16px 0 6px">Full Email Preview</div>
-            <iframe id="email-preview-frame-b"
-              sandbox="allow-same-origin allow-popups"
-              style="width:100%;height:500px;border:1px solid #e2e8f0;border-radius:6px;background:#f9fafb"
-            ></iframe>
-          </div>
-
+        <!-- Preview text display -->
+        <div style="margin-bottom:16px">
+          <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--gray-500);margin-bottom:4px">Preview Text</div>
+          <div id="preview-display" style="
+            padding:10px 14px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;
+            font-size:13px;color:var(--gray-600);min-height:34px;
+          ">⏳ Drafting…</div>
         </div>
+
+        <!-- Editable content sections — each can be removed -->
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+          <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--gray-500)">Content Sections</div>
+          <span style="font-size:11px;color:var(--gray-400)">Remove any block with the 🗑 icon</span>
+        </div>
+        <div id="sections-editor"></div>
+
+        <!-- Full email preview iframe -->
+        <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--gray-500);margin:16px 0 6px">Full Email Preview</div>
+        <iframe id="email-preview-frame"
+          sandbox="allow-same-origin allow-popups"
+          style="width:100%;height:500px;border:1px solid #e2e8f0;border-radius:6px;background:#f9fafb"
+        ></iframe>
       </div>
 
       <!-- Refine content card -->
@@ -229,7 +209,7 @@
           <button class="btn btn-primary" id="build-audience-btn" onclick="goToAudience()" disabled>
             ⏳ Drafting content…
           </button>
-          <button class="btn btn-outline" onclick="editPlan()">← Edit Inputs</button>
+          <button class="btn btn-outline" onclick="editPlan()">← Edit Campaign Brief</button>
         </div>
       </div>
 
@@ -246,39 +226,84 @@
           <span id="audience-status-badge" style="font-size:12px;color:var(--gray-400)">— choose how to set the send audience</span>
         </div>
         <div class="card-desc">
-          Build a segmented audience list from event activity, reuse an existing HubSpot list,
-          or skip and create the email only. Your choice is attached as the email’s send list at implementation.
+          Build a segmented audience list from event activity, describe a custom audience in your own
+          words, reuse an existing HubSpot list, or skip and create the email only. Your choice is
+          attached as the email’s send list at implementation.
         </div>
 
-        <!-- Shown only when no event page has been scraped yet (e.g. jumped here without Step 1) -->
-        <div id="audience-url-prompt" class="hidden" style="margin-top:2px">
-          <div class="section-subhead">Event / Campaign URL</div>
-          <div style="display:flex;gap:8px;flex-wrap:wrap">
-            <input id="audience_event_url" type="url" placeholder="https://events.linuxfoundation.org/kubecon-europe/"
-              style="flex:1;min-width:260px" autocomplete="off" />
-            <button class="btn btn-primary" id="audience-scrape-btn" onclick="submitAudienceUrl()">
-              Scrape page &amp; build audience →
+        <!-- Sub-tab switcher: event-driven audience vs. free-form custom audience -->
+        <div class="btn-row" id="audience-subtabs" style="margin-top:2px">
+          <button class="btn btn-primary" id="audience-tab-event" onclick="switchAudienceTab('event')">
+            Event Audience
+          </button>
+          <button class="btn btn-outline" id="audience-tab-custom" onclick="switchAudienceTab('custom')">
+            Custom Audience
+          </button>
+        </div>
+
+        <!-- ── Event Audience: event URL → analyze → plan → build ── -->
+        <div id="audience-flow-event">
+          <div class="card-desc" style="margin-top:14px">
+            Automatically builds a segmented audience from the event or campaign page's
+            registration and engagement data already on file in HubSpot.
+          </div>
+          <!-- Shown only when no event page has been scraped yet (e.g. jumped here without Step 1) -->
+          <div id="audience-url-prompt" class="hidden" style="margin-top:10px">
+            <div class="section-subhead">Event / Campaign URL</div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <input id="audience_event_url" type="url" placeholder="https://events.linuxfoundation.org/kubecon-europe/"
+                style="flex:1;min-width:260px" autocomplete="off" />
+              <button class="btn btn-primary" id="audience-scrape-btn" onclick="submitAudienceUrl()">
+                Analyze Event &amp; Generate Plan →
+              </button>
+            </div>
+            <div id="audience-url-status" class="hidden" style="margin-top:8px"></div>
+          </div>
+
+          <!-- Choice buttons -->
+          <div class="btn-row" id="audience-options" style="margin-top:14px">
+            <button class="btn btn-primary" id="start-build-btn" onclick="runAudienceBuild()">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+              Generate Audience Plan
+            </button>
+            <button class="btn btn-outline" id="skip-audience-btn" onclick="skipAudience()">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><line x1="5.6" y1="5.6" x2="18.4" y2="18.4"/></svg>
+              Skip — Create Email Only
             </button>
           </div>
-          <div id="audience-url-status" class="hidden" style="margin-top:8px"></div>
         </div>
 
-        <!-- Choice buttons -->
-        <div class="btn-row" id="audience-options" style="margin-top:2px">
-          <button class="btn btn-primary" id="start-build-btn" onclick="runAudienceBuild()">
-            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-            Generate audience plan
-          </button>
-          <button class="btn btn-outline" id="skip-audience-btn" onclick="skipAudience()">
-            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><line x1="5.6" y1="5.6" x2="18.4" y2="18.4"/></svg>
-            Skip — create email only
-          </button>
+        <!-- ── Custom Audience: free-form description → plan → build ── -->
+        <div id="audience-flow-custom" class="hidden" style="margin-top:14px">
+          <div class="section-subhead">Describe the audience you need</div>
+          <div class="card-desc" style="margin-top:0">
+            e.g. "All mailable contacts located in Seoul, set up for mailing — this is for
+            OSS Korea and MCP Dev Summit Seoul." Combine a location with one or more named
+            events for context; the agent proposes the segment logic and asks before building.
+          </div>
+          <textarea id="custom_audience_request" rows="3" style="width:100%;margin-top:8px;font-family:inherit;font-size:14px;padding:10px;border-radius:var(--radius-sm);border:1px solid var(--gray-200)"
+            placeholder="All mailable contacts located in Seoul, set up for mailing (this is for OSS Korea and MCP Dev Summit Seoul)"></textarea>
+          <div class="btn-row" id="custom-audience-options" style="margin-top:8px">
+            <button class="btn btn-primary" id="custom-build-btn" onclick="runCustomAudienceBuild()">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+              Generate Audience Plan
+            </button>
+            <button class="btn btn-outline" id="skip-audience-btn-custom" onclick="skipAudience()">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><line x1="5.6" y1="5.6" x2="18.4" y2="18.4"/></svg>
+              Skip — Create Email Only
+            </button>
+          </div>
+          <div id="custom-audience-url-status" class="hidden" style="margin-top:8px"></div>
         </div>
 
         <!-- Use an existing list -->
         <div style="margin-top:20px">
           <div class="section-subhead">Or use an existing list</div>
-          <div class="list-picker">
+          <div class="card-desc" style="margin-top:0">
+            Already have a segment built in HubSpot? Search for it below to use it as the
+            send list instead of building a new one.
+          </div>
+          <div class="list-picker" style="margin-top:8px">
             <input id="list-search-input" type="text" placeholder="Search HubSpot lists…"
               oninput="onListSearch(this.value)" autocomplete="off" />
             <div id="list-dropdown" class="list-dropdown hidden"></div>
@@ -290,14 +315,48 @@
         <!-- Live build/plan log -->
         <div id="audience-ticker" class="hidden" style="margin-top:18px;padding:10px;background:#0f172a;border-radius:8px;font-family:ui-monospace,monospace;font-size:11px;color:#e2e8f0;max-height:340px;overflow-y:auto;white-space:pre-wrap;word-break:break-all"></div>
 
+        <!-- Structured clarifying questions (present_open_questions tool) — selectable
+             options instead of free text; answering re-runs planning with the answers folded in. -->
+        <div id="audience-questions" class="hidden" style="margin-top:14px"></div>
+
         <!-- Plan review — shown once Phase 1 finishes; no HubSpot lists exist yet. -->
-        <div class="btn-row hidden" id="audience-plan-actions" style="margin-top:12px">
-          <button class="btn btn-success" id="approve-plan-btn" onclick="approveAudiencePlan()">
-            ✅ Approve plan — create lists
-          </button>
-          <button class="btn btn-outline" id="discard-plan-btn" onclick="discardAudiencePlan()">
-            Discard &amp; start over
-          </button>
+        <div class="hidden" id="audience-plan-actions" style="margin-top:12px">
+          <div style="font-size:12px;color:var(--gray-500);margin-bottom:8px">
+            Nothing is created in HubSpot yet — review the segment plan in the log above, then approve to build it.
+          </div>
+
+          <div id="audience-extra-filters-wrap" style="margin-bottom:14px;padding:10px;border:1px solid var(--gray-200);border-radius:var(--radius-sm)">
+            <div class="section-subhead" style="font-size:12px;margin-bottom:2px">Add more filters (optional)</div>
+            <div class="card-desc" style="margin-top:0;font-size:12px">
+              Each one is added as an extra condition to every group in the audience being built —
+              e.g. narrow to a job title, industry, or any other contact property.
+            </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+              <input id="extra-filter-property" type="text" placeholder="Property (e.g. jobtitle)"
+                style="flex:1;min-width:140px" autocomplete="off" />
+              <select id="extra-filter-operator" onchange="_toggleExtraFilterValueInput()" style="min-width:150px">
+                <option value="is equal to">is equal to</option>
+                <option value="contains">contains</option>
+                <option value="is any of">is any of</option>
+                <option value="is not any of">is not any of</option>
+                <option value="is known">is known</option>
+                <option value="is unknown">is unknown</option>
+              </select>
+              <input id="extra-filter-value" type="text" placeholder="Value (comma-separate for multiple)"
+                style="flex:1;min-width:160px" autocomplete="off" />
+              <button class="btn btn-outline" type="button" onclick="addExtraFilter()">+ Add Filter</button>
+            </div>
+            <div id="extra-filter-list" style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap"></div>
+          </div>
+
+          <div class="btn-row">
+            <button class="btn btn-success" id="approve-plan-btn" onclick="approveActiveAudiencePlan()">
+              ✅ Approve &amp; Build Audience
+            </button>
+            <button class="btn btn-outline" id="discard-plan-btn" onclick="discardAudiencePlan()">
+              Discard &amp; Start Over
+            </button>
+          </div>
         </div>
 
         <!-- Lists rolled up into the master audience -->
@@ -310,7 +369,7 @@
 
         <div class="btn-row">
           <button class="btn btn-success" id="start-impl-btn" onclick="startImplementation()" disabled>
-            Start Implementation →
+            Create Campaign Draft →
           </button>
           <button class="btn btn-outline" onclick="showStep(2)">← Back to Email Preview</button>
         </div>
@@ -330,8 +389,7 @@
         </div>
 
         <div id="done-message" class="hidden"></div>
-        <div id="done-draft-link-a" class="hidden"></div>
-        <div id="done-draft-link-b" class="hidden" style="margin-top:8px"></div>
+        <div id="done-draft-link" class="hidden"></div>
 
         <!-- Final chat -->
         <div style="margin-top:12px">
@@ -346,98 +404,176 @@
           <div id="done-message-status" class="hidden" style="margin-top:8px"></div>
         </div>
 
-        <div class="btn-row" style="margin-top: 16px;">
-          <button class="btn btn-outline" onclick="startOver()">+ Stage Another Email</button>
+        <div class="btn-row">
+          <button class="btn btn-outline" onclick="startOver()">+ Stage Another Campaign</button>
         </div>
       </div>
     </div>
 
   </div><!-- /flow-event -->
 
-  <!-- ════════════════════════════════════════════════════════════════════
-       MODALS
-       ════════════════════════════════════════════════════════════════════ -->
+  <!-- ══════════════════════════════════════════════════════════════════
+       Audience Builder: discover existing lists → roll into a master list
+       ══════════════════════════════════════════════════════════════════ -->
+  <div id="flow-audience-builder" class="hidden">
 
-  <!-- Template Library Modal -->
-  <div id="template-library-modal" class="hidden" style="
-    position: fixed; top: 0; left: 0; right: 0; bottom: 0;
-    background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center;
-    z-index: 1000;
-  ">
-    <div style="
-      background: white; border-radius: 12px; padding: 32px; max-width: 600px; width: 90%;
-      max-height: 80vh; overflow-y: auto;
-    ">
-      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-        <h2 style="margin: 0;">📋 Template Library</h2>
-        <button onclick="closeModal('template-library-modal')" style="
-          background: none; border: none; font-size: 24px; cursor: pointer; color: var(--gray-400);
-        ">✕</button>
+    <div class="card">
+      <div class="ab-card-title-row">
+        <span class="ab-step-badge">1</span>
+        <div class="card-title" style="margin:0">Discover Existing Lists</div>
+      </div>
+      <div class="card-desc">
+        Paste an event or campaign URL. The agent searches HubSpot for lists that already exist for
+        this event and classifies them by signal (Project Opt-In, LF Newsletter Opt-In, Event
+        Registration, Education Enrollment, Page View) — nothing is created or modified.
       </div>
 
-      <div id="template-list" style="display: grid; gap: 12px;">
-        <!-- Templates will be populated here -->
-        <div style="padding: 16px; background: var(--bg-light); border-radius: 8px; text-align: center; color: var(--gray-400);">
-          Loading templates...
+      <div class="section-subhead">Event / Campaign URL</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <input id="ab-event-url" type="url" placeholder="https://events.linuxfoundation.org/kubecon-europe/"
+          style="flex:1;min-width:260px" autocomplete="off" />
+        <button class="btn btn-primary" id="ab-discover-btn" onclick="AudienceBuilder.discover()">
+          Discover Existing Lists
+        </button>
+      </div>
+      <div class="hint" style="margin-top:6px">
+        Any LF event, registration, or campaign page URL. Discovery is read-only — nothing is created
+        or modified in HubSpot at this step.
+      </div>
+      <div id="ab-discover-status" class="hidden" style="margin-top:8px"></div>
+
+      <div id="ab-discover-ticker" class="ab-log hidden"></div>
+    </div>
+
+    <div class="card hidden" id="ab-results">
+      <div class="ab-card-title-row">
+        <span class="ab-step-badge">2</span>
+        <div class="card-title" style="margin:0">Review &amp; Build Master List</div>
+      </div>
+      <div class="card-desc">
+        Lists are grouped by signal below. Review what was found, select the ones to include, then
+        combine your selection into one new HubSpot list.
+      </div>
+      <div class="ab-toolbar">
+        <div class="ab-toolbar-stats">
+          <div class="ab-toolbar-stat">
+            <div class="ab-toolbar-stat-label">Segments</div>
+            <div class="ab-toolbar-stat-value" id="ab-stat-segments">0</div>
+          </div>
+          <div class="ab-toolbar-stat">
+            <div class="ab-toolbar-stat-label">Total Contacts</div>
+            <div class="ab-toolbar-stat-value" id="ab-stat-contacts">—</div>
+          </div>
+          <div class="ab-toolbar-stat">
+            <div class="ab-toolbar-stat-label">Selected</div>
+            <div class="ab-toolbar-stat-value" id="ab-stat-selected">0</div>
+          </div>
+        </div>
+        <div class="ab-toolbar-right">
+          <button class="btn btn-outline" type="button" onclick="AudienceBuilder.selectAll()">Select All</button>
+          <button class="btn btn-outline" type="button" onclick="AudienceBuilder.selectNone()">Clear</button>
         </div>
       </div>
+
+      <div class="ab-sections" id="ab-card-sections"></div>
+
+      <div style="margin-top:20px">
+        <div class="section-subhead">Add another list</div>
+        <div class="card-desc" style="margin-top:0">
+          Didn't see a list that should be included? Search for it and add it manually.
+        </div>
+        <div class="list-picker" style="margin-top:8px">
+          <input id="ab-search-input" type="text" placeholder="Search HubSpot lists…"
+            oninput="AudienceBuilder.onSearch(this.value)" autocomplete="off" />
+          <div id="ab-search-dropdown" class="list-dropdown hidden"></div>
+        </div>
+        <div class="hint">Type at least 2 characters to search all HubSpot lists, not just this event's.</div>
+      </div>
+
+      <div style="margin-top:20px">
+        <div class="section-subhead">Suppression &amp; Exclusions</div>
+        <div class="card-desc" style="margin-top:0">
+          Standard hygiene suppression lists and this event's current registrants, pre-selected by
+          default. Contacts in any checked list here are excluded from the master list via a single
+          combined suppression list. Uncheck any you don't want applied.
+        </div>
+        <div id="ab-suppression-status" class="hidden" style="margin-top:8px"></div>
+        <div class="ab-card-grid" id="ab-suppression-grid" style="margin-top:8px"></div>
+      </div>
+
+      <div class="btn-row" style="margin-top:18px">
+        <button class="btn btn-success" id="ab-build-master-btn" onclick="AudienceBuilder.buildMaster()" disabled>
+          Build Master List
+        </button>
+      </div>
+      <div id="ab-build-status" class="hidden" style="margin-top:10px;font-size:13px"></div>
     </div>
-  </div>
 
-  <!-- Template Info Modal -->
-  <div id="template-info-modal" class="hidden" style="
-    position: fixed; top: 0; left: 0; right: 0; bottom: 0;
-    background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center;
-    z-index: 1000;
-  ">
-    <div style="
-      background: white; border-radius: 12px; padding: 32px; max-width: 600px; width: 90%;
-      max-height: 80vh; overflow-y: auto;
-    ">
-      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-        <h2 style="margin: 0;">❓ How Templates Work</h2>
-        <button onclick="closeModal('template-info-modal')" style="
-          background: none; border: none; font-size: 24px; cursor: pointer; color: var(--gray-400);
-        ">✕</button>
+    <div class="card hidden" id="ab-missing-section">
+      <div class="card-title">Qualifying Lists Not Found</div>
+      <div class="card-desc">
+        We searched HubSpot but couldn't find an existing list for these signals. Use "Create list" to
+        pre-fill a request for it in Build From Scratch below, or skip if you don't need it for this
+        campaign.
       </div>
-
-      <div style="line-height: 1.6; color: var(--gray-600);">
-        <h3 style="margin-top: 0;">What is a Template?</h3>
-        <p>A template is a saved email campaign that you can reuse for future events. Instead of starting from scratch, you can quickly create a new campaign based on a successful previous one.</p>
-
-        <h3>How to Save a Template</h3>
-        <ol>
-          <li>Complete a campaign from start to finish</li>
-          <li>Click <strong>Save as Template</strong> in the Implementation phase</li>
-          <li>Give it a name and select the campaign stage</li>
-          <li>The template is saved for future use</li>
-        </ol>
-
-        <h3>How to Use a Template</h3>
-        <ol>
-          <li>Click <strong>Use Template</strong> from the start screen</li>
-          <li>Select the template you want to use</li>
-          <li>Provide the new event URL</li>
-          <li>The system auto-populates using your template's structure</li>
-        </ol>
-
-        <h3>Benefits</h3>
-        <ul>
-          <li>✅ Save time on repetitive campaigns</li>
-          <li>✅ Maintain consistent quality and tone</li>
-          <li>✅ Reuse proven messaging strategies</li>
-          <li>✅ One-click setup for similar events</li>
-        </ul>
-      </div>
-
-      <div class="btn-row" style="margin-top: 20px;">
-        <button class="btn btn-primary" onclick="closeModal('template-info-modal')">Got it!</button>
-      </div>
+      <div class="ab-card-grid" id="ab-missing-grid"></div>
     </div>
-  </div>
+
+    <!-- ── Build From Scratch: reuses the Custom Audience flow via scope="builder" ── -->
+    <div class="card">
+      <div class="ab-card-title-row" style="margin-bottom:6px">
+        <span class="ab-step-badge">3</span>
+        <div class="card-title" style="margin:0">Build From Scratch</div>
+        <span class="ab-step-optional">Optional</span>
+        <span id="ab-custom-status-badge" style="font-size:12px;color:var(--gray-400)">— describe an audience in your own words</span>
+      </div>
+      <div class="card-desc">
+        No existing lists to reuse? Describe the audience you need and the agent proposes a segment,
+        then builds it in HubSpot once you approve.
+      </div>
+
+      <textarea id="ab-custom-request" rows="3" style="width:100%;margin-top:8px;font-family:inherit;font-size:14px;padding:10px;border-radius:var(--radius-sm);border:1px solid var(--gray-200)"
+        placeholder="All mailable contacts located in Seoul, set up for mailing (this is for OSS Korea and MCP Dev Summit Seoul)"></textarea>
+      <div class="hint" style="margin-top:6px">Be specific: audience criteria, geography, and which event(s) this is for.</div>
+      <div class="btn-row" style="margin-top:8px">
+        <button class="btn btn-primary" id="ab-custom-build-btn" onclick="runCustomAudienceBuild('builder')">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+          Generate Audience Plan
+        </button>
+      </div>
+      <div id="ab-custom-status" class="hidden" style="margin-top:8px"></div>
+
+      <div id="ab-custom-ticker" class="hidden" style="margin-top:18px;padding:10px;background:#0f172a;border-radius:8px;font-family:ui-monospace,monospace;font-size:11px;color:#e2e8f0;max-height:340px;overflow-y:auto;white-space:pre-wrap;word-break:break-all"></div>
+
+      <div id="ab-custom-questions" class="hidden" style="margin-top:14px"></div>
+
+      <div class="hidden" id="ab-custom-plan-actions" style="margin-top:12px">
+        <div style="font-size:12px;color:var(--gray-500);margin-bottom:8px">
+          Nothing is created in HubSpot yet — review the segment plan in the log above, then approve to build it.
+        </div>
+        <div class="btn-row">
+          <button class="btn btn-success" id="ab-custom-approve-btn" onclick="approveCustomAudiencePlan('builder')">
+            ✅ Approve &amp; Build Audience
+          </button>
+          <button class="btn btn-outline" onclick="AudienceBuilder.discardCustomPlan()">
+            Discard &amp; Start Over
+          </button>
+        </div>
+      </div>
+
+      <div id="ab-custom-sublists-wrap" class="hidden" style="margin-top:14px">
+        <div class="section-subhead">Lists in the master audience</div>
+        <div id="ab-custom-sublists"></div>
+      </div>
+
+      <div id="ab-custom-result" class="hidden" style="margin-top:10px;font-size:13px"></div>
+    </div>
+
+  </div><!-- /flow-audience-builder -->
 
 </div><!-- /container -->
 
-<script src="/static/app.js?v=10"></script>
+<script src="/static/app.js?v=13"></script>
+<script src="/static/audience-builder/audience-builder.js?v=3"></script>
 </body>
 </html>
