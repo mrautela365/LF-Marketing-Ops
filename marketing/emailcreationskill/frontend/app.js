@@ -457,11 +457,11 @@ function _applyGeneratedContent(data) {
   // Variant B — existing flow. This remains the subject/preview used for the
   // hidden #subject/#preview_text inputs the rest of the flow (audience, clone) reads.
   if (data.generated_subject) {
-    subjElB.textContent = data.generated_subject;
+    if (subjElB) subjElB.textContent = data.generated_subject;
     document.getElementById("subject").value = data.generated_subject;
   }
   if (data.generated_preview) {
-    prevElB.textContent = data.generated_preview;
+    if (prevElB) prevElB.textContent = data.generated_preview;
     document.getElementById("preview_text").value = data.generated_preview;
   }
 
@@ -478,8 +478,10 @@ function _applyGeneratedContent(data) {
   if (frameA)  frameA.srcdoc = data.variant_a_html || `<html><body style="margin:48px 40px;font-family:Arial,sans-serif;color:#c00;font-size:13px">
     <strong>⚠️ AI template content unavailable.</strong></body></html>`;
 
-  badge.textContent = "✅ Ready";
-  badge.style.color = "#16a34a";
+  if (badge) {
+    badge.textContent = "✅ Ready";
+    badge.style.color = "#16a34a";
+  }
   if (audBtn)    { audBtn.disabled = false; audBtn.textContent = "Continue to Audience Preview →"; }
   if (updateBtn) updateBtn.disabled = false;
 }
