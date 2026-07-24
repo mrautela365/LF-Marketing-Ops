@@ -556,6 +556,14 @@ def _create_plan_impl(req: PlanRequest, emit=lambda *a, **k: None):
     session.phase = "planning"
     session.plan = {"url": req.url}
 
+    # If brand_history wasn't set by AI selection or keyword fallback above,
+    # try to extract it from plan_turn's messages (Claude may have called the tools).
+    if not session.meta.get("brand_history"):
+        extracted_bh = agent.extract_brand_history_from_messages(messages)
+        if extracted_bh:
+            session.meta["brand_history"] = extracted_bh
+            log.info(f"[PLAN] brand_history extracted from plan_turn messages: {extracted_bh.get('matched_email_id') or extracted_bh.get('last_email_id')!r}")
+
     # Fallback ONLY: if the deterministic name couldn't be built above, try to parse
     # a backtick-formatted name from Claude's plan text (`26Q2 - Brand - Event - Suffix`).
     if not session.meta.get("email_name"):
