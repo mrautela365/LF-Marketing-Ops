@@ -23,13 +23,53 @@ import logging
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'emailcreationskill', 'backend'))
 
 import llm_gateway
-from hubspot_tools import _get, _patch, clone_email, set_email_send_list
+from hubspot_tools import _get, _patch, clone_email, set_email_send_list, search_lists
 from utm_tools import tag_html_links
 from config import HUBSPOT_PORTAL_ID
 
 log = logging.getLogger("survey-workflow.hubspot-clone")
 
 _SOURCE_SEARCH_TERMS = ["LF Research", "Survey"]
+
+# Every survey-workflow email gets these suppressed, regardless of whatever
+# send list the doc specifies - standing org-wide exclusion lists, not
+# something an individual campaign opts in/out of.
+STANDARD_SUPPRESSION_LIST_NAMES = [
+    "26Q1-Linux-Kernel-Contacts",
+    "26Q2-Kernel-Domain-Contacts",
+    "Persona Linux Kernel",
+    "24Q2 - Research - GDPR Suppression",
+    "23Q1 - LF - Master Exclusion List",
+    "LF Global Opt-Outs",
+]
+
+_standard_suppression_ids_cache: list = None
+
+
+def resolve_standard_suppression_list_ids() -> list:
+    """
+    Resolve STANDARD_SUPPRESSION_LIST_NAMES to their HubSpot list IDs via a
+    name search (exact match, case-insensitive) - cached after the first
+    lookup since these are fixed, standing lists that don't change build to
+    build. Any name that can't be found is logged and skipped rather than
+    failing the whole build.
+    """
+    global _standard_suppression_ids_cache
+    if _standard_suppression_ids_cache is not None:
+        return _standard_suppression_ids_cache
+
+    ids = []
+    for name in STANDARD_SUPPRESSION_LIST_NAMES:
+        result = search_lists(name, limit=20)
+        match = next((l for l in result.get("lists", []) if l.get("name", "").strip().lower() == name.strip().lower()), None)
+        if match:
+            ids.append(match["id"])
+            log.info(f"[SUPPRESSION] resolved {name!r} -> list id {match['id']}")
+        else:
+            log.warning(f"[SUPPRESSION] could not find a HubSpot list named {name!r} - skipping it")
+
+    _standard_suppression_ids_cache = ids
+    return ids
 
 
 def find_source_candidates(limit_per_term: int = 100) -> list:
@@ -306,7 +346,8 @@ def clone_and_replace_body(task_name: str, content_html: str, clone_name: str,
     log.info(f"[CLONE] body section {primary_id!r} replaced with doc content on email {email_id}")
 
     if send_list_id:
-        set_email_send_list(email_id, send_list_id, suppression_list_ids or [])
+        all_suppression_ids = list(dict.fromkeys((suppression_list_ids or []) + resolve_standard_suppression_list_ids()))
+        set_email_send_list(email_id, send_list_id, all_suppression_ids)
 
     verify = _get(f"/marketing/v3/emails/{email_id}")
     return {

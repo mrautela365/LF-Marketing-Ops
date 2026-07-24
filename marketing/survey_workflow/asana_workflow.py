@@ -34,13 +34,30 @@ if not log.handlers:
 class SurveyWorkflow:
     """Orchestrates the brief + gated multi-draft build for one Asana task."""
 
-    def __init__(self, asana_url: str, overrides: dict = None, hubspot_workflow_url: str = None):
+    def __init__(self, asana_url: str, overrides: dict = None, hubspot_workflow_url: str = None,
+                 content_override: str = None, content_links: list = None):
         self.asana_url = asana_url
         self.overrides = overrides or {}
         self.hubspot_workflow_url = hubspot_workflow_url or ""
+        # Manually pasted email content from the UX, used INSTEAD of fetching
+        # the Content subtask's Google Doc link - the fallback for when the
+        # doc isn't shared with the service account (or any other fetch
+        # failure). Run through ai_polish_pasted_content() below (cleanup +
+        # link/button placement) rather than used byte-for-byte.
+        self.content_override = (content_override or "").strip()
+        # Links the user wants placed in the pasted content: list of
+        # {"id": str, "text": str (anchor phrase/placement hint), "url": str,
+        # "is_button": bool}. Only used together with content_override.
+        self.content_links = content_links or []
         self.raw_data = {}
         self.brief = {}
         self.warnings = []
+
+    def _polish_override_content(self) -> str:
+        """AI-clean the pasted content and place the user's links/buttons, then
+        mechanically substitute the real URLs (never AI-generated) in."""
+        html = stage_brief.ai_polish_pasted_content(self.content_override, self.content_links)
+        return stage_brief.resolve_polish_placeholders(html, self.content_links)
 
     async def get_brief(self) -> dict:
         """Read-only: fetch the task, report stage status. Takes no action."""
@@ -81,14 +98,24 @@ class SurveyWorkflow:
         if not self.brief.get("ready_to_build"):
             return {"gated": True, "brief": self.brief}
 
-        if not self.brief.get("content_doc_url"):
-            return {"error": "Could not find a content doc link in the Content subtask's comments.", "brief": self.brief}
-
-        try:
+        if self.content_override:
             loop = asyncio.get_running_loop()
-            doc_html = await loop.run_in_executor(None, content_tools.prepare_content, self.brief["content_doc_url"])
-        except Exception as e:
-            return {"error": f"Could not fetch content doc: {e}", "brief": self.brief}
+            doc_html = await loop.run_in_executor(None, self._polish_override_content)
+            log.info("[STAGING-PREVIEW] using manually pasted content override, AI-polished with links (skipped content doc fetch)")
+        else:
+            if not self.brief.get("content_doc_url"):
+                return {"error": "Could not find a content doc link in the Content subtask's comments.", "brief": self.brief}
+
+            try:
+                loop = asyncio.get_running_loop()
+                doc_html = await loop.run_in_executor(None, content_tools.prepare_content, self.brief["content_doc_url"])
+            except Exception as e:
+                log.error(f"[STAGING-PREVIEW] doc fetch failed for {self.brief['content_doc_url']!r}: {e}")
+                return {
+                    "error": f"Could not fetch content doc: {e}",
+                    "doc_fetch_failed": True,
+                    "brief": self.brief,
+                }
 
         loop = asyncio.get_running_loop()
         drafts = await loop.run_in_executor(None, stage_brief.ai_split_drafts, doc_html)
@@ -147,18 +174,28 @@ class SurveyWorkflow:
                 "brief": self.brief,
             }
 
-        if not self.brief.get("content_doc_url"):
-            return {
-                "success": False,
-                "error": "Could not find a content doc link in the Content subtask's comments.",
-                "brief": self.brief,
-            }
+        if self.content_override:
+            doc_html = self._polish_override_content()
+            log.info("[BUILD] using manually pasted content override, AI-polished with links (skipped content doc fetch)")
+        else:
+            if not self.brief.get("content_doc_url"):
+                return {
+                    "success": False,
+                    "error": "Could not find a content doc link in the Content subtask's comments.",
+                    "brief": self.brief,
+                }
 
-        # Fetch + split the content doc into draft segments
-        try:
-            doc_html = content_tools.prepare_content(self.brief["content_doc_url"])
-        except Exception as e:
-            return {"success": False, "error": f"Could not fetch content doc: {e}", "brief": self.brief}
+            # Fetch + split the content doc into draft segments
+            try:
+                doc_html = content_tools.prepare_content(self.brief["content_doc_url"])
+            except Exception as e:
+                log.error(f"[BUILD] doc fetch failed for {self.brief['content_doc_url']!r}: {e}")
+                return {
+                    "success": False,
+                    "error": f"Could not fetch content doc: {e}",
+                    "doc_fetch_failed": True,
+                    "brief": self.brief,
+                }
 
         drafts = stage_brief.ai_split_drafts(doc_html)
         log.info(f"[BUILD] Doc split into {len(drafts)} draft(s)")
@@ -201,7 +238,11 @@ class SurveyWorkflow:
         workflow_url = self.hubspot_workflow_url or self.brief.get("hubspot_workflow_url")
         all_built = results and all(r.get("success") for r in results)
 
-        if workflow_url and all_built:
+        if len(drafts) == 1:
+            # Single-email doc: just the one email + send list, no workflow.
+            if workflow_url:
+                log.info("[BUILD] Doc has 1 email - skipping workflow clone (single-email docs don't need one).")
+        elif workflow_url and all_built:
             workflow_result = self._clone_workflow(workflow_url, drafts, results, doc_html, task_name)
         elif workflow_url and not all_built:
             msg = "Skipped workflow clone: not every draft email built successfully."

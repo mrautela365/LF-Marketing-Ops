@@ -43,6 +43,7 @@
 
     <!-- ── Step 1: Configure ── -->
     <div id="step-1" class="step-panel">
+
       <div class="card">
         <div class="card-title">Start Campaign Request</div>
         <div class="card-desc">
@@ -121,44 +122,86 @@
         </div>
       </div>
 
-      <!-- Generated content card — shows subject, preview, and full email HTML -->
+      <!-- Generated content card — shows both A/B variants side by side -->
       <div class="card" id="content-review-card">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
-          <div class="card-title" style="margin:0">Email Content</div>
+          <div class="card-title" style="margin:0">Email Content — A/B Preview</div>
           <span id="content-status-badge" style="font-size:12px;color:var(--gray-500)">⏳ Drafting…</span>
         </div>
-
-        <!-- Subject display -->
-        <div style="margin-bottom:12px">
-          <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--gray-500);margin-bottom:4px">Subject Line</div>
-          <div id="subject-display" style="
-            padding:10px 14px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;
-            font-size:15px;font-weight:500;color:var(--gray-800);min-height:38px;
-          ">⏳ Drafting…</div>
+        <div class="card-desc" style="margin:-8px 0 14px">
+          Both variants below will be created as a real, linked HubSpot A/B test at Implementation.
         </div>
 
-        <!-- Preview text display -->
-        <div style="margin-bottom:16px">
-          <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--gray-500);margin-bottom:4px">Preview Text</div>
-          <div id="preview-display" style="
-            padding:10px 14px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;
-            font-size:13px;color:var(--gray-600);min-height:34px;
-          ">⏳ Drafting…</div>
-        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
 
-        <!-- Editable content sections — each can be removed -->
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
-          <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--gray-500)">Content Sections</div>
-          <span style="font-size:11px;color:var(--gray-400)">Remove any block with the 🗑 icon</span>
-        </div>
-        <div id="sections-editor"></div>
+          <!-- Variant A — AI Template (read-only, fully automatic) -->
+          <div>
+            <div style="
+              display:inline-block;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:700;
+              background:#ede9fe;color:#6d28d9;margin-bottom:10px;
+            ">VARIANT A — AI TEMPLATE</div>
 
-        <!-- Full email preview iframe -->
-        <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--gray-500);margin:16px 0 6px">Full Email Preview</div>
-        <iframe id="email-preview-frame"
-          sandbox="allow-same-origin allow-popups"
-          style="width:100%;height:500px;border:1px solid #e2e8f0;border-radius:6px;background:#f9fafb"
-        ></iframe>
+            <div style="margin-bottom:12px">
+              <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--gray-500);margin-bottom:4px">Subject Line</div>
+              <div id="subject-display-a" style="
+                padding:10px 14px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;
+                font-size:15px;font-weight:500;color:var(--gray-800);min-height:38px;
+              ">⏳ Drafting…</div>
+            </div>
+
+            <div style="margin-bottom:16px">
+              <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--gray-500);margin-bottom:4px">Preview Text</div>
+              <div id="preview-display-a" style="
+                padding:10px 14px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;
+                font-size:13px;color:var(--gray-600);min-height:34px;
+              ">⏳ Drafting…</div>
+            </div>
+
+            <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--gray-500);margin:16px 0 6px">Full Email Preview</div>
+            <iframe id="email-preview-frame-a"
+              sandbox="allow-same-origin allow-popups"
+              style="width:100%;height:500px;border:1px solid #e2e8f0;border-radius:6px;background:#f9fafb"
+            ></iframe>
+          </div>
+
+          <!-- Variant B — Existing Flow (editable) -->
+          <div>
+            <div style="
+              display:inline-block;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:700;
+              background:#dbeafe;color:#1d4ed8;margin-bottom:10px;
+            ">VARIANT B — EXISTING FLOW</div>
+
+            <div style="margin-bottom:12px">
+              <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--gray-500);margin-bottom:4px">Subject Line</div>
+              <div id="subject-display-b" style="
+                padding:10px 14px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;
+                font-size:15px;font-weight:500;color:var(--gray-800);min-height:38px;
+              ">⏳ Drafting…</div>
+            </div>
+
+            <div style="margin-bottom:16px">
+              <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--gray-500);margin-bottom:4px">Preview Text</div>
+              <div id="preview-display-b" style="
+                padding:10px 14px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;
+                font-size:13px;color:var(--gray-600);min-height:34px;
+              ">⏳ Drafting…</div>
+            </div>
+
+            <!-- Editable content sections — each can be removed -->
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+              <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--gray-500)">Content Sections</div>
+              <span style="font-size:11px;color:var(--gray-400)">Remove any block with the 🗑 icon</span>
+            </div>
+            <div id="sections-editor"></div>
+
+            <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--gray-500);margin:16px 0 6px">Full Email Preview</div>
+            <iframe id="email-preview-frame-b"
+              sandbox="allow-same-origin allow-popups"
+              style="width:100%;height:500px;border:1px solid #e2e8f0;border-radius:6px;background:#f9fafb"
+            ></iframe>
+          </div>
+
+        </div>
       </div>
 
       <!-- Refine content card -->
@@ -287,7 +330,8 @@
         </div>
 
         <div id="done-message" class="hidden"></div>
-        <div id="done-draft-link" class="hidden"></div>
+        <div id="done-draft-link-a" class="hidden"></div>
+        <div id="done-draft-link-b" class="hidden" style="margin-top:8px"></div>
 
         <!-- Final chat -->
         <div style="margin-top:12px">
@@ -302,13 +346,96 @@
           <div id="done-message-status" class="hidden" style="margin-top:8px"></div>
         </div>
 
-        <div class="btn-row">
+        <div class="btn-row" style="margin-top: 16px;">
           <button class="btn btn-outline" onclick="startOver()">+ Stage Another Email</button>
         </div>
       </div>
     </div>
 
   </div><!-- /flow-event -->
+
+  <!-- ════════════════════════════════════════════════════════════════════
+       MODALS
+       ════════════════════════════════════════════════════════════════════ -->
+
+  <!-- Template Library Modal -->
+  <div id="template-library-modal" class="hidden" style="
+    position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center;
+    z-index: 1000;
+  ">
+    <div style="
+      background: white; border-radius: 12px; padding: 32px; max-width: 600px; width: 90%;
+      max-height: 80vh; overflow-y: auto;
+    ">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+        <h2 style="margin: 0;">📋 Template Library</h2>
+        <button onclick="closeModal('template-library-modal')" style="
+          background: none; border: none; font-size: 24px; cursor: pointer; color: var(--gray-400);
+        ">✕</button>
+      </div>
+
+      <div id="template-list" style="display: grid; gap: 12px;">
+        <!-- Templates will be populated here -->
+        <div style="padding: 16px; background: var(--bg-light); border-radius: 8px; text-align: center; color: var(--gray-400);">
+          Loading templates...
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Template Info Modal -->
+  <div id="template-info-modal" class="hidden" style="
+    position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center;
+    z-index: 1000;
+  ">
+    <div style="
+      background: white; border-radius: 12px; padding: 32px; max-width: 600px; width: 90%;
+      max-height: 80vh; overflow-y: auto;
+    ">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+        <h2 style="margin: 0;">❓ How Templates Work</h2>
+        <button onclick="closeModal('template-info-modal')" style="
+          background: none; border: none; font-size: 24px; cursor: pointer; color: var(--gray-400);
+        ">✕</button>
+      </div>
+
+      <div style="line-height: 1.6; color: var(--gray-600);">
+        <h3 style="margin-top: 0;">What is a Template?</h3>
+        <p>A template is a saved email campaign that you can reuse for future events. Instead of starting from scratch, you can quickly create a new campaign based on a successful previous one.</p>
+
+        <h3>How to Save a Template</h3>
+        <ol>
+          <li>Complete a campaign from start to finish</li>
+          <li>Click <strong>Save as Template</strong> in the Implementation phase</li>
+          <li>Give it a name and select the campaign stage</li>
+          <li>The template is saved for future use</li>
+        </ol>
+
+        <h3>How to Use a Template</h3>
+        <ol>
+          <li>Click <strong>Use Template</strong> from the start screen</li>
+          <li>Select the template you want to use</li>
+          <li>Provide the new event URL</li>
+          <li>The system auto-populates using your template's structure</li>
+        </ol>
+
+        <h3>Benefits</h3>
+        <ul>
+          <li>✅ Save time on repetitive campaigns</li>
+          <li>✅ Maintain consistent quality and tone</li>
+          <li>✅ Reuse proven messaging strategies</li>
+          <li>✅ One-click setup for similar events</li>
+        </ul>
+      </div>
+
+      <div class="btn-row" style="margin-top: 20px;">
+        <button class="btn btn-primary" onclick="closeModal('template-info-modal')">Got it!</button>
+      </div>
+    </div>
+  </div>
+
 </div><!-- /container -->
 
 <script src="/static/app.js?v=10"></script>

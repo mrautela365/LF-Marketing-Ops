@@ -90,6 +90,25 @@
     <div id="staging-locked" class="gate-message hidden"></div>
     <div id="staging-content" class="hidden">
       <div id="staging-existing" class="hidden"></div>
+      <div id="content-override-box" class="hidden">
+        <div class="card-desc">
+          Couldn't fetch the content doc automatically. Paste the email content directly below —
+          AI will clean it up into a well-formatted email for you. If you copy/paste from a Google
+          Doc or Word, any real hyperlinks already in the text are kept automatically. For a link
+          you haven't added yet, don't worry about where it goes — list it below and describe
+          where it belongs, and AI will place it (as an inline link or a button) in the right spot.
+        </div>
+        <div id="content-override-input" class="content-editable-box" contenteditable="true"
+          data-placeholder="Paste the raw email content here… (real hyperlinks are preserved)"></div>
+
+        <div class="card-desc" style="margin-top:12px;"><strong>Links to add (optional)</strong></div>
+        <div id="content-links-rows"></div>
+        <button class="btn-secondary" onclick="addContentLinkRow()">+ Add a link</button>
+
+        <div style="margin-top:12px;">
+          <button class="btn-primary" onclick="retryWithPastedContent()">Clean Up &amp; Use This Content</button>
+        </div>
+      </div>
       <div id="staging-preview-box" class="hidden">
         <div id="draft-count-msg" class="draft-count-msg"></div>
         <div id="draft-previews"></div>

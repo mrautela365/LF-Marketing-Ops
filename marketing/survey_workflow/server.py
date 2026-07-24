@@ -43,6 +43,13 @@ class AsanaUrlRequest(BaseModel):
     # emails once Build completes. Takes priority over any workflow link the
     # AI finds on its own in the Asana task's comments.
     hubspot_workflow_url: Optional[str] = None
+    # Optional manually pasted email content (HTML or plain text), used
+    # INSTEAD of fetching the Content subtask's Google Doc link - the
+    # fallback for when the doc isn't shared with the service account.
+    content_override: Optional[str] = None
+    # Links to place in the pasted content: [{id, text, url, is_button}].
+    # Only used together with content_override.
+    content_links: Optional[list] = None
 
 
 @app.post("/api/brief")
@@ -124,7 +131,10 @@ async def staging_preview(req: AsanaUrlRequest):
     be built from the content doc.
     """
     try:
-        workflow = SurveyWorkflow(req.asana_url, overrides=req.overrides)
+        workflow = SurveyWorkflow(
+            req.asana_url, overrides=req.overrides,
+            content_override=req.content_override, content_links=req.content_links,
+        )
         result = await workflow.get_staging_preview()
         return result
     except Exception as e:
@@ -148,7 +158,10 @@ async def staging_preview_stream(req: AsanaUrlRequest):
         target_logger = logging.getLogger("survey-workflow")
         target_logger.addHandler(handler)
         try:
-            workflow = SurveyWorkflow(req.asana_url, overrides=req.overrides)
+            workflow = SurveyWorkflow(
+                req.asana_url, overrides=req.overrides,
+                content_override=req.content_override, content_links=req.content_links,
+            )
             task = asyncio.create_task(workflow.get_staging_preview())
 
             while not task.done():
@@ -181,7 +194,10 @@ async def build_drafts(req: AsanaUrlRequest):
     Content / Provide List aren't both complete yet.
     """
     try:
-        workflow = SurveyWorkflow(req.asana_url, overrides=req.overrides, hubspot_workflow_url=req.hubspot_workflow_url)
+        workflow = SurveyWorkflow(
+            req.asana_url, overrides=req.overrides, hubspot_workflow_url=req.hubspot_workflow_url,
+            content_override=req.content_override, content_links=req.content_links,
+        )
         await workflow.get_brief()
         result = await workflow.build_drafts()
         return result

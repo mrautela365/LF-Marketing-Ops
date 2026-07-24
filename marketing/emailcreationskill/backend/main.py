@@ -698,10 +698,32 @@ async def generate_content(req: GenerateContentRequest):
         session.meta["banner_url"]         = generated.get("banner_url", "")
         session.meta["sections"]           = generated.get("sections", [])
         session.meta["sponsors"]           = generated.get("sponsors", [])
+
+        # Variant A (AI Template) — generated from the same detected funnel stage,
+        # previewed alongside Variant B (the existing flow, above) so the user can
+        # compare before Implementation creates both as a real HubSpot A/B test.
+        progress_emit(token, "🤖 Drafting AI template variant…")
+        variant_a = await loop.run_in_executor(
+            None,
+            lambda: agent.generate_ai_template_content(
+                url_data, stage_info,
+                banner_url=generated.get("banner_url", ""),
+                sponsors=generated.get("sponsors", []),
+            )
+        )
+        session.meta["variant_a_subject"]      = variant_a.get("subject", "")
+        session.meta["variant_a_preview"]      = variant_a.get("preview_text", "")
+        session.meta["variant_a_html"]          = variant_a.get("html", "")
+        session.meta["variant_a_body_html"]     = variant_a.get("body_html", "")
+        session.meta["variant_a_sections"]      = variant_a.get("sections", [])
+        session.meta["variant_a_banner_url"]    = variant_a.get("banner_url", "")
+        session.meta["variant_a_template_key"]  = variant_a.get("template_key", "")
+        session.meta["variant_a_mode"]          = variant_a.get("mode", "")
         session_store.update(session)
 
         log.info(f"[GEN-CONTENT] done: subject={generated['subject']!r} "
-                 f"html_len={len(generated['html'])} banner={'yes' if generated.get('banner_url') else 'no'}")
+                 f"html_len={len(generated['html'])} banner={'yes' if generated.get('banner_url') else 'no'} "
+                 f"variant_a_mode={variant_a.get('mode')!r}")
         sections = generated.get("sections", []) or []
         progress_emit(token, f"📧 Email drafted — {len(sections)} content section(s).", done=True)
         return {
@@ -711,6 +733,11 @@ async def generate_content(req: GenerateContentRequest):
             "generated_html":    generated["html"],
             "sections":          sections,
             "banner_url":        generated.get("banner_url", ""),
+            "variant_a_subject":     variant_a.get("subject", ""),
+            "variant_a_preview":     variant_a.get("preview_text", ""),
+            "variant_a_html":        variant_a.get("html", ""),
+            "variant_a_template_key": variant_a.get("template_key", ""),
+            "variant_a_mode":        variant_a.get("mode", ""),
         }
     except Exception as exc:
         log.error(f"[GEN-CONTENT] failed: {exc}\n{traceback.format_exc()}")
@@ -800,6 +827,15 @@ async def clone_email(req: CloneRequest):
     validation_passed = session.meta.get("validation_passed", False)
     validation_issues = session.meta.get("validation_issues", [])
 
+    # variant_a_email_id == real_email_id (the master clone from Step 1 of clone_turn).
+    # variant_b_email_id is the separate A/B variation email created inside clone_turn;
+    # it's empty if create_ab_variation failed, in which case Variant B content was
+    # applied to the master itself as a fallback (see agent.clone_turn).
+    variant_a_email_id  = session.meta.get("variant_a_email_id", real_email_id)
+    variant_a_draft_url = session.meta.get("variant_a_draft_url", "")
+    variant_b_email_id  = session.meta.get("variant_b_email_id", "")
+    variant_b_draft_url = session.meta.get("variant_b_draft_url", "")
+
     session.phase     = "complete" if validation_passed else "cloned"
     session.email_id  = real_email_id
     session.draft_url = f"https://app.hubspot.com/email/{HUBSPOT_PORTAL_ID}/edit/{real_email_id}/settings"
@@ -807,7 +843,7 @@ async def clone_email(req: CloneRequest):
     log.info(
         f"[CLONE] verified email_id={real_email_id} "
         f"content_applied={content_applied} validation_passed={validation_passed} "
-        f"issues={validation_issues}"
+        f"issues={validation_issues} variant_a={variant_a_email_id} variant_b={variant_b_email_id}"
     )
 
     return {
@@ -819,6 +855,10 @@ async def clone_email(req: CloneRequest):
         "content_applied":   content_applied,
         "validation_passed": validation_passed,
         "validation_issues": validation_issues,
+        "variant_a_email_id":  variant_a_email_id,
+        "variant_a_draft_url": variant_a_draft_url or session.draft_url,
+        "variant_b_email_id":  variant_b_email_id,
+        "variant_b_draft_url": variant_b_draft_url,
     }
 
 

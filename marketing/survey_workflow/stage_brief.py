@@ -15,6 +15,7 @@ import os
 import re
 import sys
 import json
+import html as html_lib
 import asyncio
 import logging
 
@@ -616,3 +617,234 @@ def ai_extract_send_dates(doc_content: str, num_dates: int, max_attempts: int = 
 
     log.warning(f"[AI SEND DATES] all {max_attempts} attempts exhausted - no reliable send dates found")
     return []
+
+
+# ── Polish manually-pasted content (fallback for when the doc fetch fails) ──
+
+_POLISH_SYSTEM = (
+    "You are an email copy editor turning rough pasted text into clean, well-structured "
+    "HTML for a marketing email body. Never invent facts, claims, or URLs that aren't "
+    "given to you. Return ONLY raw JSON, no markdown fences, no commentary."
+)
+
+_POLISH_PROMPT = """Raw pasted content:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+{raw_content}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Links to place (each has an id, the anchor text/description of where it belongs, and
+whether it should be an inline text link or a standalone call-to-action button):
+{link_block}
+
+{rejection_hint}Rewrite the raw content above into clean email-ready HTML:
+- Use <p> for paragraphs, <strong>/<em> for emphasis already implied by the text, <ul>/<li>
+  for lists if the content is clearly list-like. Do NOT add headings that aren't implied by
+  the text, and do NOT add new claims, stats, or sentences that aren't in the raw content.
+- The raw content may ALREADY contain real hyperlinks, in either of two forms - both carry a
+  real, trusted URL, so do not discard them and do not put them through the placeholder
+  system below:
+    (a) An actual HTML anchor tag, e.g. <a href="https://...">some text</a> - this happens when
+        the user pasted rich text (e.g. copied straight from Google Docs) where the link was a
+        real hyperlink, not typed-out markdown.
+    (b) Markdown-style link syntax, "[some text](https://...)", or the same thing wrapped in an
+        extra pair of brackets, "[[some text](https://...)]" (this double-bracket form usually
+        marks an image/graphic or an existing call-to-action in the source doc).
+  For either form:
+    - If it's a plain inline link (not a CTA) -> render/keep it as a plain inline
+      <a href="url">text</a> in place, using the URL exactly as given.
+    - If it reads like a call-to-action (e.g. "read report", "register", "click here"),
+      especially the double-bracket markdown form -> render as a standalone centered button
+      using EXACTLY this markup, with the real url and text substituted in:
+      <p style="text-align:center;margin:24px 0;"><a href="url" style="background-color:#0068B5;color:#ffffff;padding:12px 28px;border-radius:4px;text-decoration:none;font-weight:bold;display:inline-block;font-family:Arial,sans-serif;">text</a></p>
+    - A link that is clearly just a header/banner graphic (e.g. "email header graphic") rather
+      than a CTA or real inline link -> drop it entirely, it's a design element from the source
+      doc, not email copy.
+- Separately, for each INLINE link in the "Links to place" list above (a link the user typed
+  into the UI, NOT already present as markdown in the raw text), wrap the most natural
+  matching phrase already in the text with <a href="__LINK_<id>__">that exact phrase</a> -
+  use the literal placeholder "__LINK_<id>__" as the href value (not the real URL).
+- For each BUTTON link in the "Links to place" list, insert a standalone line
+  "[[BUTTON_<id>]]" (nothing else on that line) at the point in the flow where that
+  call-to-action belongs (usually near the end, or right after the most relevant paragraph).
+- Keep the email's original meaning and tone - this is a cleanup/formatting pass, not a
+  rewrite of the message.
+
+Reply with ONLY this JSON (no markdown fences):
+{{"html": "...", "confident": true/false}}"""
+
+
+_SHARE_MARKER_RE = re.compile(r"\[?\s*click\s*to\s*share\s*function\s*:?\s*", re.IGNORECASE)
+_BUTTON_HREF_RE = re.compile(r'<a href="([^"]+)"\s+style="background-color:#0068B5')
+_ANY_HREF_RE = re.compile(r'<a href="([^"]+)"')
+
+
+def _split_share_section(raw_content: str):
+    """
+    Docs sometimes end with a "click to share function:" marker followed by
+    freeform social-copy text. Everything from that marker onward is pulled
+    out here (code, not AI - this is a literal marker, not a judgment call) so
+    it isn't polished as regular email body copy; the text after it becomes
+    the pre-written share-post copy.
+
+    Returns (body_content, share_text_or_None).
+    """
+    m = _SHARE_MARKER_RE.search(raw_content)
+    if not m:
+        return raw_content, None
+    body = raw_content[:m.start()].rstrip()
+    share_text = raw_content[m.end():].strip().rstrip("]").strip()
+    share_text = _strip_html_to_text(share_text)
+    return body, (share_text or None)
+
+
+_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _strip_html_to_text(fragment: str) -> str:
+    """
+    The "click to share function:" text comes straight from the raw pasted
+    content, which (via the rich-paste contenteditable box) may itself be
+    HTML - <p>, <span>, <br>, &nbsp; etc. The X/LinkedIn share text param
+    must be plain text, so tags are stripped and entities decoded here
+    before anything gets URL-encoded.
+    """
+    text = _TAG_RE.sub(" ", fragment)
+    text = html_lib.unescape(text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _extract_main_cta_url(html: str) -> str:
+    """The real URL of the doc's own CTA button/link (already resolved to a
+    real href by the AI polish pass, never a placeholder) - used as the
+    article link for the share buttons. Prefers the styled CTA button; falls
+    back to the first link in the content if there's no button."""
+    m = _BUTTON_HREF_RE.search(html)
+    if m:
+        return m.group(1)
+    m = _ANY_HREF_RE.search(html)
+    return m.group(1) if m else ""
+
+
+def _build_share_block(share_text: str, main_url: str) -> str:
+    """
+    Deterministic (no AI) construction of the X / LinkedIn share buttons,
+    matching the reference design: two bold underlined links side by side
+    with a rule underneath. URL-encoding is done here in code, never by the
+    model, so the share links can never be malformed or hallucinated.
+    """
+    from urllib.parse import quote
+
+    x_url = f"https://x.com/intent/post?text={quote(share_text)}&url={quote(main_url, safe='')}"
+    linkedin_url = f"https://www.linkedin.com/sharing/share-offsite/?url={quote(main_url, safe='')}"
+    # HubSpot's rich-text/HTML module strips <table>/<tr>/<td> wrappers on
+    # save, which collapsed the two links together with no gap ("SHARE ON
+    # XSHARE ON LINKEDIN") because the padding lived on the <td>, not the
+    # <a>. Putting the spacing directly on each <a>'s own inline style
+    # survives that strip, the same way the CTA button's inline style does.
+    link_style = "font-weight:bold;text-decoration:underline;color:#0f172a;font-family:Arial,sans-serif;padding:0 24px;display:inline-block;"
+    return (
+        '<p style="text-align:center;margin:24px 0 0 0;">'
+        f'<a href="{x_url}" target="_blank" style="{link_style}">SHARE ON X</a>'
+        f'<a href="{linkedin_url}" target="_blank" style="{link_style}">SHARE ON LINKEDIN</a>'
+        "</p>"
+        '<hr style="border:none;border-top:1px solid #0068B5;margin:16px 0 0 0;">'
+    )
+
+
+def ai_polish_pasted_content(raw_content: str, links: list = None, max_attempts: int = 3) -> str:
+    """
+    Turn manually-pasted raw text (the content-doc-fetch fallback) into clean
+    email HTML, with user-specified links placed by the AI as inline <a> tags
+    or button placeholders - mirrors ai_split_drafts's confidence-retry pattern.
+
+    `links`: list of {"id": str, "text": str (description of where it goes),
+    "url": str, "is_button": bool}. The AI only decides WHERE each link goes
+    (as a placeholder token) - the real URL is substituted in mechanically
+    afterward, so the AI can never invent or alter a URL.
+
+    If the raw content has a "click to share function:" marker, everything
+    after it is split off (in code) as pre-written share-post copy, and a
+    SHARE ON X / SHARE ON LINKEDIN button row is appended to the end of the
+    output - both links built deterministically from the doc's own CTA link,
+    never AI-encoded.
+
+    Returns clean HTML with __LINK_<id>__ placeholders (inline) and
+    [[BUTTON_<id>]] tokens (buttons) still unresolved - callers must run the
+    result through `resolve_polish_placeholders()` before use.
+    """
+    links = links or []
+    if not raw_content.strip():
+        return ""
+
+    body_content, share_text = _split_share_section(raw_content)
+    if share_text:
+        log.info(f"[AI POLISH] found 'click to share function' marker - splitting off {len(share_text)} chars of share copy")
+
+    link_block = "\n".join(
+        f'  - id={l["id"]!r}, type={"BUTTON" if l.get("is_button") else "INLINE"}, '
+        f'placement hint: {l.get("text") or "(no hint given - use your best judgment)"!r}'
+        for l in links
+    ) or "  (none - just clean up the text, no links to place)"
+
+    rejection_hint = ""
+    for attempt in range(1, max_attempts + 1):
+        prompt = _POLISH_PROMPT.format(raw_content=body_content, link_block=link_block, rejection_hint=rejection_hint)
+        log.info(f"[AI POLISH] attempt {attempt}: cleaning up {len(body_content)} chars, placing {len(links)} link(s)...")
+        try:
+            raw = llm_gateway.complete_text(prompt, system=_POLISH_SYSTEM, max_tokens=2000, timeout=60)
+        except Exception as e:
+            log.warning(f"[AI POLISH] attempt {attempt}: call failed: {e}")
+            rejection_hint = ""
+            continue
+
+        parsed = _parse_json_object(_strip_json(raw))
+        html = (parsed or {}).get("html") or ""
+        missing = [l["id"] for l in links if f'__LINK_{l["id"]}__' not in html and f'[[BUTTON_{l["id"]}]]' not in html]
+
+        if not html or missing or not (parsed or {}).get("confident", True):
+            reason = f"missing placeholder(s) for link id(s) {missing}" if missing else "empty/not confident"
+            log.info(f"[AI POLISH] attempt {attempt}: retrying ({reason})")
+            rejection_hint = (
+                "Every link id given above MUST appear exactly once, either as "
+                '"__LINK_<id>__" (inline) or "[[BUTTON_<id>]]" (button). Retry.\n\n'
+            )
+            continue
+
+        log.info(f"[AI POLISH] cleaned up content, placed {len(links)} link(s)")
+        if share_text:
+            main_url = _extract_main_cta_url(html)
+            if main_url:
+                html += _build_share_block(share_text, main_url)
+                log.info(f"[AI POLISH] appended SHARE ON X / SHARE ON LINKEDIN buttons, article url={main_url!r}")
+            else:
+                log.warning("[AI POLISH] found share copy but no CTA link to build share buttons from - skipping share block")
+        return html
+
+    log.warning(f"[AI POLISH] all {max_attempts} attempts exhausted - falling back to plain paragraphs")
+    fallback_html = "\n".join(f"<p>{line}</p>" for line in body_content.split("\n") if line.strip())
+    if share_text:
+        main_url = _extract_main_cta_url(fallback_html)
+        if main_url:
+            fallback_html += _build_share_block(share_text, main_url)
+    return fallback_html
+
+
+def resolve_polish_placeholders(html: str, links: list) -> str:
+    """
+    Mechanically substitute ai_polish_pasted_content's placeholders with the
+    REAL urls/text - never AI-generated, so a URL can never be hallucinated.
+    Inline links become plain <a href>; buttons become a centered,
+    inline-styled anchor (the standard technique for clickable "buttons" in
+    HTML email, since many email clients don't render <button>/CSS classes).
+    """
+    for l in links or []:
+        lid, url, text = l["id"], l["url"], l.get("text") or "Learn more"
+        html = html.replace(f"__LINK_{lid}__", url)
+        button_html = (
+            f'<p style="text-align:center;margin:24px 0;">'
+            f'<a href="{url}" style="background-color:#0068B5;color:#ffffff;padding:12px 28px;'
+            f'border-radius:4px;text-decoration:none;font-weight:bold;display:inline-block;'
+            f'font-family:Arial,sans-serif;">{text}</a></p>'
+        )
+        html = html.replace(f"[[BUTTON_{lid}]]", button_html)
+    return html

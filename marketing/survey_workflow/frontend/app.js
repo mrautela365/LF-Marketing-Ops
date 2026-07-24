@@ -2,6 +2,54 @@ const STAGE_ORDER = ["Content", "Provide List", "Staging", "Approval", "Launch",
 
 let currentBrief = null;
 let overrides = {}; // {stageName: true/false} - local testing only, never sent to Asana
+let contentOverride = ""; // manually pasted email content, used instead of the doc fetch when set
+let contentLinks = []; // [{id, text, url, is_button}] - links the user wants AI to place in the pasted content
+let contentLinkSeq = 0;
+
+// ── Structured link rows for the content-override box ───────────────────────
+
+function addContentLinkRow() {
+  contentLinkSeq += 1;
+  const id = `l${contentLinkSeq}`;
+  contentLinks.push({ id, text: "", url: "", is_button: false });
+  renderContentLinkRows();
+}
+
+function removeContentLinkRow(id) {
+  contentLinks = contentLinks.filter((l) => l.id !== id);
+  renderContentLinkRows();
+}
+
+function updateContentLinkField(id, field, value) {
+  const link = contentLinks.find((l) => l.id === id);
+  if (link) link[field] = value;
+}
+
+function renderContentLinkRows() {
+  const box = document.getElementById("content-links-rows");
+  if (!box) return;
+  box.innerHTML = "";
+  for (const link of contentLinks) {
+    const row = document.createElement("div");
+    row.className = "content-link-row";
+    row.style.cssText = "display:flex;gap:8px;align-items:center;margin-bottom:6px;";
+    row.innerHTML = `
+      <input type="text" placeholder="Where should this link go? e.g. 'Register here'" style="flex:2;"
+        value="${escapeHtml(link.text)}" data-field="text" />
+      <input type="text" placeholder="https://…" style="flex:2;"
+        value="${escapeHtml(link.url)}" data-field="url" />
+      <label style="display:flex;align-items:center;gap:4px;white-space:nowrap;">
+        <input type="checkbox" data-field="is_button" ${link.is_button ? "checked" : ""} /> Button
+      </label>
+      <button type="button" class="btn-secondary" data-action="remove">✕</button>
+    `;
+    row.querySelector('[data-field="text"]').addEventListener("input", (e) => updateContentLinkField(link.id, "text", e.target.value));
+    row.querySelector('[data-field="url"]').addEventListener("input", (e) => updateContentLinkField(link.id, "url", e.target.value));
+    row.querySelector('[data-field="is_button"]').addEventListener("change", (e) => updateContentLinkField(link.id, "is_button", e.target.checked));
+    row.querySelector('[data-action="remove"]').addEventListener("click", () => removeContentLinkRow(link.id));
+    box.appendChild(row);
+  }
+}
 
 // ── Overrides panel ─────────────────────────────────────────────────────────
 
@@ -243,6 +291,7 @@ async function loadStagingPreview() {
   content.classList.remove("hidden");
   existingBox.classList.add("hidden");
   previewBox.classList.add("hidden");
+  document.getElementById("content-override-box").classList.add("hidden");
 
   logBox.innerHTML = "";
   logBox.classList.remove("hidden");
@@ -252,7 +301,11 @@ async function loadStagingPreview() {
     const resp = await fetch("/api/staging-preview-stream", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ asana_url: url, overrides }),
+      body: JSON.stringify({
+        asana_url: url, overrides,
+        content_override: contentOverride || null,
+        content_links: contentOverride ? validContentLinks() : null,
+      }),
     });
     if (!resp.ok || !resp.body) throw new Error(`Request failed (${resp.status})`);
 
@@ -292,8 +345,10 @@ async function loadStagingPreview() {
 
     if (data.error) {
       existingBox.classList.remove("hidden");
-      existingBox.innerHTML = `<div class="draft-result fail">${data.error}</div>`;
+      existingBox.innerHTML = `<div class="draft-result fail">${escapeHtml(data.error)}</div>`;
       previewBox.classList.add("hidden");
+      document.getElementById("content-override-box").classList.toggle("hidden", !data.doc_fetch_failed);
+      if (data.doc_fetch_failed && contentLinks.length === 0) addContentLinkRow();
       return;
     }
 
@@ -343,6 +398,56 @@ async function loadStagingPreview() {
   }
 }
 
+function validContentLinks() {
+  return contentLinks.filter((l) => l.text.trim() && l.url.trim());
+}
+
+// Keeps only real hyperlinks + basic text formatting from a rich paste (e.g. a
+// Google Doc link that's an actual <a href>, not typed-out markdown) - strips
+// scripts, event handlers, styles, and anything with a non-http(s) href so a
+// malicious paste can't inject code or a javascript: link.
+const CONTENT_PASTE_ALLOWED_TAGS = new Set(["A", "B", "STRONG", "I", "EM", "U", "BR", "P", "UL", "OL", "LI", "SPAN", "DIV"]);
+
+function sanitizePastedHtml(dirtyHtml) {
+  const doc = new DOMParser().parseFromString(dirtyHtml, "text/html");
+
+  function clean(node) {
+    for (const child of Array.from(node.childNodes)) {
+      if (child.nodeType === Node.ELEMENT_NODE) {
+        if (!CONTENT_PASTE_ALLOWED_TAGS.has(child.tagName)) {
+          // Unwrap: keep its text/children, drop the tag itself.
+          while (child.firstChild) node.insertBefore(child.firstChild, child);
+          node.removeChild(child);
+          continue;
+        }
+        for (const attr of Array.from(child.attributes)) {
+          if (attr.name.toLowerCase() === "href") {
+            if (!/^https?:\/\//i.test(attr.value)) child.removeAttribute("href");
+          } else {
+            child.removeAttribute(attr.name);
+          }
+        }
+        clean(child);
+      } else if (child.nodeType !== Node.TEXT_NODE) {
+        node.removeChild(child);
+      }
+    }
+  }
+  clean(doc.body);
+  return doc.body.innerHTML;
+}
+
+function retryWithPastedContent() {
+  const box = document.getElementById("content-override-input");
+  const html = sanitizePastedHtml(box.innerHTML).trim();
+  if (!html) { showError("Paste some content first."); return; }
+  const incomplete = contentLinks.some((l) => (l.text.trim() || l.url.trim()) && !(l.text.trim() && l.url.trim()));
+  if (incomplete) { showError("Each link needs both a placement description and a URL — or remove the empty row."); return; }
+  contentOverride = html;
+  document.getElementById("content-override-box").classList.add("hidden");
+  loadStagingPreview();
+}
+
 function escapeHtml(s) {
   const div = document.createElement("div");
   div.textContent = s || "";
@@ -362,7 +467,12 @@ async function buildDrafts() {
     const resp = await fetch("/api/build", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ asana_url: url, overrides, hubspot_workflow_url: workflowUrl || null }),
+      body: JSON.stringify({
+        asana_url: url, overrides,
+        hubspot_workflow_url: workflowUrl || null,
+        content_override: contentOverride || null,
+        content_links: contentOverride ? validContentLinks() : null,
+      }),
     });
     const data = await resp.json();
     if (!resp.ok) throw new Error(data.detail || "Build failed");
@@ -384,7 +494,9 @@ function renderBuildResult(result) {
   if (result.gated) {
     resultsEl.innerHTML = `<div class="draft-result fail">Gated — waiting on: ${(result.waiting_on || []).join(", ")}</div>`;
   } else if (result.error) {
-    resultsEl.innerHTML = `<div class="draft-result fail">${result.error}</div>`;
+    resultsEl.innerHTML = `<div class="draft-result fail">${escapeHtml(result.error)}</div>`;
+    document.getElementById("content-override-box").classList.toggle("hidden", !result.doc_fetch_failed);
+    if (result.doc_fetch_failed && contentLinks.length === 0) addContentLinkRow();
   } else {
     for (const d of result.drafts || []) {
       const div = document.createElement("div");

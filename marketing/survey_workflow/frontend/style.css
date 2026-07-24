@@ -371,3 +371,27 @@ input[type="text"] {
   line-height: 1.5;
   white-space: pre-wrap;
 }
+
+.content-editable-box {
+  width: 100%;
+  min-height: 200px;
+  max-height: 400px;
+  overflow-y: auto;
+  border: 1px solid var(--gray-200);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+.content-editable-box:empty::before {
+  content: attr(data-placeholder);
+  color: var(--gray-400);
+}
+.content-editable-box a { color: var(--blue-600); text-decoration: underline; }
+
+.content-link-row input[type="text"] {
+  padding: 8px 10px;
+  border: 1px solid var(--gray-200);
+  border-radius: 6px;
+  font-size: 13px;
+}
