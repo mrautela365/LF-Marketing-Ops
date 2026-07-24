@@ -466,7 +466,7 @@ function _applyGeneratedContent(data) {
   }
 
   _generatedHtml = data.generated_html || "";
-  if (_generatedHtml) frameB.srcdoc = _generatedHtml;
+  if (_generatedHtml && frameB) frameB.srcdoc = _generatedHtml;
 
   // Removable content sections (Variant B only — Variant A is fully automatic)
   _sections = Array.isArray(data.sections) ? data.sections : [];
