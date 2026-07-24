@@ -568,8 +568,18 @@ def _agent_cli(messages, *, system, tools, execute_tool, max_tokens, max_steps, 
     final_text  = ""
     for _ in range(max_steps):
         # idle_timeout=90 kills a truly-stalled call; timeout=300 is just a backstop
-        # against a pathological turn that never stops generating.
-        response = _cli_call_streaming(prompt, timeout=300, idle_timeout=90, on_event=on_event)
+        # against a pathological turn that never stops generating. Each step spawns a
+        # fresh, stateless subprocess (full `prompt` rebuilt from `messages`/prior
+        # TOOL_RESULTs), so an idle-timeout here is almost always a transient CLI/
+        # network stall, not a bad prompt — retry the same step before giving up.
+        for attempt in range(3):
+            try:
+                response = _cli_call_streaming(prompt, timeout=300, idle_timeout=90, on_event=on_event)
+                break
+            except RuntimeError as e:
+                if attempt == 2:
+                    raise
+                _emit(on_event, {"type": "output", "text": f"⚠️ {e} — retrying step ({attempt + 1}/2)…"})
 
         non_tool = _strip_protocol(response)
         if _looks_like_plan(non_tool) and len(non_tool) > len(best_plan):

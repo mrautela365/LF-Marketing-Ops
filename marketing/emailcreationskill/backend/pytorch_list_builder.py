@@ -154,7 +154,7 @@ def create_inclusion_lists():
                         list_id = best.get("listId")
                         found_name = best.get("name")
                         size = best.get("size", "unknown")
-                        hs_url = f"https://app.hubspot.com/contacts/8112310/lists/{list_id}"
+                        hs_url = f"https://app.hubspot.com/contacts/8112310/objectLists/{list_id}/filters"
 
                         print(f"  [FOUND]: {found_name}")
                         print(f"     ID: {list_id}")
