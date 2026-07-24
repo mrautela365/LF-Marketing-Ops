@@ -93,9 +93,15 @@ rolling them into one new master list. Three sections, top to bottom:
    Enrollment, Page View). Nothing is created here.
 2. **Review & Build Master List** — discovered lists render as cards grouped by
    signal. Select the ones you want (whole card is clickable, or "Select All" /
-   "Clear"), optionally search-and-add another list manually, then "Build Master
-   List" combines your selection into one new HubSpot list (OR of the selected
-   lists, size shown once built).
+   "Clear"), optionally search-and-add another list manually. Below that, a
+   **Suppression & Exclusions** section shows the standard hygiene suppression
+   lists (GDPR/opt-out/master-exclusion, resolved deterministically by name —
+   most recent quarter wins) plus a "Current Registrants" card for this event
+   (reusing the discovered Event Registration list), all **pre-selected by
+   default** — uncheck any you don't want applied. "Build Master List" combines
+   your inclusion selection into one new HubSpot list (OR of the selected
+   lists), with any checked suppressions applied as a single combined
+   NOT_IN_LIST exclusion (size shown once built).
 3. **Qualifying Lists Not Found** (only shown if a signal had zero matches) — one
    card per missing signal with a **"Create list"** button. Clicking it skips the
    plan-review step entirely and directly builds that signal's list via a custom
@@ -123,6 +129,7 @@ for custom-audience cases so it's easy to eyeball whether the segment logic make
 | 5 | Campaign Builder — skip audience | In Step 3, click "Skip — Create Email Only". | Step 4 completes with no send list attached; no list created. |
 | 6 | Audience Builder — discovery | Switch to Audience Builder tab. Paste a known event URL → Discover Existing Lists. | Ticker shows live agent narration; cards appear grouped by signal with reasonable classifications (spot-check: a "LF Newsletter Opt-In" card's filter, if you open it in HubSpot, is actually the LF newsletter subscription type, not a project-specific one). |
 | 7 | Audience Builder — select & build master | From case 6's results, Select All (or pick a subset) → Build Master List. | Button disabled until ≥1 card selected; on build, success message shows a HubSpot link; list's filter branch in HubSpot is an OR of `IN_LIST` branches referencing exactly the selected list IDs; name follows `<YYQN> - <Brand> - <Event> - Master [ASSET_TAG]`. |
+| 7b | Audience Builder — suppression & exclusions | From case 6's results, note the Suppression & Exclusions cards (should include standard hygiene lists + a "Current Registrants" card if an Event Registration list was discovered), all pre-checked. Uncheck one, then Build Master List. | A new **Combined Suppression** list is created (OR of the still-checked suppression lists) and the master list's filter branch has a `NOT_IN_LIST` filter on that combined list inside every inclusion `AND` branch; the unchecked suppression is NOT part of it. Success message shows both the master list and combined suppression links. If a selected inclusion list happens to also be checked as a suppression (e.g. Current Registrants pointing at the same list), it should be silently dropped from suppressions rather than zeroing out that branch. |
 | 8 | Audience Builder — duplicate name | Re-run case 7 for the *same* event a second time (same selection). | New master list is still created (not blocked) — its name gets a date/time or version suffix so it doesn't collide with the first run's list. |
 | 9 | Audience Builder — search & add | In section 2, type a list name/keyword in "Add another list" (≥2 chars). | Dropdown shows matching HubSpot lists (not filtered to `MANUAL`/`SNAPSHOT` only); picking one adds it as a card, selected, without a page reload. |
 | 10 | Audience Builder — missing signal direct-build | Pick an event where discovery finds fewer than 5 signals (or a low-history/test event so most signals are missing). Under "Qualifying Lists Not Found", click "Create list" on one signal card. | Button immediately shows "Building…" and is disabled. **No** plan-review step appears — it goes straight to building. On success: the card disappears from the missing-signals section and a new, pre-selected card for that signal appears in the results grid above; the built list's filter in HubSpot matches the signal (e.g. Education Enrollment uses the `UNIFIED_EVENTS` custom event, scoped to that event's own brand's courses, not all LFX Education courses). |

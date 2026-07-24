@@ -12,7 +12,7 @@ from fastapi.responses import StreamingResponse
 
 import audience_tools
 from audience_builder import discovery_agent
-from audience_builder.master_list import compose_master_list_from_ids
+from audience_builder.master_list import compose_master_list_from_ids, find_standard_suppression_lists
 from audience_builder.models import ComposeMasterListRequest, DiscoverListsRequest
 
 log = logging.getLogger("email-staging")
@@ -80,10 +80,25 @@ async def search_lists(q: str = ""):
         raise HTTPException(status_code=502, detail=str(exc))
 
 
+@router.get("/suppression-lists")
+async def suppression_lists():
+    """Deterministic (non-LLM) lookup of the standard hygiene suppression
+    lists (GDPR/opt-out/master-exclusion), by name search — most recently
+    updated match per category. Used to pre-populate the Suppression &
+    Exclusions section, pre-selected by default."""
+    try:
+        return {"results": find_standard_suppression_lists()}
+    except Exception as exc:
+        log.error(f"[AUDIENCE-BUILDER] suppression-lists failed: {exc}")
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
 @router.post("/compose-master")
 async def compose_master(req: ComposeMasterListRequest):
     """Build the master list from the selected/added list IDs, as an
-    OR-of-IN_LIST filterBranch. If a list with the resolved name already
+    OR-of-IN_LIST filterBranch. If exclude_list_ids is given, first builds a
+    single Combined Suppression list and applies it as a NOT_IN_LIST exclusion
+    in every inclusion branch. If a list with the resolved name already
     exists, a new list is created with a timestamp appended to the name."""
     if not req.list_ids:
         raise HTTPException(status_code=400, detail="list_ids must not be empty")
@@ -95,6 +110,7 @@ async def compose_master(req: ComposeMasterListRequest):
             event_url=req.event_url,
             brand_short=req.brand_short,
             event_name=req.event_name,
+            exclude_list_ids=req.exclude_list_ids,
         )
         log.info(f"[AUDIENCE-BUILDER] master list composed: {result['list_id']} ({result['name']})")
         return result

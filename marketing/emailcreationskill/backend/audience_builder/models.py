@@ -26,6 +26,7 @@ class ComposeMasterListRequest(BaseModel):
     event_url: str = ""
     brand_short: str = ""
     event_name: str = ""
+    exclude_list_ids: list[str] = []
 
 
 class ComposeMasterListResponse(BaseModel):
@@ -34,3 +35,15 @@ class ComposeMasterListResponse(BaseModel):
     hubspot_url: str
     size: int | str = "unknown"
     source_list_ids: list[str]
+    suppression_list_id: str = ""
+    suppression_name: str = ""
+    suppression_hubspot_url: str = ""
+    suppression_size: int | str = "unknown"
+
+
+class SuppressionList(BaseModel):
+    key: str
+    label: str
+    list_id: str
+    name: str
+    size: int | None = None

@@ -129,6 +129,8 @@
 .ab-signal-page_view            { background: #fce7f3;             color: #be185d; }
 .ab-signal-uncertain            { background: var(--gray-100);     color: var(--gray-500); }
 .ab-signal-added                { background: var(--gray-100);     color: var(--gray-700); }
+.ab-signal-suppression          { background: #fee2e2;             color: #b91c1c; }
+.ab-signal-current_registrants  { background: #fee2e2;             color: #b91c1c; }
 
 .ab-card-name {
   font-size: 13.5px; font-weight: 600; color: var(--gray-900);

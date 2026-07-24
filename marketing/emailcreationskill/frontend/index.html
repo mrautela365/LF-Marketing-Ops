@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>LF Email Automation — Campaign Builder</title>
   <link rel="stylesheet" href="/static/style.css?v=9" />
-  <link rel="stylesheet" href="/static/audience-builder/audience-builder.css?v=1" />
+  <link rel="stylesheet" href="/static/audience-builder/audience-builder.css?v=2" />
 </head>
 <body>
 
@@ -490,6 +490,17 @@
         <div class="hint">Type at least 2 characters to search all HubSpot lists, not just this event's.</div>
       </div>
 
+      <div style="margin-top:20px">
+        <div class="section-subhead">Suppression &amp; Exclusions</div>
+        <div class="card-desc" style="margin-top:0">
+          Standard hygiene suppression lists and this event's current registrants, pre-selected by
+          default. Contacts in any checked list here are excluded from the master list via a single
+          combined suppression list. Uncheck any you don't want applied.
+        </div>
+        <div id="ab-suppression-status" class="hidden" style="margin-top:8px"></div>
+        <div class="ab-card-grid" id="ab-suppression-grid" style="margin-top:8px"></div>
+      </div>
+
       <div class="btn-row" style="margin-top:18px">
         <button class="btn btn-success" id="ab-build-master-btn" onclick="AudienceBuilder.buildMaster()" disabled>
           Build Master List
@@ -563,6 +574,6 @@
 </div><!-- /container -->
 
 <script src="/static/app.js?v=13"></script>
-<script src="/static/audience-builder/audience-builder.js?v=2"></script>
+<script src="/static/audience-builder/audience-builder.js?v=3"></script>
 </body>
 </html>

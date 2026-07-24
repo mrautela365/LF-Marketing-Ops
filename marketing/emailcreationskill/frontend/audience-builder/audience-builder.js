@@ -80,6 +80,90 @@ const AudienceBuilder = (() => {
   let _pendingMissingSignal = null; // signal key the direct-build request below is for
   let _buildingSignals = new Set(); // signal keys with a direct build currently in flight
 
+  // Suppression & Exclusions — standard hygiene lists + this event's current
+  // registrants (mapped from the discovered event_registration card, if any),
+  // all pre-selected by default. Feeds compose-master's exclude_list_ids.
+  let _suppressionCards = [];
+  let _suppressionSelected = new Set();
+
+  function _suppressionCardHtml(c) {
+    const id = String(c.list_id);
+    const selected = _suppressionSelected.has(id);
+    const badgeClass = c.badge || "suppression";
+    return `
+      <div class="ab-card${selected ? " selected" : ""}" onclick="AudienceBuilder.toggleSuppressionCard('${id}')">
+        <div class="ab-card-top">
+          <span class="ab-signal-badge ab-signal-${escapeHtml(badgeClass)}">${escapeHtml(c.label || "Suppression")}</span>
+          <span class="ab-card-check"></span>
+        </div>
+        <div class="ab-card-name">${escapeHtml(c.name || "(untitled list)")}</div>
+        <div class="ab-card-meta"><span>ID ${escapeHtml(id)}</span></div>
+        <div class="ab-stat-row">
+          <div class="ab-stat-box">
+            <div class="ab-stat-label">Contacts</div>
+            <div class="ab-stat-value">${c.size != null ? Number(c.size).toLocaleString() : "—"}</div>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  function renderSuppressionCards() {
+    const grid = document.getElementById("ab-suppression-grid");
+    if (!grid) return;
+    grid.innerHTML = _suppressionCards.map(_suppressionCardHtml).join("");
+  }
+
+  function toggleSuppressionCard(id) {
+    id = String(id);
+    if (_suppressionSelected.has(id)) _suppressionSelected.delete(id);
+    else _suppressionSelected.add(id);
+    renderSuppressionCards();
+  }
+
+  async function loadSuppressionLists() {
+    _suppressionCards = [];
+    _suppressionSelected = new Set();
+
+    // Current Registrants — reuse whatever Event Registration list(s)
+    // discovery already found for this event; suppressing on it prevents
+    // re-inviting people who already registered.
+    _cards.filter(c => c.signal === "event_registration").forEach(c => {
+      const id = String(c.list_id);
+      _suppressionCards.push({
+        list_id: id,
+        name: c.name,
+        label: "Current Registrants",
+        badge: "current_registrants",
+        size: c.size,
+      });
+      _suppressionSelected.add(id);
+    });
+
+    try {
+      const resp = await fetch(`${API}/audience-builder/suppression-lists`);
+      if (resp.ok) {
+        const data = await resp.json();
+        (data.results || []).forEach(r => {
+          const id = String(r.list_id);
+          _suppressionCards.push({
+            list_id: id,
+            name: r.name,
+            label: r.label,
+            badge: "suppression",
+            size: r.size,
+          });
+          _suppressionSelected.add(id);
+        });
+      }
+    } catch (_) {
+      // Non-fatal — standard suppressions just won't be pre-populated; the
+      // user can still build the master list with only Current Registrants
+      // (or none) suppressed.
+    }
+
+    renderSuppressionCards();
+  }
+
   function _cardHtml(c) {
     const id = String(c.list_id);
     const selected = _selected.has(id);
@@ -212,6 +296,7 @@ const AudienceBuilder = (() => {
     renderMissingSignals(_missingSignals.filter(s => s !== signal));
     document.getElementById("ab-results").classList.remove("hidden");
     renderCards();
+    if (signal === "event_registration") loadSuppressionLists();
     return signal;
   }
 
@@ -268,7 +353,10 @@ const AudienceBuilder = (() => {
 
     _cards = [];
     _selected = new Set();
+    _suppressionCards = [];
+    _suppressionSelected = new Set();
     renderCards();
+    renderSuppressionCards();
     renderMissingSignals([]);
     document.getElementById("ab-results").classList.add("hidden");
 
@@ -319,6 +407,7 @@ const AudienceBuilder = (() => {
         document.getElementById("ab-results").classList.remove("hidden");
         renderCards();
         renderMissingSignals(msg.missing_signals);
+        loadSuppressionLists();
       }
 
       if (msg.done) {
@@ -390,11 +479,16 @@ const AudienceBuilder = (() => {
     const urlInput = document.getElementById("ab-event-url");
     const eventUrl = ((urlInput && urlInput.value) || "").trim();
 
+    // Guard against a list being both an inclusion and a suppression at once
+    // (e.g. Current Registrants happens to point at the same list ID as a
+    // selected Event Registration card) — that would zero out its own branch.
+    const excludeIds = Array.from(_suppressionSelected).filter(id => !_selected.has(id));
+
     try {
       const resp = await fetch(`${API}/audience-builder/compose-master`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ list_ids: Array.from(_selected), event_url: eventUrl }),
+        body: JSON.stringify({ list_ids: Array.from(_selected), event_url: eventUrl, exclude_list_ids: excludeIds }),
       });
       if (!resp.ok) {
         const err = await resp.json().catch(() => ({ detail: resp.statusText }));
@@ -407,7 +501,10 @@ const AudienceBuilder = (() => {
         const sizeText = data.size != null && data.size !== "unknown"
           ? ` · ${escapeHtml(String(Number(data.size).toLocaleString?.() || data.size))} contacts`
           : "";
-        el.innerHTML = `<div class="success-box">✅ Master list ready — <a href="${escapeHtml(data.hubspot_url || "#")}" target="_blank" rel="noopener">${escapeHtml(data.name || "view in HubSpot")}</a> (List ID ${escapeHtml(String(data.list_id))}${sizeText})</div>`;
+        const suppressionLine = data.suppression_list_id
+          ? `<div style="margin-top:6px">🚫 Suppressions applied via <a href="${escapeHtml(data.suppression_hubspot_url || "#")}" target="_blank" rel="noopener">${escapeHtml(data.suppression_name || "Combined Suppression")}</a></div>`
+          : "";
+        el.innerHTML = `<div class="success-box">✅ Master list ready — <a href="${escapeHtml(data.hubspot_url || "#")}" target="_blank" rel="noopener">${escapeHtml(data.name || "view in HubSpot")}</a> (List ID ${escapeHtml(String(data.list_id))}${sizeText})${suppressionLine}</div>`;
       }
     } catch (e) {
       showError("ab-build-status", e.message);
@@ -438,5 +535,6 @@ const AudienceBuilder = (() => {
   return {
     discover, selectAll, selectNone, toggleCard, onSearch, addFromSearch, buildMaster,
     discardCustomPlan, createMissingSignal, onCustomListBuilt, onCustomBuildFailed,
+    toggleSuppressionCard,
   };
 })();
