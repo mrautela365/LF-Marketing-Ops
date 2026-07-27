@@ -1,6 +1,16 @@
-// ── Audience Builder tab: existing-list discovery + master-list composer ──
+// ── Audience Builder: existing-list discovery + master-list composer ──
 // Uses globals defined in app.js (API, setLoading, clearStatus, showError,
-// escapeHtml, clearAudienceQuestions) — this file is loaded after app.js.
+// escapeHtml, clearAudienceQuestions, runDirectSignalBuild, _markMaster,
+// _masterListId) — this file is loaded after app.js.
+//
+// Dual-hosted in two screens via a `scope` param on every public function,
+// mirroring the _AUD_UI_SCOPES pattern app.js already uses for "Build From
+// Scratch": "builder" = the standalone Audience Builder tab (default, so
+// every existing onclick="AudienceBuilder.xyz()" call site with no scope arg
+// keeps its exact original ids/behavior), "step3" = the Campaign Builder
+// Step 3 "Reuse or Discover Existing Audience" panel. Each scope gets its own
+// DOM-id map (_SCOPES) and its own mutable state bucket (_states), so running
+// discovery in one screen never clobbers the other's grid/selection.
 const AudienceBuilder = (() => {
   const SIGNAL_LABELS = {
     last_sent: "Used In Past Sends",
@@ -76,29 +86,110 @@ const AudienceBuilder = (() => {
     added: "var(--gray-500)",
   };
 
-  let _cards = [];
-  let _selected = new Set();
-  let _missingSignals = [];
-  let _searchTimer = null;
-  let _discoverES = null;
-  let _pendingMissingSignal = null; // signal key the direct-build request below is for
-  let _buildingSignals = new Set(); // signal keys with a direct build currently in flight
-  let _brandShort = ""; // resolved by the discovery agent, reused for suppression/last-sent lookups
-  let _eventName = "";
+  // DOM-id map per scope. "builder" ids are exactly the original standalone-tab
+  // ids (unchanged). "step3" ids point at the parallel markup added to Step 3's
+  // "Reuse or Discover Existing Audience" panel, except customRequest/
+  // customTicker/customStatusBadge which intentionally point at Step 3's
+  // existing "Custom Audience" sub-tab ids (_AUD_UI_SCOPES.step3 in app.js) —
+  // "Create list" for a missing signal reuses that tab's full plan-review UI
+  // rather than duplicating it a third time.
+  const _SCOPES = {
+    builder: {
+      eventUrl: "ab-event-url",
+      discoverBtn: "ab-discover-btn",
+      discoverStatus: "ab-discover-status",
+      discoverTicker: "ab-discover-ticker",
+      existingMasterSection: "ab-existing-master-section",
+      existingMasterGrid: "ab-existing-master-grid",
+      lastSentSection: "ab-last-sent-section",
+      lastSentGrid: "ab-last-sent-grid",
+      results: "ab-results",
+      statSegments: "ab-stat-segments",
+      statContacts: "ab-stat-contacts",
+      statContactsTag: "ab-stat-contacts-tag",
+      exactCountBtn: "ab-exact-count-btn",
+      statSelected: "ab-stat-selected",
+      cardSections: "ab-card-sections",
+      searchInput: "ab-search-input",
+      searchDropdown: "ab-search-dropdown",
+      suppressionStatus: "ab-suppression-status",
+      suppressionContacts: "ab-suppression-contacts",
+      suppressionContactsTag: "ab-suppression-contacts-tag",
+      suppressionExactBtn: "ab-suppression-exact-btn",
+      suppressionGrid: "ab-suppression-grid",
+      buildMasterBtn: "ab-build-master-btn",
+      buildStatus: "ab-build-status",
+      missingSection: "ab-missing-section",
+      missingGrid: "ab-missing-grid",
+      customRequest: "ab-custom-request",
+      customTicker: "ab-custom-ticker",
+    },
+    step3: {
+      eventUrl: "s3ab-event-url",
+      discoverBtn: "s3ab-discover-btn",
+      discoverStatus: "s3ab-discover-status",
+      discoverTicker: "s3ab-discover-ticker",
+      existingMasterSection: "s3ab-existing-master-section",
+      existingMasterGrid: "s3ab-existing-master-grid",
+      lastSentSection: "s3ab-last-sent-section",
+      lastSentGrid: "s3ab-last-sent-grid",
+      results: "s3ab-results",
+      statSegments: "s3ab-stat-segments",
+      statContacts: "s3ab-stat-contacts",
+      statContactsTag: "s3ab-stat-contacts-tag",
+      exactCountBtn: "s3ab-exact-count-btn",
+      statSelected: "s3ab-stat-selected",
+      cardSections: "s3ab-card-sections",
+      searchInput: "s3ab-search-input",
+      searchDropdown: "s3ab-search-dropdown",
+      suppressionStatus: "s3ab-suppression-status",
+      suppressionContacts: "s3ab-suppression-contacts",
+      suppressionContactsTag: "s3ab-suppression-contacts-tag",
+      suppressionExactBtn: "s3ab-suppression-exact-btn",
+      suppressionGrid: "s3ab-suppression-grid",
+      buildMasterBtn: "s3ab-build-master-btn",
+      buildStatus: "s3ab-build-status",
+      missingSection: "s3ab-missing-section",
+      missingGrid: "s3ab-missing-grid",
+      customRequest: "custom_audience_request",
+      customTicker: "audience-ticker",
+    },
+  };
 
-  // Suppression & Exclusions — standard hygiene lists + this event's current
-  // registrants (mapped from the discovered event_registration card, if any),
-  // all pre-selected by default. Feeds compose-master's exclude_list_ids.
-  let _suppressionCards = [];
-  let _suppressionSelected = new Set();
+  function _ids(scope) { return _SCOPES[scope] || _SCOPES.builder; }
 
-  // "What was sent last time" — up to 3 recent emails for this event, each
-  // with the HubSpot lists they used (see backend/audience_builder/last_sent.py).
-  let _lastSent = [];
-  // Flattened list_ids across all _lastSent entries — drives the "Used last
-  // time" card badge and the auto-select-on-discover behavior below.
-  let _lastSentIncludedIds = new Set();
-  let _lastSentSuppressionIds = new Set();
+  function _newState() {
+    return {
+      cards: [],
+      selected: new Set(),
+      missingSignals: [],
+      searchTimer: null,
+      discoverES: null,
+      pendingMissingSignal: null, // signal key the direct-build request below is for
+      buildingSignals: new Set(), // signal keys with a direct build currently in flight
+      brandShort: "", // resolved by the discovery agent, reused for suppression/last-sent lookups
+      eventName: "",
+      // Suppression & Exclusions — standard hygiene lists + this event's current
+      // registrants (mapped from the discovered event_registration card, if any),
+      // all pre-selected by default. Feeds compose-master's exclude_list_ids.
+      suppressionCards: [],
+      suppressionSelected: new Set(),
+      // "What was sent last time" — up to 3 recent emails for this event, each
+      // with the HubSpot lists they used (see backend/audience_builder/last_sent.py).
+      lastSent: [],
+      // Flattened list_ids across all lastSent entries — drives the "Used last
+      // time" card badge and the auto-select-on-discover behavior below.
+      lastSentIncludedIds: new Set(),
+      lastSentSuppressionIds: new Set(),
+      // Master lists already built for this event by an earlier run (see
+      // backend/audience_builder/master_list.py: find_existing_master_lists) —
+      // purely informational, so the user can check whether one is still
+      // current before building a new one.
+      existingMasterLists: [],
+    };
+  }
+  const _states = { builder: _newState(), step3: _newState() };
+  function _st(scope) { return _states[scope] || _states.builder; }
 
   function _sumSelectedSize(cards, selectedSet) {
     const sizeById = new Map(cards.map(c => [String(c.list_id), c.size]));
@@ -129,16 +220,16 @@ const AudienceBuilder = (() => {
     return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
   }
 
-  function _suppressionCardHtml(c) {
+  function _suppressionCardHtml(c, scope, st) {
     const id = String(c.list_id);
-    const selected = _suppressionSelected.has(id);
+    const selected = st.suppressionSelected.has(id);
     const badgeClass = c.badge || "suppression";
     const recommended = c.category === "event_specific"
       ? `<span class="ab-recommended-tag">★ Recommended</span>` : "";
-    const usedLastSent = _lastSentSuppressionIds.has(id)
+    const usedLastSent = st.lastSentSuppressionIds.has(id)
       ? `<span class="ab-lastsent-badge" title="Suppressed in a past send for this event">📧 Used last time</span>` : "";
     return `
-      <div class="ab-card${selected ? " selected" : ""}" onclick="AudienceBuilder.toggleSuppressionCard('${id}')">
+      <div class="ab-card${selected ? " selected" : ""}" onclick="AudienceBuilder.toggleSuppressionCard('${id}','${scope}')">
         <div class="ab-card-top">
           <span class="ab-signal-badge ab-signal-${escapeHtml(badgeClass)}">${escapeHtml(c.label || "Suppression")}</span>
           <span class="ab-card-check"></span>
@@ -154,54 +245,58 @@ const AudienceBuilder = (() => {
       </div>`;
   }
 
-  function renderSuppressionCards() {
-    const grid = document.getElementById("ab-suppression-grid");
+  function renderSuppressionCards(scope = "builder") {
+    const ids = _ids(scope), st = _st(scope);
+    const grid = document.getElementById(ids.suppressionGrid);
     if (!grid) return;
-    grid.innerHTML = _suppressionCards.map(_suppressionCardHtml).join("");
+    grid.innerHTML = st.suppressionCards.map(c => _suppressionCardHtml(c, scope, st)).join("");
 
-    const totalContacts = _sumSelectedSize(_suppressionCards, _suppressionSelected);
-    const totalEl = document.getElementById("ab-suppression-contacts");
+    const totalContacts = _sumSelectedSize(st.suppressionCards, st.suppressionSelected);
+    const totalEl = document.getElementById(ids.suppressionContacts);
     if (totalEl) totalEl.textContent = totalContacts ? totalContacts.toLocaleString() : "—";
-    const tag = document.getElementById("ab-suppression-contacts-tag");
-    if (tag) tag.textContent = _suppressionSelected.size ? "(estimate, may overlap)" : "";
-    const exactBtn = document.getElementById("ab-suppression-exact-btn");
-    if (exactBtn) { exactBtn.disabled = _suppressionSelected.size === 0; exactBtn.textContent = "Get exact count"; }
+    const tag = document.getElementById(ids.suppressionContactsTag);
+    if (tag) tag.textContent = st.suppressionSelected.size ? "(estimate, may overlap)" : "";
+    const exactBtn = document.getElementById(ids.suppressionExactBtn);
+    if (exactBtn) { exactBtn.disabled = st.suppressionSelected.size === 0; exactBtn.textContent = "Get exact count"; }
   }
 
-  function toggleSuppressionCard(id) {
+  function toggleSuppressionCard(id, scope = "builder") {
+    const st = _st(scope);
     id = String(id);
-    if (_suppressionSelected.has(id)) _suppressionSelected.delete(id);
-    else _suppressionSelected.add(id);
-    renderSuppressionCards();
+    if (st.suppressionSelected.has(id)) st.suppressionSelected.delete(id);
+    else st.suppressionSelected.add(id);
+    renderSuppressionCards(scope);
   }
 
-  async function getSuppressionExactCount() {
-    if (!_suppressionSelected.size) return;
-    const btn = document.getElementById("ab-suppression-exact-btn");
-    const tag = document.getElementById("ab-suppression-contacts-tag");
+  async function getSuppressionExactCount(scope = "builder") {
+    const ids = _ids(scope), st = _st(scope);
+    if (!st.suppressionSelected.size) return;
+    const btn = document.getElementById(ids.suppressionExactBtn);
+    const tag = document.getElementById(ids.suppressionContactsTag);
     if (btn) { btn.disabled = true; btn.textContent = "Calculating…"; }
     try {
-      const data = await _fetchExactCount(Array.from(_suppressionSelected));
-      const totalEl = document.getElementById("ab-suppression-contacts");
+      const data = await _fetchExactCount(Array.from(st.suppressionSelected));
+      const totalEl = document.getElementById(ids.suppressionContacts);
       if (totalEl) totalEl.textContent = Number(data.count || 0).toLocaleString();
       if (tag) tag.textContent = data.exact ? "(exact)" : `(estimate — ${data.reason || "too large for exact"})`;
     } catch (e) {
       if (tag) tag.textContent = "(failed)";
     } finally {
-      if (btn) { btn.disabled = _suppressionSelected.size === 0; btn.textContent = "Get exact count"; }
+      if (btn) { btn.disabled = st.suppressionSelected.size === 0; btn.textContent = "Get exact count"; }
     }
   }
 
-  async function loadSuppressionLists() {
-    _suppressionCards = [];
-    _suppressionSelected = new Set();
+  async function loadSuppressionLists(scope = "builder") {
+    const st = _st(scope);
+    st.suppressionCards = [];
+    st.suppressionSelected = new Set();
 
     // Current Registrants — reuse whatever Event Registration list(s)
     // discovery already found for this event; suppressing on it prevents
     // re-inviting people who already registered.
-    _cards.filter(c => c.signal === "event_registration").forEach(c => {
+    st.cards.filter(c => c.signal === "event_registration").forEach(c => {
       const id = String(c.list_id);
-      _suppressionCards.push({
+      st.suppressionCards.push({
         list_id: id,
         name: c.name,
         label: "Current Registrants",
@@ -209,18 +304,18 @@ const AudienceBuilder = (() => {
         category: "current_registrants",
         size: c.size,
       });
-      _suppressionSelected.add(id);
+      st.suppressionSelected.add(id);
     });
 
     try {
-      const params = new URLSearchParams({ brand_short: _brandShort || "", event_name: _eventName || "" });
+      const params = new URLSearchParams({ brand_short: st.brandShort || "", event_name: st.eventName || "" });
       const resp = await fetch(`${API}/audience-builder/suppression-lists?${params}`);
       if (resp.ok) {
         const data = await resp.json();
         (data.results || []).forEach(r => {
           const id = String(r.list_id);
           const category = r.category || "standard";
-          _suppressionCards.push({
+          st.suppressionCards.push({
             list_id: id,
             name: r.name,
             label: r.label,
@@ -228,7 +323,7 @@ const AudienceBuilder = (() => {
             category,
             size: r.size,
           });
-          _suppressionSelected.add(id);
+          st.suppressionSelected.add(id);
         });
       }
     } catch (_) {
@@ -241,15 +336,15 @@ const AudienceBuilder = (() => {
     // suppression list (if found) is the strongest signal, then brand-scoped
     // opt-outs, then current registrants, then the generic portfolio-wide terms.
     const rank = { event_specific: 0, brand: 1, current_registrants: 2, standard: 3 };
-    _suppressionCards.sort((a, b) => (rank[a.category] ?? 9) - (rank[b.category] ?? 9));
+    st.suppressionCards.sort((a, b) => (rank[a.category] ?? 9) - (rank[b.category] ?? 9));
 
-    renderSuppressionCards();
+    renderSuppressionCards(scope);
   }
 
-  function _cardHtml(c) {
+  function _cardHtml(c, scope, st) {
     const id = String(c.list_id);
-    const selected = _selected.has(id);
-    const usedLastSent = _lastSentIncludedIds.has(id)
+    const selected = st.selected.has(id);
+    const usedLastSent = st.lastSentIncludedIds.has(id)
       ? `<span class="ab-lastsent-badge" title="Used in a past send for this event">📧 Used last time</span>` : "";
     const stats = [
       { label: "Contacts", value: c.size != null ? Number(c.size).toLocaleString() : "—" },
@@ -261,7 +356,7 @@ const AudienceBuilder = (() => {
         <div class="ab-stat-value">${escapeHtml(String(s.value))}</div>
       </div>`).join("");
     return `
-      <div class="ab-card${selected ? " selected" : ""}" onclick="AudienceBuilder.toggleCard('${id}')">
+      <div class="ab-card${selected ? " selected" : ""}" onclick="AudienceBuilder.toggleCard('${id}','${scope}')">
         <div class="ab-card-top">
           <span class="ab-card-check"></span>
         </div>
@@ -272,12 +367,13 @@ const AudienceBuilder = (() => {
       </div>`;
   }
 
-  function renderCards() {
-    const container = document.getElementById("ab-card-sections");
+  function renderCards(scope = "builder") {
+    const ids = _ids(scope), st = _st(scope);
+    const container = document.getElementById(ids.cardSections);
     if (!container) return;
 
     const bySignal = new Map();
-    _cards.forEach(c => {
+    st.cards.forEach(c => {
       const sig = c.signal || "uncertain";
       if (!bySignal.has(sig)) bySignal.set(sig, []);
       bySignal.get(sig).push(c);
@@ -285,7 +381,7 @@ const AudienceBuilder = (() => {
 
     container.innerHTML = SIGNAL_ORDER.filter(sig => bySignal.has(sig)).map(sig => {
       const group = bySignal.get(sig);
-      const cardsHtml = group.map(_cardHtml).join("");
+      const cardsHtml = group.map(c => _cardHtml(c, scope, st)).join("");
       const accent = SIGNAL_ACCENT[sig] || "var(--gray-300)";
       return `
         <div class="ab-section">
@@ -298,22 +394,23 @@ const AudienceBuilder = (() => {
         </div>`;
     }).join("");
 
-    updateSummary();
+    updateSummary(scope);
   }
 
-  function renderMissingSignals(missing) {
-    _missingSignals = missing || [];
-    const section = document.getElementById("ab-missing-section");
-    const grid = document.getElementById("ab-missing-grid");
+  function renderMissingSignals(missing, scope = "builder") {
+    const ids = _ids(scope), st = _st(scope);
+    st.missingSignals = missing || [];
+    const section = document.getElementById(ids.missingSection);
+    const grid = document.getElementById(ids.missingGrid);
     if (!section || !grid) return;
-    if (!_missingSignals.length) {
+    if (!st.missingSignals.length) {
       section.classList.add("hidden");
       grid.innerHTML = "";
       return;
     }
-    grid.innerHTML = _missingSignals.map(sig => {
+    grid.innerHTML = st.missingSignals.map(sig => {
       const info = SIGNAL_INFO[sig] || { label: sig, description: "" };
-      const building = _buildingSignals.has(sig);
+      const building = st.buildingSignals.has(sig);
       return `
         <div class="ab-card ab-card-missing">
           <div class="ab-card-top">
@@ -321,7 +418,7 @@ const AudienceBuilder = (() => {
           </div>
           <div class="ab-card-reason" style="border-top:none;padding-top:0;margin-top:0">${escapeHtml(info.description)}</div>
           <div class="btn-row" style="margin-top:10px">
-            <button class="btn btn-outline" type="button" ${building ? "disabled" : ""} onclick="AudienceBuilder.createMissingSignal('${sig}')">${building ? "Building…" : "Create list"}</button>
+            <button class="btn btn-outline" type="button" ${building ? "disabled" : ""} onclick="AudienceBuilder.createMissingSignal('${sig}','${scope}')">${building ? "Building…" : "Create list"}</button>
           </div>
         </div>`;
     }).join("");
@@ -333,42 +430,47 @@ const AudienceBuilder = (() => {
   // list" skips the plan-generation/review step entirely and calls
   // runDirectSignalBuild() (app.js) to build straight from a pre-set request,
   // via /api/audience/custom-run with an empty plan (chains planning+building
-  // in one job, no approval gate).
-  async function createMissingSignal(signalKey) {
+  // in one job, no approval gate). For scope="step3" this targets Step 3's own
+  // "Custom Audience" sub-tab (see _AUD_UI_SCOPES.step3 in app.js), so we also
+  // switch that tab into view.
+  async function createMissingSignal(signalKey, scope = "builder") {
+    const ids = _ids(scope), st = _st(scope);
     const info = SIGNAL_INFO[signalKey];
-    if (!info || _buildingSignals.has(signalKey)) return;
-    _pendingMissingSignal = signalKey;
-    _buildingSignals.add(signalKey);
-    renderMissingSignals(_missingSignals);
+    if (!info || st.buildingSignals.has(signalKey)) return;
+    st.pendingMissingSignal = signalKey;
+    st.buildingSignals.add(signalKey);
+    renderMissingSignals(st.missingSignals, scope);
 
-    const urlInput = document.getElementById("ab-event-url");
+    const urlInput = document.getElementById(ids.eventUrl);
     const eventUrl = ((urlInput && urlInput.value) || "").trim();
     const request = info.prompt(eventUrl);
-    const textarea = document.getElementById("ab-custom-request");
+    const textarea = document.getElementById(ids.customRequest);
     if (textarea) textarea.value = request;
-    const ticker = document.getElementById("ab-custom-ticker");
+    if (scope === "step3" && typeof switchAudienceTab === "function") switchAudienceTab("custom");
+    const ticker = document.getElementById(ids.customTicker);
     (ticker || textarea)?.scrollIntoView({ behavior: "smooth", block: "center" });
 
     if (typeof runDirectSignalBuild === "function") {
-      await runDirectSignalBuild(request, "builder");
+      await runDirectSignalBuild(request, scope);
     }
   }
 
-  // Called by app.js's runDirectSignalBuild() (scope="builder" only) once a
-  // directly-built list finishes. Folds the new list straight into the
+  // Called by app.js's runDirectSignalBuild() (scope="builder"/"step3" only)
+  // once a directly-built list finishes. Folds the new list straight into the
   // discovery grid — selected, under its signal — instead of leaving it
   // stranded only in the Build From Scratch result panel. Returns the signal
   // key it attached to, or null if this build wasn't for a missing signal (so
   // app.js's confirmation message can vary accordingly).
-  function onCustomListBuilt({ list_id, name }) {
-    const signal = _pendingMissingSignal;
-    _pendingMissingSignal = null;
+  function onCustomListBuilt({ list_id, name }, scope = "builder") {
+    const st = _st(scope);
+    const signal = st.pendingMissingSignal;
+    st.pendingMissingSignal = null;
     if (!signal) return null;
-    _buildingSignals.delete(signal);
+    st.buildingSignals.delete(signal);
 
     const id = String(list_id);
-    if (!_cards.some(c => String(c.list_id) === id)) {
-      _cards.push({
+    if (!st.cards.some(c => String(c.list_id) === id)) {
+      st.cards.push({
         list_id: id,
         name: name || `List ${id}`,
         signal,
@@ -376,61 +478,65 @@ const AudienceBuilder = (() => {
         reason: "Created via Build From Scratch",
       });
     }
-    _selected.add(id);
-    renderMissingSignals(_missingSignals.filter(s => s !== signal));
-    document.getElementById("ab-results").classList.remove("hidden");
-    renderCards();
-    if (signal === "event_registration") loadSuppressionLists();
+    st.selected.add(id);
+    renderMissingSignals(st.missingSignals.filter(s => s !== signal), scope);
+    const results = document.getElementById(_ids(scope).results);
+    if (results) results.classList.remove("hidden");
+    renderCards(scope);
+    if (signal === "event_registration") loadSuppressionLists(scope);
     return signal;
   }
 
   // Called by app.js's runDirectSignalBuild() when a direct build fails —
   // clears the in-flight state so the missing-signal card's button resets to
   // "Create list" instead of staying stuck on "Building…".
-  function onCustomBuildFailed() {
-    const signal = _pendingMissingSignal;
-    _pendingMissingSignal = null;
-    if (signal) _buildingSignals.delete(signal);
-    renderMissingSignals(_missingSignals);
+  function onCustomBuildFailed(scope = "builder") {
+    const st = _st(scope);
+    const signal = st.pendingMissingSignal;
+    st.pendingMissingSignal = null;
+    if (signal) st.buildingSignals.delete(signal);
+    renderMissingSignals(st.missingSignals, scope);
   }
 
-  function updateSummary() {
-    const segEl = document.getElementById("ab-stat-segments");
-    if (segEl) segEl.textContent = String(_cards.length);
+  function updateSummary(scope = "builder") {
+    const ids = _ids(scope), st = _st(scope);
+    const segEl = document.getElementById(ids.statSegments);
+    if (segEl) segEl.textContent = String(st.cards.length);
 
-    const totalContacts = _sumSelectedSize(_cards, _selected);
-    const totalEl = document.getElementById("ab-stat-contacts");
+    const totalContacts = _sumSelectedSize(st.cards, st.selected);
+    const totalEl = document.getElementById(ids.statContacts);
     if (totalEl) totalEl.textContent = totalContacts ? totalContacts.toLocaleString() : "—";
-    const tag = document.getElementById("ab-stat-contacts-tag");
-    if (tag) tag.textContent = _selected.size ? "(estimate, may overlap)" : "";
+    const tag = document.getElementById(ids.statContactsTag);
+    if (tag) tag.textContent = st.selected.size ? "(estimate, may overlap)" : "";
 
-    const selEl = document.getElementById("ab-stat-selected");
-    if (selEl) selEl.textContent = String(_selected.size);
+    const selEl = document.getElementById(ids.statSelected);
+    if (selEl) selEl.textContent = String(st.selected.size);
 
-    const buildBtn = document.getElementById("ab-build-master-btn");
-    if (buildBtn) buildBtn.disabled = _selected.size === 0;
-    const exactBtn = document.getElementById("ab-exact-count-btn");
-    if (exactBtn) { exactBtn.disabled = _selected.size === 0; exactBtn.textContent = "Get exact count"; }
+    const buildBtn = document.getElementById(ids.buildMasterBtn);
+    if (buildBtn) buildBtn.disabled = st.selected.size === 0;
+    const exactBtn = document.getElementById(ids.exactCountBtn);
+    if (exactBtn) { exactBtn.disabled = st.selected.size === 0; exactBtn.textContent = "Get exact count"; }
   }
 
-  async function getExactCount() {
-    if (!_selected.size) return;
-    const btn = document.getElementById("ab-exact-count-btn");
-    const tag = document.getElementById("ab-stat-contacts-tag");
+  async function getExactCount(scope = "builder") {
+    const ids = _ids(scope), st = _st(scope);
+    if (!st.selected.size) return;
+    const btn = document.getElementById(ids.exactCountBtn);
+    const tag = document.getElementById(ids.statContactsTag);
     if (btn) { btn.disabled = true; btn.textContent = "Calculating…"; }
     try {
-      const data = await _fetchExactCount(Array.from(_selected));
-      const totalEl = document.getElementById("ab-stat-contacts");
+      const data = await _fetchExactCount(Array.from(st.selected));
+      const totalEl = document.getElementById(ids.statContacts);
       if (totalEl) totalEl.textContent = Number(data.count || 0).toLocaleString();
       if (tag) tag.textContent = data.exact ? "(exact)" : `(estimate — ${data.reason || "too large for exact"})`;
     } catch (e) {
       if (tag) tag.textContent = "(failed)";
     } finally {
-      if (btn) { btn.disabled = _selected.size === 0; btn.textContent = "Get exact count"; }
+      if (btn) { btn.disabled = st.selected.size === 0; btn.textContent = "Get exact count"; }
     }
   }
 
-  function _lastSentCardHtml(e, idx) {
+  function _lastSentCardHtml(e, idx, scope) {
     const included = (e.included_lists || [])
       .map(l => `${escapeHtml(l.name)}${l.size != null ? ` (${Number(l.size).toLocaleString()})` : ""}`)
       .join(", ") || "—";
@@ -447,52 +553,54 @@ const AudienceBuilder = (() => {
         <div class="ab-last-sent-row"><span class="ab-last-sent-label">Suppressed:</span> ${suppressed}</div>
         <div class="btn-row" style="margin-top:8px">
           ${e.hubspot_url ? `<a class="btn btn-outline" href="${escapeHtml(e.hubspot_url)}" target="_blank" rel="noopener">View in HubSpot</a>` : ""}
-          <button class="btn btn-primary" type="button" onclick="AudienceBuilder.useLastSentSelection(${idx})">Use same selection</button>
+          <button class="btn btn-primary" type="button" onclick="AudienceBuilder.useLastSentSelection(${idx},'${scope}')">Use same selection</button>
         </div>
       </div>`;
   }
 
-  function renderLastSent() {
-    const section = document.getElementById("ab-last-sent-section");
-    const grid = document.getElementById("ab-last-sent-grid");
+  function renderLastSent(scope = "builder") {
+    const ids = _ids(scope), st = _st(scope);
+    const section = document.getElementById(ids.lastSentSection);
+    const grid = document.getElementById(ids.lastSentGrid);
     if (!section || !grid) return;
-    if (!_lastSent.length) {
+    if (!st.lastSent.length) {
       section.classList.add("hidden");
       grid.innerHTML = "";
       return;
     }
-    grid.innerHTML = _lastSent.map((e, i) => _lastSentCardHtml(e, i)).join("");
+    grid.innerHTML = st.lastSent.map((e, i) => _lastSentCardHtml(e, i, scope)).join("");
     section.classList.remove("hidden");
   }
 
-  async function loadLastSent(eventName, brandShort) {
-    _lastSent = [];
-    _lastSentIncludedIds = new Set();
-    _lastSentSuppressionIds = new Set();
-    renderLastSent();
+  async function loadLastSent(eventName, brandShort, scope = "builder") {
+    const st = _st(scope);
+    st.lastSent = [];
+    st.lastSentIncludedIds = new Set();
+    st.lastSentSuppressionIds = new Set();
+    renderLastSent(scope);
     if (!eventName && !brandShort) return;
     try {
       const params = new URLSearchParams({ event_name: eventName || "", brand_short: brandShort || "" });
       const resp = await fetch(`${API}/audience-builder/last-sent?${params}`);
       if (!resp.ok) return;
       const data = await resp.json();
-      _lastSent = data.results || [];
+      st.lastSent = data.results || [];
       const includedBrief = new Map(); // list_id -> {name, size} from the first send that used it
-      _lastSent.forEach(e => {
+      st.lastSent.forEach(e => {
         (e.included_lists || []).forEach(l => {
           const id = String(l.list_id);
-          _lastSentIncludedIds.add(id);
+          st.lastSentIncludedIds.add(id);
           if (!includedBrief.has(id)) includedBrief.set(id, l);
         });
-        (e.suppression_lists || []).forEach(l => _lastSentSuppressionIds.add(String(l.list_id)));
+        (e.suppression_lists || []).forEach(l => st.lastSentSuppressionIds.add(String(l.list_id)));
       });
 
       // Auto-select discovered cards that match a list used in a past send —
       // these "common" lists shouldn't require a manual "Use same selection"
       // click. Suppression cards are already all pre-selected by default
       // (loadSuppressionLists), so only the inclusion side needs this.
-      _cards.forEach(c => {
-        if (_lastSentIncludedIds.has(String(c.list_id))) _selected.add(String(c.list_id));
+      st.cards.forEach(c => {
+        if (st.lastSentIncludedIds.has(String(c.list_id))) st.selected.add(String(c.list_id));
       });
 
       // A past-send inclusion list often doesn't fit any of the 5 discovery
@@ -502,20 +610,68 @@ const AudienceBuilder = (() => {
       // "Used In Past Sends" section, so it's never silently missing from the
       // buildable grid.
       includedBrief.forEach((l, id) => {
-        if (!_cards.some(c => String(c.list_id) === id)) {
-          _cards.push({
+        // Dead list reference (see last_sent.py's missing:True) — nothing to
+        // build from, so don't surface it as a selectable/buildable card.
+        if (l.missing) return;
+        if (!st.cards.some(c => String(c.list_id) === id)) {
+          st.cards.push({
             list_id: id, name: l.name, signal: "last_sent", size: l.size,
             reason: "Used in a past send for this event; not classified under the 5 signals above.",
           });
         }
-        _selected.add(id);
+        st.selected.add(id);
       });
 
-      renderLastSent();
-      renderCards();
-      renderSuppressionCards();
+      renderLastSent(scope);
+      renderCards(scope);
+      renderSuppressionCards(scope);
     } catch (_) {
       // Non-fatal — the panel just stays empty; last-sent is a convenience
+      // surface, not required to build a master list.
+    }
+  }
+
+  function _existingMasterCardHtml(m) {
+    return `
+      <div class="ab-last-sent-card">
+        <div class="ab-last-sent-top">
+          <div class="ab-last-sent-name">${escapeHtml(m.name || "(untitled list)")}</div>
+        </div>
+        <div class="ab-last-sent-row"><span class="ab-last-sent-label">Contacts:</span> ${m.size != null ? Number(m.size).toLocaleString() : "—"}</div>
+        <div class="btn-row" style="margin-top:8px">
+          ${m.hubspot_url ? `<a class="btn btn-outline" href="${escapeHtml(m.hubspot_url)}" target="_blank" rel="noopener">View in HubSpot</a>` : ""}
+        </div>
+      </div>`;
+  }
+
+  function renderExistingMasterLists(scope = "builder") {
+    const ids = _ids(scope), st = _st(scope);
+    const section = document.getElementById(ids.existingMasterSection);
+    const grid = document.getElementById(ids.existingMasterGrid);
+    if (!section || !grid) return;
+    if (!st.existingMasterLists.length) {
+      section.classList.add("hidden");
+      grid.innerHTML = "";
+      return;
+    }
+    grid.innerHTML = st.existingMasterLists.map(_existingMasterCardHtml).join("");
+    section.classList.remove("hidden");
+  }
+
+  async function loadExistingMasterLists(eventName, brandShort, scope = "builder") {
+    const st = _st(scope);
+    st.existingMasterLists = [];
+    renderExistingMasterLists(scope);
+    if (!eventName && !brandShort) return;
+    try {
+      const params = new URLSearchParams({ event_name: eventName || "", brand_short: brandShort || "" });
+      const resp = await fetch(`${API}/audience-builder/existing-master-lists?${params}`);
+      if (!resp.ok) return;
+      const data = await resp.json();
+      st.existingMasterLists = data.results || [];
+      renderExistingMasterLists(scope);
+    } catch (_) {
+      // Non-fatal — the panel just stays empty; this is a convenience
       // surface, not required to build a master list.
     }
   }
@@ -523,77 +679,106 @@ const AudienceBuilder = (() => {
   // Pre-selects the same lists (inclusion + suppression) that a prior send
   // used, adding any not already present as synthetic "added" cards — mirrors
   // the existing search-and-add flow rather than a separate code path.
-  function useLastSentSelection(idx) {
-    const e = _lastSent[idx];
+  function useLastSentSelection(idx, scope = "builder") {
+    const ids = _ids(scope), st = _st(scope);
+    const e = st.lastSent[idx];
     if (!e) return;
 
     (e.included_lists || []).forEach(l => {
+      if (l.missing) return; // dead list reference — nothing to build from
       const id = String(l.list_id);
-      if (!_cards.some(c => String(c.list_id) === id)) {
-        _cards.push({
+      if (!st.cards.some(c => String(c.list_id) === id)) {
+        st.cards.push({
           list_id: id, name: l.name, signal: "added", size: l.size,
           reason: `Used in "${e.email_name || "a prior send"}" (${_fmtSentDate(e.sent_at)})`,
         });
       }
-      _selected.add(id);
+      st.selected.add(id);
     });
 
     (e.suppression_lists || []).forEach(l => {
+      if (l.missing) return; // dead list reference — nothing to build from
       const id = String(l.list_id);
-      if (!_suppressionCards.some(c => String(c.list_id) === id)) {
-        _suppressionCards.push({ list_id: id, name: l.name, label: "From last send", badge: "suppression", category: "standard", size: l.size });
+      if (!st.suppressionCards.some(c => String(c.list_id) === id)) {
+        st.suppressionCards.push({ list_id: id, name: l.name, label: "From last send", badge: "suppression", category: "standard", size: l.size });
       }
-      _suppressionSelected.add(id);
+      st.suppressionSelected.add(id);
     });
 
-    document.getElementById("ab-results").classList.remove("hidden");
-    renderCards();
-    renderSuppressionCards();
+    const results = document.getElementById(ids.results);
+    if (results) results.classList.remove("hidden");
+    renderCards(scope);
+    renderSuppressionCards(scope);
   }
 
-  function toggleCard(id) {
+  // Clears a scope's discovery state back to "no discovery run yet" — used by
+  // app.js's resetAudienceUI() when the user starts a new campaign, so a
+  // stale Step 3 "Reuse Existing Audience" grid from a prior campaign isn't
+  // left showing.
+  function reset(scope = "builder") {
+    const ids = _ids(scope);
+    _states[scope] = _newState();
+    const urlInput = document.getElementById(ids.eventUrl);
+    if (urlInput) urlInput.value = "";
+    clearStatus(ids.discoverStatus);
+    renderCards(scope);
+    renderSuppressionCards(scope);
+    renderMissingSignals([], scope);
+    renderLastSent(scope);
+    renderExistingMasterLists(scope);
+    const results = document.getElementById(ids.results);
+    if (results) results.classList.add("hidden");
+  }
+
+  function toggleCard(id, scope = "builder") {
+    const st = _st(scope);
     id = String(id);
-    if (_selected.has(id)) _selected.delete(id);
-    else _selected.add(id);
-    renderCards();
+    if (st.selected.has(id)) st.selected.delete(id);
+    else st.selected.add(id);
+    renderCards(scope);
   }
 
-  function selectAll() {
-    _cards.forEach(c => _selected.add(String(c.list_id)));
-    renderCards();
+  function selectAll(scope = "builder") {
+    const st = _st(scope);
+    st.cards.forEach(c => st.selected.add(String(c.list_id)));
+    renderCards(scope);
   }
 
-  function selectNone() {
-    _selected.clear();
-    renderCards();
+  function selectNone(scope = "builder") {
+    _st(scope).selected.clear();
+    renderCards(scope);
   }
 
-  async function discover() {
-    const urlInput = document.getElementById("ab-event-url");
+  async function discover(scope = "builder") {
+    const ids = _ids(scope), st = _st(scope);
+    const urlInput = document.getElementById(ids.eventUrl);
     const eventUrl = ((urlInput && urlInput.value) || "").trim();
     if (!eventUrl || !/^https?:\/\//i.test(eventUrl)) {
-      showError("ab-discover-status", "Please enter a valid URL starting with http:// or https://");
+      showError(ids.discoverStatus, "Please enter a valid URL starting with http:// or https://");
       return;
     }
-    clearStatus("ab-discover-status");
+    clearStatus(ids.discoverStatus);
 
-    _cards = [];
-    _selected = new Set();
-    _suppressionCards = [];
-    _suppressionSelected = new Set();
-    _brandShort = "";
-    _eventName = "";
-    _lastSent = [];
-    _lastSentIncludedIds = new Set();
-    _lastSentSuppressionIds = new Set();
-    renderCards();
-    renderSuppressionCards();
-    renderMissingSignals([]);
-    renderLastSent();
-    document.getElementById("ab-results").classList.add("hidden");
+    st.cards = [];
+    st.selected = new Set();
+    st.suppressionCards = [];
+    st.suppressionSelected = new Set();
+    st.brandShort = "";
+    st.eventName = "";
+    st.lastSent = [];
+    st.lastSentIncludedIds = new Set();
+    st.lastSentSuppressionIds = new Set();
+    st.existingMasterLists = [];
+    renderCards(scope);
+    renderSuppressionCards(scope);
+    renderMissingSignals([], scope);
+    renderLastSent(scope);
+    renderExistingMasterLists(scope);
+    const results = document.getElementById(ids.results);
+    if (results) results.classList.add("hidden");
 
-    const discoverBtn = document.getElementById("ab-discover-btn");
-    const ticker = document.getElementById("ab-discover-ticker");
+    const discoverBtn = document.getElementById(ids.discoverBtn);
+    const ticker = document.getElementById(ids.discoverTicker);
     if (discoverBtn) discoverBtn.disabled = true;
     if (ticker) { ticker.textContent = ""; ticker.classList.remove("hidden"); }
 
@@ -612,15 +797,15 @@ const AudienceBuilder = (() => {
       jobId = data.job_id;
     } catch (e) {
       if (ticker) ticker.classList.add("hidden");
-      showError("ab-discover-status", e.message);
+      showError(ids.discoverStatus, e.message);
       if (discoverBtn) discoverBtn.disabled = false;
       return;
     }
 
-    if (_discoverES) _discoverES.close();
-    _discoverES = new EventSource(`${API}/audience-builder/discover-stream/${jobId}`);
+    if (st.discoverES) st.discoverES.close();
+    st.discoverES = new EventSource(`${API}/audience-builder/discover-stream/${jobId}`);
 
-    _discoverES.onmessage = (evt) => {
+    st.discoverES.onmessage = (evt) => {
       let msg;
       try { msg = JSON.parse(evt.data); } catch (_) { return; }
 
@@ -635,42 +820,45 @@ const AudienceBuilder = (() => {
       } else if (msg.type === "discovered") {
         const found = (msg.lists || []).map(l => ({ ...l }));
         const uncertain = (msg.uncertain || []).map(l => ({ ...l, signal: "uncertain" }));
-        _cards = found.concat(uncertain);
-        _brandShort = msg.brand_short || "";
-        _eventName = msg.event_name || "";
-        document.getElementById("ab-results").classList.remove("hidden");
-        renderCards();
-        renderMissingSignals(msg.missing_signals);
-        loadSuppressionLists();
-        loadLastSent(_eventName, _brandShort);
+        st.cards = found.concat(uncertain);
+        st.brandShort = msg.brand_short || "";
+        st.eventName = msg.event_name || "";
+        const results2 = document.getElementById(ids.results);
+        if (results2) results2.classList.remove("hidden");
+        renderCards(scope);
+        renderMissingSignals(msg.missing_signals, scope);
+        loadSuppressionLists(scope);
+        loadLastSent(st.eventName, st.brandShort, scope);
+        loadExistingMasterLists(st.eventName, st.brandShort, scope);
       }
 
       if (msg.done) {
-        _discoverES.close();
-        _discoverES = null;
+        st.discoverES.close();
+        st.discoverES = null;
         if (discoverBtn) discoverBtn.disabled = false;
-        renderMissingSignals(msg.missing_signals);
-        if (msg.success === false && !_cards.length) {
-          showError("ab-discover-status", "Discovery finished without finding any lists — see the log above.");
+        renderMissingSignals(msg.missing_signals, scope);
+        if (msg.success === false && !st.cards.length) {
+          showError(ids.discoverStatus, "Discovery finished without finding any lists — see the log above.");
         }
       }
     };
 
-    _discoverES.onerror = () => {
-      if (_discoverES) { _discoverES.close(); _discoverES = null; }
+    st.discoverES.onerror = () => {
+      if (st.discoverES) { st.discoverES.close(); st.discoverES = null; }
       if (discoverBtn) discoverBtn.disabled = false;
     };
   }
 
-  async function onSearch(query) {
-    const dropdown = document.getElementById("ab-search-dropdown");
+  async function onSearch(query, scope = "builder") {
+    const ids = _ids(scope), st = _st(scope);
+    const dropdown = document.getElementById(ids.searchDropdown);
     if (!dropdown) return;
     if (!query || query.length < 2) {
       dropdown.classList.add("hidden");
       return;
     }
-    clearTimeout(_searchTimer);
-    _searchTimer = setTimeout(async () => {
+    clearTimeout(st.searchTimer);
+    st.searchTimer = setTimeout(async () => {
       try {
         const resp = await fetch(`${API}/audience-builder/lists/search?q=${encodeURIComponent(query)}`);
         const data = await resp.json();
@@ -679,7 +867,7 @@ const AudienceBuilder = (() => {
           dropdown.innerHTML = `<div class="list-dropdown-item" style="color:var(--gray-400)">No lists found</div>`;
         } else {
           dropdown.innerHTML = results.map(l => `
-            <div class="list-dropdown-item" onclick="AudienceBuilder.addFromSearch('${l.listId}','${escapeHtml(l.name)}',${l.size || 0})">
+            <div class="list-dropdown-item" onclick="AudienceBuilder.addFromSearch('${l.listId}','${escapeHtml(l.name)}',${l.size || 0},'${scope}')">
               <span>${escapeHtml(l.name)}</span>
               <span class="list-count">${l.size ? Number(l.size).toLocaleString() + " contacts" : ""}</span>
             </div>`).join("");
@@ -689,48 +877,51 @@ const AudienceBuilder = (() => {
     }, 300);
   }
 
-  function addFromSearch(id, name, size) {
+  function addFromSearch(id, name, size, scope = "builder") {
+    const ids = _ids(scope), st = _st(scope);
     id = String(id);
-    if (!_cards.some(c => String(c.list_id) === id)) {
-      _cards.push({ list_id: id, name, signal: "added", size, reason: "Manually added" });
+    if (!st.cards.some(c => String(c.list_id) === id)) {
+      st.cards.push({ list_id: id, name, signal: "added", size, reason: "Manually added" });
     }
-    _selected.add(id);
+    st.selected.add(id);
 
-    const input = document.getElementById("ab-search-input");
+    const input = document.getElementById(ids.searchInput);
     if (input) input.value = "";
-    const dropdown = document.getElementById("ab-search-dropdown");
+    const dropdown = document.getElementById(ids.searchDropdown);
     if (dropdown) dropdown.classList.add("hidden");
 
-    document.getElementById("ab-results").classList.remove("hidden");
-    renderCards();
+    const results = document.getElementById(ids.results);
+    if (results) results.classList.remove("hidden");
+    renderCards(scope);
   }
 
-  async function buildMaster() {
-    if (!_selected.size) return;
-    const buildBtn = document.getElementById("ab-build-master-btn");
+  async function buildMaster(scope = "builder") {
+    const ids = _ids(scope), st = _st(scope);
+    if (!st.selected.size) return;
+    const buildBtn = document.getElementById(ids.buildMasterBtn);
     if (buildBtn) buildBtn.disabled = true;
-    setLoading("ab-build-status", "Building master list in HubSpot…");
+    setLoading(ids.buildStatus, "Building master list in HubSpot…");
 
-    const urlInput = document.getElementById("ab-event-url");
+    const urlInput = document.getElementById(ids.eventUrl);
     const eventUrl = ((urlInput && urlInput.value) || "").trim();
 
     // Guard against a list being both an inclusion and a suppression at once
     // (e.g. Current Registrants happens to point at the same list ID as a
     // selected Event Registration card) — that would zero out its own branch.
-    const excludeIds = Array.from(_suppressionSelected).filter(id => !_selected.has(id));
+    const excludeIds = Array.from(st.suppressionSelected).filter(id => !st.selected.has(id));
 
     try {
       const resp = await fetch(`${API}/audience-builder/compose-master`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ list_ids: Array.from(_selected), event_url: eventUrl, exclude_list_ids: excludeIds }),
+        body: JSON.stringify({ list_ids: Array.from(st.selected), event_url: eventUrl, exclude_list_ids: excludeIds }),
       });
       if (!resp.ok) {
         const err = await resp.json().catch(() => ({ detail: resp.statusText }));
         throw new Error(err.detail || "Failed to build master list");
       }
       const data = await resp.json();
-      const el = document.getElementById("ab-build-status");
+      const el = document.getElementById(ids.buildStatus);
       if (el) {
         el.classList.remove("hidden");
         const sizeText = data.size != null && data.size !== "unknown"
@@ -741,24 +932,40 @@ const AudienceBuilder = (() => {
           : "";
         el.innerHTML = `<div class="success-box">✅ Master list ready — <a href="${escapeHtml(data.hubspot_url || "#")}" target="_blank" rel="noopener">${escapeHtml(data.name || "view in HubSpot")}</a> (List ID ${escapeHtml(String(data.list_id))}${sizeText})${suppressionLine}</div>`;
       }
+
+      // scope="step3" only — wire the composed master list into the campaign
+      // session the same way the AI-planning path does (see approveCustomAudiencePlan
+      // in app.js): set the shared _masterListId global so Step 3 → 4's
+      // startImplementation() attaches it via /api/set-send-list after clone,
+      // fold it into the "Lists in the master audience" panel, and unlock
+      // "Create Campaign Draft".
+      if (scope === "step3" && data.list_id) {
+        if (typeof _masterListId !== "undefined") _masterListId = String(data.list_id);
+        if (typeof _markMaster === "function") _markMaster(data.list_id, data.hubspot_url, "step3");
+        const badge = document.getElementById("audience-status-badge");
+        if (badge) { badge.textContent = `✓ Audience ready (ID ${data.list_id})`; badge.style.color = "#166534"; }
+        const startImpl = document.getElementById("start-impl-btn");
+        if (startImpl) { startImpl.disabled = false; startImpl.textContent = "Create Campaign Draft →"; }
+      }
     } catch (e) {
-      showError("ab-build-status", e.message);
+      showError(ids.buildStatus, e.message);
     } finally {
-      if (buildBtn) buildBtn.disabled = _selected.size === 0;
+      if (buildBtn) buildBtn.disabled = st.selected.size === 0;
     }
   }
 
-  function discardCustomPlan() {
-    _pendingMissingSignal = null;
+  function discardCustomPlan(scope = "builder") {
+    const ids = _ids(scope), st = _st(scope);
+    st.pendingMissingSignal = null;
     const planActions = document.getElementById("ab-custom-plan-actions");
     if (planActions) planActions.classList.add("hidden");
-    clearAudienceQuestions("builder");
+    clearAudienceQuestions(scope === "step3" ? "step3" : "builder");
 
-    const ticker = document.getElementById("ab-custom-ticker");
+    const ticker = document.getElementById(ids.customTicker);
     if (ticker) { ticker.textContent = ""; ticker.classList.add("hidden"); }
 
     clearStatus("ab-custom-result");
-    clearStatus("ab-custom-status");
+    clearStatus(ids.customTicker === "ab-custom-ticker" ? "ab-custom-status" : "custom-audience-url-status");
 
     const badge = document.getElementById("ab-custom-status-badge");
     if (badge) { badge.textContent = "— describe an audience in your own words"; badge.style.color = "var(--gray-400)"; }
@@ -770,6 +977,6 @@ const AudienceBuilder = (() => {
   return {
     discover, selectAll, selectNone, toggleCard, onSearch, addFromSearch, buildMaster,
     discardCustomPlan, createMissingSignal, onCustomListBuilt, onCustomBuildFailed,
-    toggleSuppressionCard, getExactCount, getSuppressionExactCount, useLastSentSelection,
+    toggleSuppressionCard, getExactCount, getSuppressionExactCount, useLastSentSelection, reset,
   };
 })();

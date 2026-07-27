@@ -257,6 +257,9 @@
           <button class="btn btn-outline" id="audience-tab-custom" onclick="switchAudienceTab('custom')">
             Custom Audience
           </button>
+          <button class="btn btn-outline" id="audience-tab-reuse" onclick="switchAudienceTab('reuse')">
+            Reuse or Discover Existing Audience
+          </button>
         </div>
 
         <!-- ── Event Audience: event URL → analyze → plan → build ── -->
@@ -312,6 +315,124 @@
             </button>
           </div>
           <div id="custom-audience-url-status" class="hidden" style="margin-top:8px"></div>
+        </div>
+
+        <!-- ── Reuse or Discover Existing Audience: same flow as the standalone
+             Audience Builder tab (frontend/audience-builder/audience-builder.js),
+             dual-hosted here via scope="step3" ── -->
+        <div id="audience-flow-reuse" class="hidden" style="margin-top:14px">
+          <div class="card-desc" style="margin-top:0">
+            Searches HubSpot for lists that already exist for this event and classifies them by
+            signal (Project Opt-In, LF Newsletter Opt-In, Event Registration, Education Enrollment,
+            Page View) — nothing is created or modified until you build the master list below.
+          </div>
+
+          <div class="section-subhead">Event / Campaign URL</div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <input id="s3ab-event-url" type="url" placeholder="https://events.linuxfoundation.org/kubecon-europe/"
+              style="flex:1;min-width:260px" autocomplete="off" />
+            <button class="btn btn-primary" id="s3ab-discover-btn" onclick="AudienceBuilder.discover('step3')">
+              Discover Existing Lists
+            </button>
+          </div>
+          <div id="s3ab-discover-status" class="hidden" style="margin-top:8px"></div>
+          <div id="s3ab-discover-ticker" class="ab-log hidden"></div>
+
+          <div class="card hidden" id="s3ab-existing-master-section" style="margin-top:14px">
+            <div class="card-title">Existing Master List(s) For This Event</div>
+            <div class="card-desc" style="margin-top:0">
+              Master lists already built for this event by an earlier run — check whether one of these
+              is still current before building a new one below.
+            </div>
+            <div class="ab-card-grid" id="s3ab-existing-master-grid" style="grid-template-columns:repeat(auto-fill,minmax(280px,1fr))"></div>
+          </div>
+
+          <div class="card hidden" id="s3ab-last-sent-section" style="margin-top:14px">
+            <div class="card-title">What Was Sent Last Time</div>
+            <div class="card-desc" style="margin-top:0">
+              Most recent email(s) sent for this event, and which HubSpot lists they used.
+            </div>
+            <div class="ab-card-grid" id="s3ab-last-sent-grid" style="grid-template-columns:repeat(auto-fill,minmax(280px,1fr))"></div>
+          </div>
+
+          <div class="card hidden" id="s3ab-results" style="margin-top:14px">
+            <div class="ab-card-title-row">
+              <div class="card-title" style="margin:0">Review &amp; Build Master List</div>
+            </div>
+            <div class="card-desc">
+              Lists are grouped by signal below. Review what was found, select the ones to include,
+              then combine your selection into one new HubSpot list.
+            </div>
+            <div class="ab-toolbar">
+              <div class="ab-toolbar-stats">
+                <div class="ab-toolbar-stat">
+                  <div class="ab-toolbar-stat-label">Segments</div>
+                  <div class="ab-toolbar-stat-value" id="s3ab-stat-segments">0</div>
+                </div>
+                <div class="ab-toolbar-stat">
+                  <div class="ab-toolbar-stat-label">Total Contacts <span id="s3ab-stat-contacts-tag"></span></div>
+                  <div class="ab-toolbar-stat-value" id="s3ab-stat-contacts">—</div>
+                  <button class="btn btn-outline ab-exact-count-btn" type="button" id="s3ab-exact-count-btn"
+                    onclick="AudienceBuilder.getExactCount('step3')" disabled>Get exact count</button>
+                </div>
+                <div class="ab-toolbar-stat">
+                  <div class="ab-toolbar-stat-label">Selected</div>
+                  <div class="ab-toolbar-stat-value" id="s3ab-stat-selected">0</div>
+                </div>
+              </div>
+              <div class="ab-toolbar-right">
+                <button class="btn btn-outline" type="button" onclick="AudienceBuilder.selectAll('step3')">Select All</button>
+                <button class="btn btn-outline" type="button" onclick="AudienceBuilder.selectNone('step3')">Clear</button>
+              </div>
+            </div>
+
+            <div class="ab-sections" id="s3ab-card-sections"></div>
+
+            <div style="margin-top:20px">
+              <div class="section-subhead">Add another list</div>
+              <div class="card-desc" style="margin-top:0">
+                Didn't see a list that should be included? Search for it and add it manually.
+              </div>
+              <div class="list-picker" style="margin-top:8px">
+                <input id="s3ab-search-input" type="text" placeholder="Search HubSpot lists…"
+                  oninput="AudienceBuilder.onSearch(this.value,'step3')" autocomplete="off" />
+                <div id="s3ab-search-dropdown" class="list-dropdown hidden"></div>
+              </div>
+              <div class="hint">Type at least 2 characters to search all HubSpot lists, not just this event's.</div>
+            </div>
+
+            <div style="margin-top:20px">
+              <div class="section-subhead">Suppression &amp; Exclusions</div>
+              <div class="card-desc" style="margin-top:0">
+                Standard hygiene suppression lists and this event's current registrants, pre-selected by
+                default. Uncheck any you don't want applied.
+              </div>
+              <div id="s3ab-suppression-status" class="hidden" style="margin-top:8px"></div>
+              <div class="ab-toolbar-stat" style="margin-top:8px;display:inline-flex;flex-direction:column;gap:4px">
+                <div class="ab-toolbar-stat-label">Suppression Contacts <span id="s3ab-suppression-contacts-tag"></span></div>
+                <div class="ab-toolbar-stat-value" id="s3ab-suppression-contacts">—</div>
+                <button class="btn btn-outline ab-exact-count-btn" type="button" id="s3ab-suppression-exact-btn"
+                  onclick="AudienceBuilder.getSuppressionExactCount('step3')" disabled>Get exact count</button>
+              </div>
+              <div class="ab-card-grid" id="s3ab-suppression-grid" style="margin-top:8px"></div>
+            </div>
+
+            <div class="btn-row" style="margin-top:18px">
+              <button class="btn btn-success" id="s3ab-build-master-btn" onclick="AudienceBuilder.buildMaster('step3')" disabled>
+                Build Master List
+              </button>
+            </div>
+            <div id="s3ab-build-status" class="hidden" style="margin-top:10px;font-size:13px"></div>
+          </div>
+
+          <div class="card hidden" id="s3ab-missing-section" style="margin-top:14px">
+            <div class="card-title">Qualifying Lists Not Found</div>
+            <div class="card-desc">
+              We searched HubSpot but couldn't find an existing list for these signals. Use "Create list" to
+              pre-fill a request for it in the Custom Audience tab, or skip if you don't need it.
+            </div>
+            <div class="ab-card-grid" id="s3ab-missing-grid"></div>
+          </div>
         </div>
 
         <!-- Use an existing list -->
@@ -464,6 +585,15 @@
       <div id="ab-discover-ticker" class="ab-log hidden"></div>
     </div>
 
+    <div class="card hidden" id="ab-existing-master-section">
+      <div class="card-title">Existing Master List(s) For This Event</div>
+      <div class="card-desc" style="margin-top:0">
+        Master lists already built for this event by an earlier run — check whether one of these
+        is still current before building a new one below.
+      </div>
+      <div class="ab-card-grid" id="ab-existing-master-grid" style="grid-template-columns:repeat(auto-fill,minmax(280px,1fr))"></div>
+    </div>
+
     <div class="card hidden" id="ab-last-sent-section">
       <div class="card-title">What Was Sent Last Time</div>
       <div class="card-desc" style="margin-top:0">
@@ -609,7 +739,7 @@
 
 </div><!-- /container -->
 
-<script src="/static/app.js?v=13"></script>
-<script src="/static/audience-builder/audience-builder.js?v=4"></script>
+<script src="/static/app.js?v=14"></script>
+<script src="/static/audience-builder/audience-builder.js?v=6"></script>
 </body>
 </html>

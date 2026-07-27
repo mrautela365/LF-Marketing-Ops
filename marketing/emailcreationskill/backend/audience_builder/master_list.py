@@ -10,6 +10,7 @@ import datetime
 import re
 
 import audience_tools
+from config import HUBSPOT_PORTAL_ID
 
 
 def build_in_list_or_branch(list_ids: list[str]) -> dict:
@@ -204,6 +205,49 @@ def find_standard_suppression_lists(brand_short: str = "", event_name: str = "")
         found.append(event_result)
 
     return found
+
+
+def find_existing_master_lists(brand_short: str = "", event_name: str = "") -> list[dict]:
+    """Master lists already built for this event by an earlier Audience
+    Builder run (or the legacy full-build agent) — surfaced so the user can
+    reuse/inspect one instead of unknowingly rebuilding from scratch every
+    time. Matches the same name-search + keyword-overlap pattern as
+    _find_event_suppression, but for "master" instead of "suppression"/
+    "exclusion", and returns EVERY match (not just the best one) since
+    distinct past editions (one master list per quarter/year) can legitimately
+    coexist — the caller decides which, if any, is still relevant."""
+    event_kw = _event_keywords(event_name) | _event_keywords(brand_short)
+    if not event_kw:
+        return []
+
+    by_id: dict[str, dict] = {}
+    for probe in (f"{event_name} Master", f"{brand_short} {event_name} Master"):
+        probe = probe.strip()
+        if not probe:
+            continue
+        try:
+            results = audience_tools.hubspot_search_lists(probe)
+        except Exception:
+            continue
+        for r in results.get("results", []):
+            name = r.get("name") or ""
+            lid = r.get("listId")
+            if not lid or "master" not in name.lower():
+                continue
+            if not (event_kw & _event_keywords(name)):
+                continue
+            by_id[str(lid)] = r
+
+    ranked = sorted(by_id.values(), key=lambda r: _quarter_rank(r.get("name", "")), reverse=True)
+    return [
+        {
+            "list_id": str(r["listId"]),
+            "name": r.get("name", ""),
+            "size": r.get("size"),
+            "hubspot_url": f"https://app.hubspot.com/contacts/{HUBSPOT_PORTAL_ID}/objectLists/{r['listId']}/filters",
+        }
+        for r in ranked
+    ]
 
 
 def _list_size(list_id: str) -> int:

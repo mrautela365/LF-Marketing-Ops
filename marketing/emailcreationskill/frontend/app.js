@@ -610,19 +610,24 @@ function goToAudienceTab() {
   updateAudienceUrlPrompt();
 }
 
-// Switch between the "Event Audience" (event URL) and "Custom Audience" (free text)
-// tabs. Purely a UI toggle — never clears in-progress plan/ticker state, so
-// switching tabs and back doesn't silently discard work in either flow.
+// Switch between the "Event Audience" (event URL), "Custom Audience" (free
+// text), and "Reuse Existing Audience" (discovery/compose) tabs. Purely a UI
+// toggle — never clears in-progress plan/ticker/discovery state, so switching
+// tabs and back doesn't silently discard work in any flow.
 function switchAudienceTab(tab) {
   _activeAudienceFlow = tab;
   const eventPanel  = document.getElementById("audience-flow-event");
   const customPanel = document.getElementById("audience-flow-custom");
+  const reusePanel  = document.getElementById("audience-flow-reuse");
   const eventBtn    = document.getElementById("audience-tab-event");
   const customBtn   = document.getElementById("audience-tab-custom");
+  const reuseBtn    = document.getElementById("audience-tab-reuse");
   if (eventPanel)  eventPanel.classList.toggle("hidden", tab !== "event");
   if (customPanel) customPanel.classList.toggle("hidden", tab !== "custom");
+  if (reusePanel)  reusePanel.classList.toggle("hidden", tab !== "reuse");
   if (eventBtn)  { eventBtn.classList.toggle("btn-primary", tab === "event");   eventBtn.classList.toggle("btn-outline", tab !== "event"); }
   if (customBtn) { customBtn.classList.toggle("btn-primary", tab === "custom"); customBtn.classList.toggle("btn-outline", tab !== "custom"); }
+  if (reuseBtn)  { reuseBtn.classList.toggle("btn-primary", tab === "reuse");   reuseBtn.classList.toggle("btn-outline", tab !== "reuse"); }
 }
 
 // Show the "paste a URL" prompt whenever no event page has been scraped yet
@@ -665,6 +670,7 @@ function resetAudienceUI() {
   _audienceQA = "";
   clearAudienceQuestions("step3");
   renderExtraFilters();
+  if (typeof AudienceBuilder !== "undefined") AudienceBuilder.reset("step3");
   switchAudienceTab("event");
   clearList();
   const options = document.getElementById("audience-options");
@@ -1517,13 +1523,14 @@ async function approveCustomAudiencePlan(scope = "step3") {
         if (planActions) planActions.classList.add("hidden");
         const link = _masterListLinkHtml(mid, msg.master_list_url);
 
-        // scope="builder" only — if this build was kicked off from a missing-
-        // signal "Create list" click, fold the new list into the discovery
-        // grid (selected, under its signal). Returns null otherwise.
+        // scope="builder"/"step3" only — if this build was kicked off from a
+        // missing-signal "Create list" click, fold the new list into that
+        // scope's discovery grid (selected, under its signal). Returns null
+        // otherwise.
         let _abSignal = null;
-        if (scope === "builder" && typeof AudienceBuilder !== "undefined") {
+        if ((scope === "builder" || scope === "step3") && typeof AudienceBuilder !== "undefined") {
           const sub = _subLists.find(s => s.id === String(mid));
-          _abSignal = AudienceBuilder.onCustomListBuilt({ list_id: mid, name: sub && sub.name });
+          _abSignal = AudienceBuilder.onCustomListBuilt({ list_id: mid, name: sub && sub.name }, scope);
         }
 
         if (statusEl) {
@@ -1572,6 +1579,7 @@ async function runDirectSignalBuild(request, scope = "builder") {
   const ticker      = document.getElementById(ids.ticker);
   const statusEl    = document.getElementById(ids.statusEl);
   const planActions = document.getElementById(ids.planActions);
+  const startImpl   = document.getElementById(ids.startImplBtn);
 
   if (badge)       { badge.textContent = "⏳ Building list directly (custom event / contact property / subscription)…"; badge.style.color = "var(--gray-500)"; }
   if (buildBtn)    buildBtn.disabled = true;
@@ -1582,7 +1590,7 @@ async function runDirectSignalBuild(request, scope = "builder") {
   const fail = (message) => {
     if (badge)    { badge.textContent = "⚠ Build failed — " + escapeHtml(message); badge.style.color = "#dc2626"; }
     if (buildBtn) buildBtn.disabled = false;
-    if (scope === "builder" && typeof AudienceBuilder !== "undefined") AudienceBuilder.onCustomBuildFailed();
+    if ((scope === "builder" || scope === "step3") && typeof AudienceBuilder !== "undefined") AudienceBuilder.onCustomBuildFailed(scope);
   };
 
   const standalone = !sessionId;
@@ -1626,16 +1634,17 @@ async function runDirectSignalBuild(request, scope = "builder") {
       const link = _masterListLinkHtml(mid, msg.master_list_url);
 
       let _abSignal = null;
-      if (scope === "builder" && typeof AudienceBuilder !== "undefined") {
+      if ((scope === "builder" || scope === "step3") && typeof AudienceBuilder !== "undefined") {
         const sub = _subLists.find(s => s.id === String(mid));
-        _abSignal = AudienceBuilder.onCustomListBuilt({ list_id: mid, name: sub && sub.name });
+        _abSignal = AudienceBuilder.onCustomListBuilt({ list_id: mid, name: sub && sub.name }, scope);
       }
 
       if (statusEl) {
         statusEl.classList.remove("hidden");
         statusEl.innerHTML = `<div class="success-box">✅ List ready (${link})${_abSignal ? " — added to your selection above." : "."}</div>`;
       }
-      if (badge) { badge.textContent = `✓ List ready (ID ${escapeHtml(mid)})`; badge.style.color = "#166534"; }
+      if (badge)     { badge.textContent = `✓ List ready (ID ${escapeHtml(mid)})`; badge.style.color = "#166534"; }
+      if (startImpl) { startImpl.disabled = !sessionId; startImpl.textContent = "Create Campaign Draft →"; }
     },
     onError: (msg) => fail(msg.text || "unknown"),
   });

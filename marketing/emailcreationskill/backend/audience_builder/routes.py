@@ -13,7 +13,9 @@ from fastapi.responses import StreamingResponse
 import audience_tools
 from audience_builder import discovery_agent
 from audience_builder.last_sent import find_last_sent_emails
-from audience_builder.master_list import compose_master_list_from_ids, find_standard_suppression_lists, union_size
+from audience_builder.master_list import (
+    compose_master_list_from_ids, find_existing_master_lists, find_standard_suppression_lists, union_size,
+)
 from audience_builder.models import ComposeMasterListRequest, DiscoverListsRequest, PreviewCountRequest
 
 log = logging.getLogger("email-staging")
@@ -107,6 +109,19 @@ async def last_sent(event_name: str = "", brand_short: str = ""):
         return {"results": find_last_sent_emails(event_name=event_name, brand_short=brand_short)}
     except Exception as exc:
         log.error(f"[AUDIENCE-BUILDER] last-sent failed: {exc}")
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
+@router.get("/existing-master-lists")
+async def existing_master_lists(event_name: str = "", brand_short: str = ""):
+    """Deterministic (non-LLM) lookup of master lists already built for this
+    event by an earlier Audience Builder run — surfaced above the discovery
+    grid so the user can reuse/inspect an existing one instead of unknowingly
+    rebuilding it from scratch."""
+    try:
+        return {"results": find_existing_master_lists(brand_short=brand_short, event_name=event_name)}
+    except Exception as exc:
+        log.error(f"[AUDIENCE-BUILDER] existing-master-lists failed: {exc}")
         raise HTTPException(status_code=502, detail=str(exc))
 
 
