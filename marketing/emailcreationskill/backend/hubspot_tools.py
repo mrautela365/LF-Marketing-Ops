@@ -87,9 +87,19 @@ def lookup_brand_history(brand_name: str, email_type_hint: str = None) -> dict:
 
     latest = clone_source
 
-    send_opts = latest.get("sendOptions") or {}
     settings = latest.get("settings") or {}
     frm = latest.get("from") or {}
+
+    # Include/exclude list IDs live under `to.contactLists` (legacy static
+    # lists) and `to.contactIlsLists` (CRM v3/ILS lists) — NOT a top-level
+    # `sendOptions` field (that field does not exist on the list-search
+    # response; confirmed against live HubSpot data). Same pattern as
+    # search_emails_for_event above and audience_builder/last_sent.py.
+    to_obj = latest.get("to") or {}
+    ils = to_obj.get("contactIlsLists") or {}
+    cls = to_obj.get("contactLists") or {}
+    suppression_ids = list({*ils.get("exclude", []), *cls.get("exclude", [])})
+    included_list_ids = list({*ils.get("include", []), *cls.get("include", [])})
 
     return {
         "found": True,
@@ -97,10 +107,9 @@ def lookup_brand_history(brand_name: str, email_type_hint: str = None) -> dict:
         "last_email_name": latest.get("name"),
         "from_name": frm.get("fromName") or settings.get("fromName"),
         "from_address": frm.get("replyTo") or settings.get("replyTo"),
-        "suppression_list_ids": send_opts.get("suppressionListIds") or [],
-        "included_list_ids": send_opts.get("contactListIds") or [],
+        "suppression_list_ids": suppression_ids,
+        "included_list_ids": included_list_ids,
         "email_type": latest.get("type") or "BATCH_EMAIL",
-        "subscription_type_id": send_opts.get("subscriptionId"),
     }
 
 

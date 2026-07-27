@@ -47,3 +47,15 @@ class SuppressionList(BaseModel):
     list_id: str
     name: str
     size: int | None = None
+    category: str = "standard"  # standard | brand | event_specific
+
+
+class PreviewCountRequest(BaseModel):
+    list_ids: list[str]
+
+
+class PreviewCountResponse(BaseModel):
+    exact: bool
+    estimate: int
+    count: int
+    reason: str = ""

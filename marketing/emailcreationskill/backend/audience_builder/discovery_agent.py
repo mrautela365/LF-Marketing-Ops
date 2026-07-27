@@ -105,10 +105,13 @@ returns noise, filter it out rather than guessing.
 {qa_section}
 STEP 4 — Present results
 Call present_discovered_lists ONCE with the full `lists` (5-signal matches) and
-`uncertain` arrays. Do not call it more than once, and do not create or update any
-HubSpot list at any point in this task. For every list you inspected with
-hubspot_get_list, copy its real `processingType` value verbatim into that list's
-`list_type` field — do not invent or guess a value for lists you didn't inspect.
+`uncertain` arrays, plus the `brand_short` and `event_name` you identified in STEP 1
+as top-level fields (these are reused to look up suppression lists and prior sends
+for this event — always include them, even if a signal list came back empty). Do
+not call it more than once, and do not create or update any HubSpot list at any
+point in this task. For every list you inspected with hubspot_get_list, copy its
+real `processingType` value verbatim into that list's `list_type` field — do not
+invent or guess a value for lists you didn't inspect.
 """
 
 
@@ -158,13 +161,15 @@ def _run_discovery_agent(prompt: str, q: queue.Queue) -> None:
     log.info(f"[DISCOVERY] starting — backend={llm_gateway.backend_name()!r} prompt_len={len(prompt)}")
     q.put({"type": "output", "text": f"🔍 Starting discovery (backend={llm_gateway.backend_name()})…"})
 
-    discovered: dict = {"lists": [], "uncertain": []}
+    discovered: dict = {"lists": [], "uncertain": [], "brand_short": "", "event_name": ""}
 
     def _execute_and_track(name: str, tool_input: dict) -> str:
         result_json = _discovery_execute(name, tool_input)
         if name == "present_discovered_lists":
             discovered["lists"] = _normalize_list_items(tool_input.get("lists"))
             discovered["uncertain"] = _normalize_list_items(tool_input.get("uncertain"))
+            discovered["brand_short"] = tool_input.get("brand_short", "")
+            discovered["event_name"] = tool_input.get("event_name", "")
         return result_json
 
     def _on_event(ev: dict) -> None:
@@ -184,8 +189,14 @@ def _run_discovery_agent(prompt: str, q: queue.Queue) -> None:
                 lists = _normalize_list_items(inp.get("lists"))
                 uncertain = _normalize_list_items(inp.get("uncertain"))
                 missing_signals = _compute_missing_signals(lists)
+                brand_short = inp.get("brand_short", "")
+                event_name = inp.get("event_name", "")
                 q.put({"type": "output", "text": f"✅ {len(lists)} list(s) discovered, {len(uncertain)} uncertain"})
-                q.put({"type": "discovered", "lists": lists, "uncertain": uncertain, "missing_signals": missing_signals})
+                q.put({
+                    "type": "discovered", "lists": lists, "uncertain": uncertain,
+                    "missing_signals": missing_signals,
+                    "brand_short": brand_short, "event_name": event_name,
+                })
             elif name == "snowflake_query":
                 q.put({"type": "output", "text": f"🔧 {name}:\n{ev.get('input', {}).get('sql', '')}"})
             else:
@@ -206,13 +217,15 @@ def _run_discovery_agent(prompt: str, q: queue.Queue) -> None:
         log.info(f"[DISCOVERY] done — {len(discovered['lists'])} lists, {len(discovered['uncertain'])} uncertain")
         q.put({"type": "done", "done": True, "success": True,
                "lists": discovered["lists"], "uncertain": discovered["uncertain"],
-               "missing_signals": _compute_missing_signals(discovered["lists"])})
+               "missing_signals": _compute_missing_signals(discovered["lists"]),
+               "brand_short": discovered["brand_short"], "event_name": discovered["event_name"]})
     except Exception as exc:
         log.error(f"[DISCOVERY] fatal error: {exc}", exc_info=True)
         q.put({"type": "output", "text": f"❌ Discovery error: {exc}"})
         q.put({"type": "done", "done": True, "success": False,
                "lists": discovered["lists"], "uncertain": discovered["uncertain"],
-               "missing_signals": _compute_missing_signals(discovered["lists"])})
+               "missing_signals": _compute_missing_signals(discovered["lists"]),
+               "brand_short": discovered["brand_short"], "event_name": discovered["event_name"]})
 
 
 def start_discovery_job(event_url: str, qa: str = "") -> str:
