@@ -23,7 +23,8 @@ _BASE_TOOL_DEFS = [
 ]
 
 
-def present_discovered_lists(lists: list = None, uncertain: list = None) -> dict:
+def present_discovered_lists(lists: list = None, uncertain: list = None,
+                              brand_short: str = "", event_name: str = "") -> dict:
     """No-op — discovery_agent's on_event handler intercepts this tool call by
     name and emits the structured 'discovered' SSE frame from there (mirrors
     audience_tools.present_open_questions)."""
@@ -38,6 +39,14 @@ _PRESENT_DISCOVERED_LISTS_DEF = audience_tools._fn(
     "confidently fit). This is a read-only discovery pass — you have no tool that can "
     "create or modify a HubSpot list, so do not attempt to.",
     {
+        "brand_short": {
+            "type": "string",
+            "description": "The event's short brand/foundation code identified in STEP 1 (e.g. CNCF, PyTorch, Hyperledger, LF) — reused to look up brand-scoped suppression lists.",
+        },
+        "event_name": {
+            "type": "string",
+            "description": "The event's proper name identified in STEP 1 — reused to look up any pre-existing suppression list for this specific event and to find what was last sent for it.",
+        },
         "lists": {
             "type": "array",
             "description": "Every existing HubSpot list confidently matched to one of the 5 signals.",
@@ -94,5 +103,7 @@ TOOL_HANDLERS: dict = {
     "hubspot_get_list":         lambda i: audience_tools.hubspot_get_list(i["list_id"]),
     "snowflake_query":          lambda i: audience_tools.snowflake_query(i["sql"]),
     "read_reference_file":      lambda i: audience_tools.read_reference_file(i["filename"]),
-    "present_discovered_lists": lambda i: present_discovered_lists(i.get("lists"), i.get("uncertain")),
+    "present_discovered_lists": lambda i: present_discovered_lists(
+        i.get("lists"), i.get("uncertain"), i.get("brand_short", ""), i.get("event_name", "")
+    ),
 }

@@ -12,8 +12,9 @@ from fastapi.responses import StreamingResponse
 
 import audience_tools
 from audience_builder import discovery_agent
-from audience_builder.master_list import compose_master_list_from_ids, find_standard_suppression_lists
-from audience_builder.models import ComposeMasterListRequest, DiscoverListsRequest
+from audience_builder.last_sent import find_last_sent_emails
+from audience_builder.master_list import compose_master_list_from_ids, find_standard_suppression_lists, union_size
+from audience_builder.models import ComposeMasterListRequest, DiscoverListsRequest, PreviewCountRequest
 
 log = logging.getLogger("email-staging")
 
@@ -81,15 +82,46 @@ async def search_lists(q: str = ""):
 
 
 @router.get("/suppression-lists")
-async def suppression_lists():
+async def suppression_lists(brand_short: str = "", event_name: str = ""):
     """Deterministic (non-LLM) lookup of the standard hygiene suppression
     lists (GDPR/opt-out/master-exclusion), by name search — most recently
     updated match per category. Used to pre-populate the Suppression &
-    Exclusions section, pre-selected by default."""
+    Exclusions section, pre-selected by default. When brand_short/event_name
+    are given, also looks for a brand-scoped Global Opt-Out list and an
+    existing per-event suppression list (see master_list.py for why those are
+    separate from the 6 generic portfolio-wide terms)."""
     try:
-        return {"results": find_standard_suppression_lists()}
+        return {"results": find_standard_suppression_lists(brand_short=brand_short, event_name=event_name)}
     except Exception as exc:
         log.error(f"[AUDIENCE-BUILDER] suppression-lists failed: {exc}")
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
+@router.get("/last-sent")
+async def last_sent(event_name: str = "", brand_short: str = ""):
+    """Deterministic (non-LLM) lookup of the most recently sent marketing
+    email(s) for this event, and which HubSpot lists they used — surfaced at
+    the top of the discovery results so a user can see what was sent last
+    time before picking lists for a new send."""
+    try:
+        return {"results": find_last_sent_emails(event_name=event_name, brand_short=brand_short)}
+    except Exception as exc:
+        log.error(f"[AUDIENCE-BUILDER] last-sent failed: {exc}")
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
+@router.post("/preview-count")
+async def preview_count(req: PreviewCountRequest):
+    """Cumulative contact count across the currently-selected lists. Exact
+    (de-duplicated via membership pagination) when the combined estimated
+    size is under union_size()'s cap, otherwise a naive sum-of-sizes estimate
+    that may double-count contacts belonging to more than one selected list."""
+    if not req.list_ids:
+        raise HTTPException(status_code=400, detail="list_ids must not be empty")
+    try:
+        return union_size(req.list_ids)
+    except Exception as exc:
+        log.error(f"[AUDIENCE-BUILDER] preview-count failed: {exc}")
         raise HTTPException(status_code=502, detail=str(exc))
 
 

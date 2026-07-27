@@ -69,6 +69,11 @@
   color: var(--gray-400); margin-bottom: 2px;
 }
 .ab-toolbar-stat-value { font-size: 18px; font-weight: 700; color: var(--gray-900); }
+.ab-toolbar-stat-label span { text-transform: none; font-weight: 500; color: var(--gray-400); }
+.ab-exact-count-btn {
+  margin-top: 6px; font-size: 11px; padding: 3px 8px; display: block; width: max-content;
+}
+.ab-exact-count-btn:disabled { opacity: .5; cursor: default; }
 
 .ab-sections { display: flex; flex-direction: column; gap: 20px; }
 .ab-section-header {
@@ -131,6 +136,18 @@
 .ab-signal-added                { background: var(--gray-100);     color: var(--gray-700); }
 .ab-signal-suppression          { background: #fee2e2;             color: #b91c1c; }
 .ab-signal-current_registrants  { background: #fee2e2;             color: #b91c1c; }
+.ab-signal-brand                { background: #fef3c7;             color: #92400e; }
+.ab-signal-event_specific       { background: #dcfce7;             color: #166534; }
+
+.ab-recommended-tag {
+  font-size: 10px; font-weight: 700; color: #166534; background: var(--green-light);
+  padding: 2px 6px; border-radius: 5px;
+}
+
+.ab-lastsent-badge {
+  font-size: 10px; font-weight: 700; color: var(--blue-dark); background: var(--blue-light);
+  padding: 2px 6px; border-radius: 5px; white-space: nowrap;
+}
 
 .ab-card-name {
   font-size: 13.5px; font-weight: 600; color: var(--gray-900);
@@ -167,7 +184,17 @@
 .ab-card-missing:hover { box-shadow: none; }
 
 .ab-card-reason {
-  margin-top: 8px; font-size: 11.5px; color: var(--gray-500);
+  margin-top: 8px; font-size: 12px; color: var(--gray-600); font-weight: 500;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Inter, sans-serif;
   border-top: 1px dashed var(--gray-200); padding-top: 6px;
 }
+
+.ab-last-sent-card {
+  border: 1px solid var(--gray-200); border-radius: var(--radius-sm);
+  background: var(--gray-50); padding: 14px 16px;
+}
+.ab-last-sent-top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 8px; }
+.ab-last-sent-name { font-size: 13.5px; font-weight: 700; color: var(--gray-900); word-break: break-word; }
+.ab-last-sent-date { font-size: 11.5px; color: var(--gray-400); white-space: nowrap; }
+.ab-last-sent-row { font-size: 12px; color: var(--gray-600); margin-top: 4px; }
+.ab-last-sent-label { font-weight: 600; color: var(--gray-500); }

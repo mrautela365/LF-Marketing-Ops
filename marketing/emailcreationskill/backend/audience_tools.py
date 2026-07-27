@@ -168,10 +168,20 @@ def hubspot_search_lists(query: str) -> dict:
     r = requests.post(url, headers=_hs_headers(), json=payload, timeout=15)
     r.raise_for_status()
     lists = r.json().get("lists", [])
+
+    def _size(l: dict):
+        raw = l.get("size")
+        if raw is None:
+            raw = (l.get("additionalProperties") or {}).get("hs_list_size")
+        try:
+            return int(raw) if raw is not None else None
+        except (TypeError, ValueError):
+            return None
+
     return {
         "query": query,
         "results": [
-            {"listId": l.get("listId"), "name": l.get("name"), "size": l.get("size")}
+            {"listId": l.get("listId"), "name": l.get("name"), "size": _size(l)}
             for l in lists
         ],
     }
@@ -183,6 +193,48 @@ def hubspot_get_list(list_id: str) -> dict:
     r = requests.get(url, headers=_hs_headers(), params={"includeFilters": "true"}, timeout=15)
     r.raise_for_status()
     return r.json()
+
+
+def hubspot_list_membership_ids(list_id: str, cap_pages: int = 100) -> set:
+    """Exact set of contact record IDs currently in a list, via
+    /crm/v3/lists/{listId}/memberships pagination (confirmed shape:
+    {"results": [{"recordId": "..."}], "paging": {"next": {"after": "..."}}}).
+    Capped at cap_pages*250 (~25k) records — used only for the bounded
+    exact-union-count preview, never for anything unbounded."""
+    ids: set = set()
+    after = None
+    url = f"{_HS_BASE}/crm/v3/lists/{list_id}/memberships"
+    for _ in range(cap_pages):
+        params = {"limit": 250}
+        if after:
+            params["after"] = after
+        r = requests.get(url, headers=_hs_headers(), params=params, timeout=15)
+        r.raise_for_status()
+        data = r.json()
+        for rec in data.get("results", []):
+            rid = rec.get("recordId")
+            if rid:
+                ids.add(str(rid))
+        after = (data.get("paging") or {}).get("next", {}).get("after")
+        if not after:
+            break
+    return ids
+
+
+def hubspot_search_emails_raw(name_contains: str, limit: int = 30) -> list:
+    """Like hubspot_search_campaigns, but returns full raw HubSpot email
+    objects (state/publishDate/to.contactLists/to.contactIlsLists included)
+    for callers that need more than the id/name/subject/updatedAt/stats
+    projection — mirrors the exact /marketing/v3/emails + name__icontains +
+    orderBy=-publishDate pattern already proven in
+    hubspot_tools.lookup_brand_history, which reads include/exclude list IDs
+    straight off these list-search results with no extra per-email GET
+    needed."""
+    url = f"{_HS_BASE}/marketing/v3/emails"
+    params = {"limit": limit, "name__icontains": name_contains, "orderBy": "-publishDate"}
+    r = requests.get(url, headers=_hs_headers(), params=params, timeout=15)
+    r.raise_for_status()
+    return r.json().get("results", [])
 
 
 def hubspot_create_list(name: str, filter_branch: dict) -> dict:

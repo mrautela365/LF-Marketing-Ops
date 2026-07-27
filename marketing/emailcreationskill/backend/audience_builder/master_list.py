@@ -86,11 +86,93 @@ def _quarter_rank(name: str) -> tuple[int, int]:
     return (int(m.group(1)), int(m.group(2)))
 
 
-def find_standard_suppression_lists() -> list[dict]:
+_STOPWORDS = {"the", "a", "an", "and", "of", "for", "in", "on", "to"}
+
+
+def _event_keywords(text: str) -> set[str]:
+    return {w for w in re.findall(r"[a-z0-9]+", (text or "").lower()) if len(w) > 2 and w not in _STOPWORDS}
+
+
+def _find_brand_opt_out(brand_short: str) -> dict | None:
+    """Each project/brand often has its OWN "Global Opt Out" list distinct from
+    the portfolio-wide "LF Global Opt-Outs" — confirmed via live HubSpot search:
+    CNCF Global Opt Out, Hyperledger Global Opt Out, OpenSSF Global Opt Out,
+    Pytorch Global Opt-Outs, and LFN Global Opt Outs all exist as separate
+    lists. Not covered by STANDARD_SUPPRESSION_TERMS since it's brand-scoped."""
+    if not brand_short:
+        return None
+    try:
+        results = audience_tools.hubspot_search_lists(f"{brand_short} Global Opt")
+    except Exception:
+        return None
+    candidates = [
+        r for r in results.get("results", [])
+        if r.get("listId")
+        and brand_short.lower() in (r.get("name") or "").lower()
+        and "opt" in (r.get("name") or "").lower()
+    ]
+    if not candidates:
+        return None
+    best = max(candidates, key=lambda r: (_quarter_rank(r.get("name", "")), r.get("size") or 0))
+    return {
+        "key": f"brand_opt_out_{brand_short.lower()}",
+        "label": f"{brand_short} Global Opt-Out",
+        "list_id": str(best["listId"]),
+        "name": best.get("name", ""),
+        "size": best.get("size"),
+        "category": "brand",
+    }
+
+
+def _find_event_suppression(event_name: str) -> dict | None:
+    """Recurring LF events often already have a dedicated per-event suppression
+    list carried over from a prior edition (e.g. "24Q4 - Events - CNCF -
+    Kubecon NA - Suppressions", "KCCNC EU 2026 - Suppression (Current Reg +
+    Unsubscribes)") that already bundles current-registrant + unsubscribe
+    exclusions for that specific event — surfaced as a high-priority
+    recommended pick distinct from the generic portfolio-wide lists."""
+    event_kw = _event_keywords(event_name)
+    if not event_kw:
+        return None
+    by_id: dict[str, dict] = {}
+    for probe in (f"{event_name} Suppression", f"{event_name} Exclusion"):
+        try:
+            results = audience_tools.hubspot_search_lists(probe)
+        except Exception:
+            continue
+        for r in results.get("results", []):
+            name = r.get("name") or ""
+            if not r.get("listId"):
+                continue
+            if not (event_kw & _event_keywords(name)):
+                continue
+            if "suppress" not in name.lower() and "exclusion" not in name.lower():
+                continue
+            by_id[str(r["listId"])] = r
+    if not by_id:
+        return None
+    best = max(by_id.values(), key=lambda r: (_quarter_rank(r.get("name", "")), r.get("size") or 0))
+    return {
+        "key": "event_suppression",
+        "label": "Existing suppression for this event",
+        "list_id": str(best["listId"]),
+        "name": best.get("name", ""),
+        "size": best.get("size"),
+        "category": "event_specific",
+    }
+
+
+def find_standard_suppression_lists(brand_short: str = "", event_name: str = "") -> list[dict]:
     """Deterministically resolves the standard hygiene suppression lists by
     name search, picking the most recently updated (highest quarter-code)
     match per category. Returns one entry per category that resolved to a
-    match; categories with no match are simply omitted."""
+    match; categories with no match are simply omitted.
+
+    When brand_short/event_name are given, also looks for a brand-scoped
+    "Global Opt Out" list and an event-specific pre-existing suppression list
+    (see _find_brand_opt_out / _find_event_suppression) — both real patterns
+    found in this portfolio's HubSpot data, not covered by the 6 generic
+    portfolio-wide terms below."""
     found = []
     for key, label, term in STANDARD_SUPPRESSION_TERMS:
         try:
@@ -110,8 +192,69 @@ def find_standard_suppression_lists() -> list[dict]:
             "list_id": str(best["listId"]),
             "name": best.get("name", label),
             "size": best.get("size"),
+            "category": "standard",
         })
+
+    brand_result = _find_brand_opt_out(brand_short)
+    if brand_result:
+        found.append(brand_result)
+
+    event_result = _find_event_suppression(event_name)
+    if event_result:
+        found.append(event_result)
+
     return found
+
+
+def _list_size(list_id: str) -> int:
+    """hubspot_get_list's raw response nests size under "list" (confirmed live:
+    GET /crm/v3/lists/{id} returns {"list": {..., "size": N}}), unlike the
+    create-list response which is flat — check both defensively."""
+    try:
+        raw = audience_tools.hubspot_get_list(list_id)
+    except Exception:
+        return 0
+    return raw.get("list", {}).get("size") or raw.get("size") or 0
+
+
+def union_size(list_ids: list[str], cap: int = 25000) -> dict:
+    """De-duplicated contact count across multiple lists. HubSpot has no API
+    to count an arbitrary OR-of-lists without either creating a real list
+    (async-processed, size not immediately available) or paginating each
+    list's membership IDs and unioning them client-side — this does the
+    latter, capped at `cap` combined estimated contacts so a "Get exact
+    count" click can't trigger an unbounded pagination sweep. Above the cap,
+    falls back to a naive sum-of-sizes estimate (may double-count contacts
+    that belong to more than one selected list)."""
+    seen: list[str] = []
+    for lid in list_ids:
+        lid = str(lid).strip()
+        if lid and lid not in seen:
+            seen.append(lid)
+    if not seen:
+        return {"exact": False, "estimate": 0, "count": 0}
+
+    estimate = sum(_list_size(lid) for lid in seen)
+    if estimate > cap:
+        return {
+            "exact": False,
+            "estimate": estimate,
+            "count": estimate,
+            "reason": f"combined size ~{estimate:,} exceeds live-count limit ({cap:,}); showing sum estimate",
+        }
+
+    union: set = set()
+    for lid in seen:
+        try:
+            union |= audience_tools.hubspot_list_membership_ids(lid)
+        except Exception:
+            return {
+                "exact": False,
+                "estimate": estimate,
+                "count": estimate,
+                "reason": "live membership lookup failed; showing sum estimate",
+            }
+    return {"exact": True, "estimate": estimate, "count": len(union)}
 
 
 def build_master_filter_branch(include_ids: list[str], suppression_list_id: str = "") -> dict:

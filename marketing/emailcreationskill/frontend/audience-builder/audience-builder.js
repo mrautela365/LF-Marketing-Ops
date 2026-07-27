@@ -3,6 +3,7 @@
 // escapeHtml, clearAudienceQuestions) — this file is loaded after app.js.
 const AudienceBuilder = (() => {
   const SIGNAL_LABELS = {
+    last_sent: "Used In Past Sends",
     project_opt_in: "Project Opt-In",
     lf_newsletter_opt_in: "LF Newsletter Opt-In",
     event_registration: "Event Registration",
@@ -45,6 +46,7 @@ const AudienceBuilder = (() => {
   // reference, applied over our own 5-signal taxonomy instead of its
   // lookalike/intent/profile-fit buckets.
   const SIGNAL_ORDER = [
+    "last_sent",
     "event_registration",
     "project_opt_in",
     "lf_newsletter_opt_in",
@@ -54,6 +56,7 @@ const AudienceBuilder = (() => {
     "added",
   ];
   const SIGNAL_DESC = {
+    last_sent: "Used in a past send for this event but not classified under the 5 signals below",
     project_opt_in: "Opted into this project's own subscription type",
     lf_newsletter_opt_in: "Opted into the Linux Foundation newsletter",
     event_registration: "All-time registrants for this event",
@@ -63,6 +66,7 @@ const AudienceBuilder = (() => {
     added: "Manually added via search",
   };
   const SIGNAL_ACCENT = {
+    last_sent: "var(--blue-dark)",
     project_opt_in: "var(--blue)",
     lf_newsletter_opt_in: "#6d28d9",
     event_registration: "#166534",
@@ -79,6 +83,8 @@ const AudienceBuilder = (() => {
   let _discoverES = null;
   let _pendingMissingSignal = null; // signal key the direct-build request below is for
   let _buildingSignals = new Set(); // signal keys with a direct build currently in flight
+  let _brandShort = ""; // resolved by the discovery agent, reused for suppression/last-sent lookups
+  let _eventName = "";
 
   // Suppression & Exclusions — standard hygiene lists + this event's current
   // registrants (mapped from the discovered event_registration card, if any),
@@ -86,10 +92,51 @@ const AudienceBuilder = (() => {
   let _suppressionCards = [];
   let _suppressionSelected = new Set();
 
+  // "What was sent last time" — up to 3 recent emails for this event, each
+  // with the HubSpot lists they used (see backend/audience_builder/last_sent.py).
+  let _lastSent = [];
+  // Flattened list_ids across all _lastSent entries — drives the "Used last
+  // time" card badge and the auto-select-on-discover behavior below.
+  let _lastSentIncludedIds = new Set();
+  let _lastSentSuppressionIds = new Set();
+
+  function _sumSelectedSize(cards, selectedSet) {
+    const sizeById = new Map(cards.map(c => [String(c.list_id), c.size]));
+    let total = 0;
+    selectedSet.forEach(id => {
+      const s = sizeById.get(id);
+      if (typeof s === "number") total += s;
+    });
+    return total;
+  }
+
+  async function _fetchExactCount(ids) {
+    const resp = await fetch(`${API}/audience-builder/preview-count`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ list_ids: ids }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(data.detail || "Failed to get exact count");
+    return data;
+  }
+
+  function _fmtSentDate(v) {
+    if (!v) return "Unknown date";
+    const n = Number(v);
+    const d = Number.isFinite(n) && String(v).trim() !== "" ? new Date(n) : new Date(v);
+    if (isNaN(d.getTime())) return "Unknown date";
+    return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+  }
+
   function _suppressionCardHtml(c) {
     const id = String(c.list_id);
     const selected = _suppressionSelected.has(id);
     const badgeClass = c.badge || "suppression";
+    const recommended = c.category === "event_specific"
+      ? `<span class="ab-recommended-tag">★ Recommended</span>` : "";
+    const usedLastSent = _lastSentSuppressionIds.has(id)
+      ? `<span class="ab-lastsent-badge" title="Suppressed in a past send for this event">📧 Used last time</span>` : "";
     return `
       <div class="ab-card${selected ? " selected" : ""}" onclick="AudienceBuilder.toggleSuppressionCard('${id}')">
         <div class="ab-card-top">
@@ -97,7 +144,7 @@ const AudienceBuilder = (() => {
           <span class="ab-card-check"></span>
         </div>
         <div class="ab-card-name">${escapeHtml(c.name || "(untitled list)")}</div>
-        <div class="ab-card-meta"><span>ID ${escapeHtml(id)}</span></div>
+        <div class="ab-card-meta"><span>ID ${escapeHtml(id)}</span>${recommended}${usedLastSent}</div>
         <div class="ab-stat-row">
           <div class="ab-stat-box">
             <div class="ab-stat-label">Contacts</div>
@@ -111,6 +158,14 @@ const AudienceBuilder = (() => {
     const grid = document.getElementById("ab-suppression-grid");
     if (!grid) return;
     grid.innerHTML = _suppressionCards.map(_suppressionCardHtml).join("");
+
+    const totalContacts = _sumSelectedSize(_suppressionCards, _suppressionSelected);
+    const totalEl = document.getElementById("ab-suppression-contacts");
+    if (totalEl) totalEl.textContent = totalContacts ? totalContacts.toLocaleString() : "—";
+    const tag = document.getElementById("ab-suppression-contacts-tag");
+    if (tag) tag.textContent = _suppressionSelected.size ? "(estimate, may overlap)" : "";
+    const exactBtn = document.getElementById("ab-suppression-exact-btn");
+    if (exactBtn) { exactBtn.disabled = _suppressionSelected.size === 0; exactBtn.textContent = "Get exact count"; }
   }
 
   function toggleSuppressionCard(id) {
@@ -118,6 +173,23 @@ const AudienceBuilder = (() => {
     if (_suppressionSelected.has(id)) _suppressionSelected.delete(id);
     else _suppressionSelected.add(id);
     renderSuppressionCards();
+  }
+
+  async function getSuppressionExactCount() {
+    if (!_suppressionSelected.size) return;
+    const btn = document.getElementById("ab-suppression-exact-btn");
+    const tag = document.getElementById("ab-suppression-contacts-tag");
+    if (btn) { btn.disabled = true; btn.textContent = "Calculating…"; }
+    try {
+      const data = await _fetchExactCount(Array.from(_suppressionSelected));
+      const totalEl = document.getElementById("ab-suppression-contacts");
+      if (totalEl) totalEl.textContent = Number(data.count || 0).toLocaleString();
+      if (tag) tag.textContent = data.exact ? "(exact)" : `(estimate — ${data.reason || "too large for exact"})`;
+    } catch (e) {
+      if (tag) tag.textContent = "(failed)";
+    } finally {
+      if (btn) { btn.disabled = _suppressionSelected.size === 0; btn.textContent = "Get exact count"; }
+    }
   }
 
   async function loadSuppressionLists() {
@@ -134,22 +206,26 @@ const AudienceBuilder = (() => {
         name: c.name,
         label: "Current Registrants",
         badge: "current_registrants",
+        category: "current_registrants",
         size: c.size,
       });
       _suppressionSelected.add(id);
     });
 
     try {
-      const resp = await fetch(`${API}/audience-builder/suppression-lists`);
+      const params = new URLSearchParams({ brand_short: _brandShort || "", event_name: _eventName || "" });
+      const resp = await fetch(`${API}/audience-builder/suppression-lists?${params}`);
       if (resp.ok) {
         const data = await resp.json();
         (data.results || []).forEach(r => {
           const id = String(r.list_id);
+          const category = r.category || "standard";
           _suppressionCards.push({
             list_id: id,
             name: r.name,
             label: r.label,
-            badge: "suppression",
+            badge: category === "event_specific" ? "event_specific" : category === "brand" ? "brand" : "suppression",
+            category,
             size: r.size,
           });
           _suppressionSelected.add(id);
@@ -161,12 +237,20 @@ const AudienceBuilder = (() => {
       // (or none) suppressed.
     }
 
+    // Surface the most relevant suppressions first — an existing per-event
+    // suppression list (if found) is the strongest signal, then brand-scoped
+    // opt-outs, then current registrants, then the generic portfolio-wide terms.
+    const rank = { event_specific: 0, brand: 1, current_registrants: 2, standard: 3 };
+    _suppressionCards.sort((a, b) => (rank[a.category] ?? 9) - (rank[b.category] ?? 9));
+
     renderSuppressionCards();
   }
 
   function _cardHtml(c) {
     const id = String(c.list_id);
     const selected = _selected.has(id);
+    const usedLastSent = _lastSentIncludedIds.has(id)
+      ? `<span class="ab-lastsent-badge" title="Used in a past send for this event">📧 Used last time</span>` : "";
     const stats = [
       { label: "Contacts", value: c.size != null ? Number(c.size).toLocaleString() : "—" },
     ];
@@ -182,7 +266,7 @@ const AudienceBuilder = (() => {
           <span class="ab-card-check"></span>
         </div>
         <div class="ab-card-name">${escapeHtml(c.name || "(untitled list)")}</div>
-        <div class="ab-card-meta"><span>ID ${escapeHtml(id)}</span></div>
+        <div class="ab-card-meta"><span>ID ${escapeHtml(id)}</span>${usedLastSent}</div>
         <div class="ab-stat-row">${statsHtml}</div>
         ${c.reason ? `<div class="ab-card-reason">${escapeHtml(c.reason)}</div>` : ""}
       </div>`;
@@ -314,15 +398,157 @@ const AudienceBuilder = (() => {
     const segEl = document.getElementById("ab-stat-segments");
     if (segEl) segEl.textContent = String(_cards.length);
 
-    const totalContacts = _cards.reduce((sum, c) => sum + (typeof c.size === "number" ? c.size : 0), 0);
+    const totalContacts = _sumSelectedSize(_cards, _selected);
     const totalEl = document.getElementById("ab-stat-contacts");
     if (totalEl) totalEl.textContent = totalContacts ? totalContacts.toLocaleString() : "—";
+    const tag = document.getElementById("ab-stat-contacts-tag");
+    if (tag) tag.textContent = _selected.size ? "(estimate, may overlap)" : "";
 
     const selEl = document.getElementById("ab-stat-selected");
     if (selEl) selEl.textContent = String(_selected.size);
 
     const buildBtn = document.getElementById("ab-build-master-btn");
     if (buildBtn) buildBtn.disabled = _selected.size === 0;
+    const exactBtn = document.getElementById("ab-exact-count-btn");
+    if (exactBtn) { exactBtn.disabled = _selected.size === 0; exactBtn.textContent = "Get exact count"; }
+  }
+
+  async function getExactCount() {
+    if (!_selected.size) return;
+    const btn = document.getElementById("ab-exact-count-btn");
+    const tag = document.getElementById("ab-stat-contacts-tag");
+    if (btn) { btn.disabled = true; btn.textContent = "Calculating…"; }
+    try {
+      const data = await _fetchExactCount(Array.from(_selected));
+      const totalEl = document.getElementById("ab-stat-contacts");
+      if (totalEl) totalEl.textContent = Number(data.count || 0).toLocaleString();
+      if (tag) tag.textContent = data.exact ? "(exact)" : `(estimate — ${data.reason || "too large for exact"})`;
+    } catch (e) {
+      if (tag) tag.textContent = "(failed)";
+    } finally {
+      if (btn) { btn.disabled = _selected.size === 0; btn.textContent = "Get exact count"; }
+    }
+  }
+
+  function _lastSentCardHtml(e, idx) {
+    const included = (e.included_lists || [])
+      .map(l => `${escapeHtml(l.name)}${l.size != null ? ` (${Number(l.size).toLocaleString()})` : ""}`)
+      .join(", ") || "—";
+    const suppressed = (e.suppression_lists || [])
+      .map(l => `${escapeHtml(l.name)}${l.size != null ? ` (${Number(l.size).toLocaleString()})` : ""}`)
+      .join(", ") || "—";
+    return `
+      <div class="ab-last-sent-card">
+        <div class="ab-last-sent-top">
+          <div class="ab-last-sent-name">${escapeHtml(e.email_name || "(untitled email)")}</div>
+          <div class="ab-last-sent-date">${escapeHtml(_fmtSentDate(e.sent_at))}</div>
+        </div>
+        <div class="ab-last-sent-row"><span class="ab-last-sent-label">Sent to:</span> ${included}</div>
+        <div class="ab-last-sent-row"><span class="ab-last-sent-label">Suppressed:</span> ${suppressed}</div>
+        <div class="btn-row" style="margin-top:8px">
+          ${e.hubspot_url ? `<a class="btn btn-outline" href="${escapeHtml(e.hubspot_url)}" target="_blank" rel="noopener">View in HubSpot</a>` : ""}
+          <button class="btn btn-primary" type="button" onclick="AudienceBuilder.useLastSentSelection(${idx})">Use same selection</button>
+        </div>
+      </div>`;
+  }
+
+  function renderLastSent() {
+    const section = document.getElementById("ab-last-sent-section");
+    const grid = document.getElementById("ab-last-sent-grid");
+    if (!section || !grid) return;
+    if (!_lastSent.length) {
+      section.classList.add("hidden");
+      grid.innerHTML = "";
+      return;
+    }
+    grid.innerHTML = _lastSent.map((e, i) => _lastSentCardHtml(e, i)).join("");
+    section.classList.remove("hidden");
+  }
+
+  async function loadLastSent(eventName, brandShort) {
+    _lastSent = [];
+    _lastSentIncludedIds = new Set();
+    _lastSentSuppressionIds = new Set();
+    renderLastSent();
+    if (!eventName && !brandShort) return;
+    try {
+      const params = new URLSearchParams({ event_name: eventName || "", brand_short: brandShort || "" });
+      const resp = await fetch(`${API}/audience-builder/last-sent?${params}`);
+      if (!resp.ok) return;
+      const data = await resp.json();
+      _lastSent = data.results || [];
+      const includedBrief = new Map(); // list_id -> {name, size} from the first send that used it
+      _lastSent.forEach(e => {
+        (e.included_lists || []).forEach(l => {
+          const id = String(l.list_id);
+          _lastSentIncludedIds.add(id);
+          if (!includedBrief.has(id)) includedBrief.set(id, l);
+        });
+        (e.suppression_lists || []).forEach(l => _lastSentSuppressionIds.add(String(l.list_id)));
+      });
+
+      // Auto-select discovered cards that match a list used in a past send —
+      // these "common" lists shouldn't require a manual "Use same selection"
+      // click. Suppression cards are already all pre-selected by default
+      // (loadSuppressionLists), so only the inclusion side needs this.
+      _cards.forEach(c => {
+        if (_lastSentIncludedIds.has(String(c.list_id))) _selected.add(String(c.list_id));
+      });
+
+      // A past-send inclusion list often doesn't fit any of the 5 discovery
+      // signals (e.g. a regional/demographic segment) and so never becomes a
+      // card at all — that left it selectable only via a manual "Use same
+      // selection" click. Synthesize a card for it too, under its own
+      // "Used In Past Sends" section, so it's never silently missing from the
+      // buildable grid.
+      includedBrief.forEach((l, id) => {
+        if (!_cards.some(c => String(c.list_id) === id)) {
+          _cards.push({
+            list_id: id, name: l.name, signal: "last_sent", size: l.size,
+            reason: "Used in a past send for this event; not classified under the 5 signals above.",
+          });
+        }
+        _selected.add(id);
+      });
+
+      renderLastSent();
+      renderCards();
+      renderSuppressionCards();
+    } catch (_) {
+      // Non-fatal — the panel just stays empty; last-sent is a convenience
+      // surface, not required to build a master list.
+    }
+  }
+
+  // Pre-selects the same lists (inclusion + suppression) that a prior send
+  // used, adding any not already present as synthetic "added" cards — mirrors
+  // the existing search-and-add flow rather than a separate code path.
+  function useLastSentSelection(idx) {
+    const e = _lastSent[idx];
+    if (!e) return;
+
+    (e.included_lists || []).forEach(l => {
+      const id = String(l.list_id);
+      if (!_cards.some(c => String(c.list_id) === id)) {
+        _cards.push({
+          list_id: id, name: l.name, signal: "added", size: l.size,
+          reason: `Used in "${e.email_name || "a prior send"}" (${_fmtSentDate(e.sent_at)})`,
+        });
+      }
+      _selected.add(id);
+    });
+
+    (e.suppression_lists || []).forEach(l => {
+      const id = String(l.list_id);
+      if (!_suppressionCards.some(c => String(c.list_id) === id)) {
+        _suppressionCards.push({ list_id: id, name: l.name, label: "From last send", badge: "suppression", category: "standard", size: l.size });
+      }
+      _suppressionSelected.add(id);
+    });
+
+    document.getElementById("ab-results").classList.remove("hidden");
+    renderCards();
+    renderSuppressionCards();
   }
 
   function toggleCard(id) {
@@ -355,9 +581,15 @@ const AudienceBuilder = (() => {
     _selected = new Set();
     _suppressionCards = [];
     _suppressionSelected = new Set();
+    _brandShort = "";
+    _eventName = "";
+    _lastSent = [];
+    _lastSentIncludedIds = new Set();
+    _lastSentSuppressionIds = new Set();
     renderCards();
     renderSuppressionCards();
     renderMissingSignals([]);
+    renderLastSent();
     document.getElementById("ab-results").classList.add("hidden");
 
     const discoverBtn = document.getElementById("ab-discover-btn");
@@ -404,10 +636,13 @@ const AudienceBuilder = (() => {
         const found = (msg.lists || []).map(l => ({ ...l }));
         const uncertain = (msg.uncertain || []).map(l => ({ ...l, signal: "uncertain" }));
         _cards = found.concat(uncertain);
+        _brandShort = msg.brand_short || "";
+        _eventName = msg.event_name || "";
         document.getElementById("ab-results").classList.remove("hidden");
         renderCards();
         renderMissingSignals(msg.missing_signals);
         loadSuppressionLists();
+        loadLastSent(_eventName, _brandShort);
       }
 
       if (msg.done) {
@@ -535,6 +770,6 @@ const AudienceBuilder = (() => {
   return {
     discover, selectAll, selectNone, toggleCard, onSearch, addFromSearch, buildMaster,
     discardCustomPlan, createMissingSignal, onCustomListBuilt, onCustomBuildFailed,
-    toggleSuppressionCard,
+    toggleSuppressionCard, getExactCount, getSuppressionExactCount, useLastSentSelection,
   };
 })();

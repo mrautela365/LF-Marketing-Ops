@@ -464,6 +464,15 @@
       <div id="ab-discover-ticker" class="ab-log hidden"></div>
     </div>
 
+    <div class="card hidden" id="ab-last-sent-section">
+      <div class="card-title">What Was Sent Last Time</div>
+      <div class="card-desc" style="margin-top:0">
+        Most recent email(s) sent for this event, and which HubSpot lists they used — a starting
+        point before picking lists for this send.
+      </div>
+      <div class="ab-card-grid" id="ab-last-sent-grid" style="grid-template-columns:repeat(auto-fill,minmax(280px,1fr))"></div>
+    </div>
+
     <div class="card hidden" id="ab-results">
       <div class="ab-card-title-row">
         <span class="ab-step-badge">2</span>
@@ -480,8 +489,10 @@
             <div class="ab-toolbar-stat-value" id="ab-stat-segments">0</div>
           </div>
           <div class="ab-toolbar-stat">
-            <div class="ab-toolbar-stat-label">Total Contacts</div>
+            <div class="ab-toolbar-stat-label">Total Contacts <span id="ab-stat-contacts-tag"></span></div>
             <div class="ab-toolbar-stat-value" id="ab-stat-contacts">—</div>
+            <button class="btn btn-outline ab-exact-count-btn" type="button" id="ab-exact-count-btn"
+              onclick="AudienceBuilder.getExactCount()" disabled>Get exact count</button>
           </div>
           <div class="ab-toolbar-stat">
             <div class="ab-toolbar-stat-label">Selected</div>
@@ -517,6 +528,12 @@
           combined suppression list. Uncheck any you don't want applied.
         </div>
         <div id="ab-suppression-status" class="hidden" style="margin-top:8px"></div>
+        <div class="ab-toolbar-stat" style="margin-top:8px;display:inline-flex;flex-direction:column;gap:4px">
+          <div class="ab-toolbar-stat-label">Suppression Contacts <span id="ab-suppression-contacts-tag"></span></div>
+          <div class="ab-toolbar-stat-value" id="ab-suppression-contacts">—</div>
+          <button class="btn btn-outline ab-exact-count-btn" type="button" id="ab-suppression-exact-btn"
+            onclick="AudienceBuilder.getSuppressionExactCount()" disabled>Get exact count</button>
+        </div>
         <div class="ab-card-grid" id="ab-suppression-grid" style="margin-top:8px"></div>
       </div>
 
@@ -593,6 +610,6 @@
 </div><!-- /container -->
 
 <script src="/static/app.js?v=13"></script>
-<script src="/static/audience-builder/audience-builder.js?v=3"></script>
+<script src="/static/audience-builder/audience-builder.js?v=4"></script>
 </body>
 </html>
