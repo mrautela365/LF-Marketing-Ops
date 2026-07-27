@@ -213,18 +213,22 @@ function escapeHtml(str) {
     .replace(/"/g, "&quot;");
 }
 
-function showDraftLink(containerId, url) {
+function showDraftLink(containerId, url, label = "") {
   const el = document.getElementById(containerId);
   if (!el || !url) return;
   el.innerHTML = `
     <div class="draft-link-box">
       <span class="icon">✅</span>
       <div>
-        <strong>Email staged as DRAFT</strong><br>
+        <strong>${label ? escapeHtml(label) + " — " : ""}Email staged as DRAFT</strong><br>
         <a href="${url}" target="_blank">${url}</a>
       </div>
     </div>`;
   el.classList.remove("hidden");
+}
+
+function generatePlanFromActiveMode() {
+  generatePlan();
 }
 
 // ── Step 1: Generate plan ────────────────────────────────────────────────────
@@ -356,8 +360,6 @@ function renderUtmChip(utm) {
 
 async function generatePlan() {
   const url = document.getElementById("event_url").value.trim();
-  const extraContext = document.getElementById("extra_context").value.trim();
-  const emailType = document.getElementById("email_type").value;
 
   if (!url) {
     showError("step1-status", "Please enter an event or campaign URL.");
@@ -398,7 +400,7 @@ async function generatePlan() {
     const resp = await fetch(`${API}/plan-start`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url, extra_context: extraContext || null, email_type: emailType || null, progress_token: token }),
+      body: JSON.stringify({ url, progress_token: token }),
     });
     const data = await resp.json();
     if (!resp.ok) throw new Error(data.detail || "Failed to start campaign brief");
@@ -415,21 +417,29 @@ function _setContentLoading(loading) {
   const audBtn    = document.getElementById("build-audience-btn");
   const updateBtn = document.getElementById("update-btn");
   const badge     = document.getElementById("content-status-badge");
-  const subjEl    = document.getElementById("subject-display");
-  const prevEl    = document.getElementById("preview-display");
-  const frame     = document.getElementById("email-preview-frame");
+  const subjElA   = document.getElementById("subject-display-a");
+  const prevElA   = document.getElementById("preview-display-a");
+  const frameA    = document.getElementById("email-preview-frame-a");
+  const subjElB   = document.getElementById("subject-display-b");
+  const prevElB   = document.getElementById("preview-display-b");
+  const frameB    = document.getElementById("email-preview-frame-b");
+
+  const placeholder = (label) => `<html><body style="margin:48px 40px;font-family:Arial,sans-serif;color:#555;text-align:center">
+      <div style="font-size:36px;margin-bottom:14px">⏳</div>
+      <div style="font-size:15px;font-weight:600;margin-bottom:8px">Drafting ${label}…</div>
+      <div style="font-size:13px;color:#888">Takes ~60 seconds.</div>
+    </body></html>`;
 
   if (loading) {
     if (audBtn)    { audBtn.disabled = true; audBtn.textContent = "⏳ Drafting content…"; }
     if (updateBtn) updateBtn.disabled = true;
     if (badge)  badge.textContent  = "⏳ Drafting…";
-    if (subjEl) subjEl.textContent = "⏳ Drafting…";
-    if (prevEl) prevEl.textContent = "⏳ Drafting…";
-    if (frame)  frame.srcdoc = `<html><body style="margin:48px 40px;font-family:Arial,sans-serif;color:#555;text-align:center">
-      <div style="font-size:36px;margin-bottom:14px">⏳</div>
-      <div style="font-size:15px;font-weight:600;margin-bottom:8px">Drafting email content…</div>
-      <div style="font-size:13px;color:#888">Using the official LF Events stage template<br>to write a personalised email. Takes ~60 seconds.</div>
-    </body></html>`;
+    if (subjElA) subjElA.textContent = "⏳ Drafting…";
+    if (prevElA) prevElA.textContent = "⏳ Drafting…";
+    if (frameA)  frameA.srcdoc = placeholder("Variant A (AI Template)");
+    if (subjElB) subjElB.textContent = "⏳ Drafting…";
+    if (prevElB) prevElB.textContent = "⏳ Drafting…";
+    if (frameB)  frameB.srcdoc = placeholder("Variant B (Existing Flow)");
   }
 }
 
@@ -437,29 +447,41 @@ function _applyGeneratedContent(data) {
   const audBtn     = document.getElementById("build-audience-btn");
   const updateBtn  = document.getElementById("update-btn");
   const badge      = document.getElementById("content-status-badge");
-  const subjEl     = document.getElementById("subject-display");
-  const prevEl     = document.getElementById("preview-display");
-  const frame      = document.getElementById("email-preview-frame");
+  const subjElA    = document.getElementById("subject-display-a");
+  const prevElA    = document.getElementById("preview-display-a");
+  const frameA     = document.getElementById("email-preview-frame-a");
+  const subjElB    = document.getElementById("subject-display-b");
+  const prevElB    = document.getElementById("preview-display-b");
+  const frameB     = document.getElementById("email-preview-frame-b");
 
-  // Fill display elements
+  // Variant B — existing flow. This remains the subject/preview used for the
+  // hidden #subject/#preview_text inputs the rest of the flow (audience, clone) reads.
   if (data.generated_subject) {
-    subjEl.textContent = data.generated_subject;
+    if (subjElB) subjElB.textContent = data.generated_subject;
     document.getElementById("subject").value = data.generated_subject;
   }
   if (data.generated_preview) {
-    prevEl.textContent = data.generated_preview;
+    if (prevElB) prevElB.textContent = data.generated_preview;
     document.getElementById("preview_text").value = data.generated_preview;
   }
 
   _generatedHtml = data.generated_html || "";
-  if (_generatedHtml) frame.srcdoc = _generatedHtml;
+  if (_generatedHtml && frameB) frameB.srcdoc = _generatedHtml;
 
-  // Removable content sections
+  // Removable content sections (Variant B only — Variant A is fully automatic)
   _sections = Array.isArray(data.sections) ? data.sections : [];
   renderSections();
 
-  badge.textContent = "✅ Ready";
-  badge.style.color = "#16a34a";
+  // Variant A — AI template, read-only
+  if (subjElA) subjElA.textContent = data.variant_a_subject || "(unavailable)";
+  if (prevElA) prevElA.textContent = data.variant_a_preview || "(unavailable)";
+  if (frameA)  frameA.srcdoc = data.variant_a_html || `<html><body style="margin:48px 40px;font-family:Arial,sans-serif;color:#c00;font-size:13px">
+    <strong>⚠️ AI template content unavailable.</strong></body></html>`;
+
+  if (badge) {
+    badge.textContent = "✅ Ready";
+    badge.style.color = "#16a34a";
+  }
   if (audBtn)    { audBtn.disabled = false; audBtn.textContent = "Continue to Audience Preview →"; }
   if (updateBtn) updateBtn.disabled = false;
 }
@@ -482,14 +504,17 @@ async function generateEmailContent(sid, changeRequest = "", token = "") {
     clearStatus("change-status");
 
   } catch (err) {
-    const frame     = document.getElementById("email-preview-frame");
+    const frameA    = document.getElementById("email-preview-frame-a");
+    const frameB    = document.getElementById("email-preview-frame-b");
     const badge     = document.getElementById("content-status-badge");
     const audBtn    = document.getElementById("build-audience-btn");
     const updateBtn = document.getElementById("update-btn");
 
-    frame.srcdoc = `<html><body style="margin:48px 40px;font-family:Arial,sans-serif;color:#c00;font-size:13px">
+    const errHtml = `<html><body style="margin:48px 40px;font-family:Arial,sans-serif;color:#c00;font-size:13px">
       <strong>⚠️ Content drafting failed:</strong> ${escapeHtml(err.message)}<br><br>
       Use the "Refine Content" box to try again, or continue to audience.</body></html>`;
+    if (frameA) frameA.srcdoc = errHtml;
+    if (frameB) frameB.srcdoc = errHtml;
     badge.textContent      = "⚠️ Drafting failed";
     badge.style.color      = "#dc2626";
     if (audBtn)    { audBtn.disabled = false; audBtn.textContent = "Continue to Audience Preview →"; }
@@ -560,7 +585,7 @@ async function removeSection(index) {
     const data = await resp.json();
     if (resp.ok && data.generated_html) {
       _generatedHtml = data.generated_html;
-      const frame = document.getElementById("email-preview-frame");
+      const frame = document.getElementById("email-preview-frame-b");
       if (frame) frame.srcdoc = _generatedHtml;
     }
   } catch (_) { /* preview will catch up on next change */ }
@@ -704,7 +729,11 @@ async function startImplementation() {
     _emailId  = data.email_id || null;
     _draftUrl = data.draft_url || "";
     renderMessage("done-message", data.message);
-    if (_draftUrl) showDraftLink("done-draft-link", _draftUrl);
+
+    const variantADraftUrl = data.variant_a_draft_url || _draftUrl;
+    const variantBDraftUrl = data.variant_b_draft_url || "";
+    if (variantADraftUrl) showDraftLink("done-draft-link-a", variantADraftUrl, "Variant A (AI Template)");
+    if (variantBDraftUrl) showDraftLink("done-draft-link-b", variantBDraftUrl, "Variant B (Existing Flow)");
 
     // Attach the built master audience list (the "later update" after clone).
     if (_masterListId && _emailId) {
@@ -755,7 +784,10 @@ async function sendChat(containerId, inputId) {
     const resp = await fetch(`${API}/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ session_id: sessionId, message: msg }),
+      body: JSON.stringify({
+        session_id: sessionId,
+        message: msg,
+      }),
     });
     const data = await resp.json();
     if (!resp.ok) throw new Error(data.detail || "Request failed");
@@ -782,12 +814,16 @@ function startOver() {
   _draftUrl = "";
   _masterListId = "";
   _sections = [];
+  _inputMode = "event";
   closeBriefStream();
   const briefLog = document.getElementById("brief-log");
   if (briefLog) briefLog.innerHTML = "";
   const sectionsEd = document.getElementById("sections-editor");
   if (sectionsEd) sectionsEd.innerHTML = "";
   document.getElementById("event_url").value = "";
+  const asanaUrlEl = document.getElementById("asana_url");
+  if (asanaUrlEl) asanaUrlEl.value = "";
+  switchInputMode("event");
   document.getElementById("extra_context").value = "";
   document.getElementById("subject").value = "";
   document.getElementById("preview_text").value = "";
@@ -797,12 +833,14 @@ function startOver() {
   document.getElementById("stage-badge").classList.add("hidden");
   document.getElementById("utm-chip").classList.add("hidden");
   document.getElementById("utm-chip").style.display = "none";
-  const frame = document.getElementById("email-preview-frame");
-  if (frame) frame.srcdoc = "";
-  const subjEl = document.getElementById("subject-display");
-  const prevEl = document.getElementById("preview-display");
-  if (subjEl) subjEl.textContent = "⏳ Drafting…";
-  if (prevEl) prevEl.textContent = "⏳ Drafting…";
+  ["email-preview-frame-a", "email-preview-frame-b"].forEach(id => {
+    const frame = document.getElementById(id);
+    if (frame) frame.srcdoc = "";
+  });
+  ["subject-display-a", "subject-display-b", "preview-display-a", "preview-display-b"].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = "⏳ Drafting…";
+  });
   const badge = document.getElementById("content-status-badge");
   if (badge) { badge.textContent = "⏳ Drafting…"; badge.style.color = ""; }
   const changeInput = document.getElementById("change-request-input");
@@ -816,7 +854,7 @@ function startOver() {
   if (implBadge) { implBadge.textContent = ""; implBadge.style.color = ""; }
 
   ["step1-status","step2-status","plan-message","clone-message",
-   "clone-draft-link","done-message","done-draft-link"].forEach(clearStatus);
+   "clone-draft-link","done-message","done-draft-link-a","done-draft-link-b"].forEach(clearStatus);
   showStep(1);
 }
 
@@ -1623,6 +1661,158 @@ document.addEventListener("click", (e) => {
     const d = document.getElementById("list-dropdown");
     if (d) d.classList.add("hidden");
   }
+});
+
+// ── Template Management ──────────────────────────────────────────────────────
+
+// Load templates from localStorage
+function loadTemplates() {
+  const stored = localStorage.getItem("emailTemplates");
+  return stored ? JSON.parse(stored) : [];
+}
+
+// Save templates to localStorage
+function saveTemplates(templates) {
+  localStorage.setItem("emailTemplates", JSON.stringify(templates));
+}
+
+// Show template library modal
+function showTemplateLibrary() {
+  const modal = document.getElementById("template-library-modal");
+  if (!modal) return;
+
+  const templates = loadTemplates();
+  const templateList = document.getElementById("template-list");
+
+  if (templates.length === 0) {
+    templateList.innerHTML = `
+      <div style="padding: 24px; background: var(--bg-light); border-radius: 8px; text-align: center; color: var(--gray-400);">
+        <p style="margin: 0;">No templates yet.</p>
+        <p style="margin: 8px 0 0 0; font-size: 13px;">Complete a campaign and click "Save as Template" to create one.</p>
+      </div>
+    `;
+  } else {
+    templateList.innerHTML = templates.map((t, i) => `
+      <div style="
+        padding: 16px; border: 1px solid var(--border-color); border-radius: 8px;
+        cursor: pointer; transition: all 0.2s; hover { background: var(--bg-light); }
+      " onmouseover="this.style.background='var(--bg-light)'" onmouseout="this.style.background='transparent'">
+        <div style="font-weight: 600; margin-bottom: 6px;">${escapeHtml(t.name)}</div>
+        <div style="font-size: 13px; color: var(--gray-500); margin-bottom: 8px;">
+          Stage: <strong>${escapeHtml(t.stage)}</strong>
+        </div>
+        ${t.description ? `<div style="font-size: 13px; color: var(--gray-600); margin-bottom: 12px;">${escapeHtml(t.description)}</div>` : ''}
+        <div class="btn-row">
+          <button class="btn btn-primary" style="flex: 1;" onclick="useTemplate(${i})">
+            Use This Template →
+          </button>
+          <button class="btn btn-outline" onclick="deleteTemplate(${i})">
+            🗑️
+          </button>
+        </div>
+      </div>
+    `).join("");
+  }
+
+  modal.classList.remove("hidden");
+}
+
+// Use a template
+function useTemplate(index) {
+  const templates = loadTemplates();
+  if (index < 0 || index >= templates.length) return;
+
+  const template = templates[index];
+  closeModal("template-library-modal");
+
+  // Set the template name in the URL field as a hint
+  const urlInput = document.getElementById("event_url");
+  if (urlInput) {
+    urlInput.placeholder = `Template: ${template.name} — paste event URL`;
+  }
+
+  // Store template in session for later use
+  sessionStorage.setItem("selectedTemplate", JSON.stringify(template));
+}
+
+// Delete a template
+function deleteTemplate(index) {
+  if (!confirm("Delete this template? This cannot be undone.")) return;
+
+  const templates = loadTemplates();
+  templates.splice(index, 1);
+  saveTemplates(templates);
+
+  // Refresh the template library
+  showTemplateLibrary();
+}
+
+// Save current email as template
+function saveAsTemplate() {
+  const modal = document.getElementById("save-template-modal");
+  if (!modal) return;
+
+  // Clear previous inputs
+  document.getElementById("template-name-input").value = "";
+  document.getElementById("template-stage-select").value = "";
+  document.getElementById("template-description-input").value = "";
+
+  modal.classList.remove("hidden");
+}
+
+// Confirm save template
+function confirmSaveTemplate() {
+  const name = document.getElementById("template-name-input").value.trim();
+  const stage = document.getElementById("template-stage-select").value.trim();
+  const description = document.getElementById("template-description-input").value.trim();
+
+  if (!name) {
+    alert("Please enter a template name");
+    return;
+  }
+
+  // Get current email content from session
+  const emailName = document.getElementById("plan-message") ? document.getElementById("plan-message").textContent : "Unnamed Campaign";
+
+  const template = {
+    name: name,
+    stage: stage || "Other",
+    description: description,
+    emailName: emailName,
+    html: _generatedHtml,
+    savedAt: new Date().toISOString(),
+  };
+
+  const templates = loadTemplates();
+  templates.push(template);
+  saveTemplates(templates);
+
+  alert(`✅ Template "${name}" saved successfully!`);
+  closeModal("save-template-modal");
+}
+
+// Show template info modal
+function showTemplateInfo() {
+  const modal = document.getElementById("template-info-modal");
+  if (modal) modal.classList.remove("hidden");
+}
+
+// Close any modal
+function closeModal(modalId) {
+  const modal = document.getElementById(modalId);
+  if (modal) modal.classList.add("hidden");
+}
+
+// Close modal when clicking outside
+document.addEventListener("click", (e) => {
+  if (e.target.classList.contains("hidden")) return;
+
+  ["template-library-modal", "save-template-modal", "template-info-modal"].forEach(id => {
+    const modal = document.getElementById(id);
+    if (modal && modal === e.target) {
+      modal.classList.add("hidden");
+    }
+  });
 });
 
 // ── Init ─────────────────────────────────────────────────────────────────────

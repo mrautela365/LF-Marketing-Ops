@@ -176,12 +176,30 @@
         </div>
         <div id="sections-editor"></div>
 
-        <!-- Full email preview iframe -->
+        <!-- Full email preview iframes (Variant A & B) -->
         <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--gray-500);margin:16px 0 6px">Full Email Preview</div>
-        <iframe id="email-preview-frame"
-          sandbox="allow-same-origin allow-popups"
-          style="width:100%;height:500px;border:1px solid #e2e8f0;border-radius:6px;background:#f9fafb"
-        ></iframe>
+
+        <!-- Variant A - AI Template -->
+        <div style="margin-bottom:16px">
+          <div style="font-size:12px;color:var(--gray-600);margin-bottom:6px">
+            <strong>Variant A</strong> <span style="color:var(--gray-400)">(AI Template)</span>
+          </div>
+          <iframe id="email-preview-frame-a"
+            sandbox="allow-same-origin allow-popups"
+            style="width:100%;height:500px;border:1px solid #e2e8f0;border-radius:6px;background:#f9fafb"
+          ></iframe>
+        </div>
+
+        <!-- Variant B - Existing Flow -->
+        <div>
+          <div style="font-size:12px;color:var(--gray-600);margin-bottom:6px">
+            <strong>Variant B</strong> <span style="color:var(--gray-400)">(Existing Flow)</span>
+          </div>
+          <iframe id="email-preview-frame-b"
+            sandbox="allow-same-origin allow-popups"
+            style="width:100%;height:500px;border:1px solid #e2e8f0;border-radius:6px;background:#f9fafb"
+          ></iframe>
+        </div>
       </div>
 
       <!-- Refine content card -->
@@ -389,7 +407,8 @@
         </div>
 
         <div id="done-message" class="hidden"></div>
-        <div id="done-draft-link" class="hidden"></div>
+        <div id="done-draft-link-a" class="hidden"></div>
+        <div id="done-draft-link-b" class="hidden"></div>
 
         <!-- Final chat -->
         <div style="margin-top:12px">
