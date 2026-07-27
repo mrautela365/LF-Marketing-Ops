@@ -884,9 +884,13 @@ async def set_send_list(req: SetSendListRequest):
     suppression from the session when not passed directly.
     Returns the actual `to` object HubSpot stored so the UI can confirm/warn.
     """
-    send_list_id = (req.send_list_id or "").strip()
-    if not send_list_id:
-        raise HTTPException(status_code=400, detail="send_list_id is required")
+    send_list_ids = [str(x).strip() for x in (req.send_list_ids or []) if str(x).strip()]
+    if not send_list_ids:
+        single = (req.send_list_id or "").strip()
+        if single:
+            send_list_ids = [single]
+    if not send_list_ids:
+        raise HTTPException(status_code=400, detail="send_list_id or send_list_ids is required")
 
     email_id    = (req.email_id or "").strip()
     suppression = list(req.suppression_list_ids or [])
@@ -903,19 +907,19 @@ async def set_send_list(req: SetSendListRequest):
             detail="No email to update. Provide email_id, or a session_id whose email has been cloned.",
         )
 
-    log.info(f"[SET-SEND-LIST] email={email_id} list={send_list_id} suppression={suppression}")
+    log.info(f"[SET-SEND-LIST] email={email_id} lists={send_list_ids} suppression={suppression}")
     try:
-        result = hubspot_tools.set_email_send_list(email_id, send_list_id, suppression)
+        result = hubspot_tools.set_email_send_list(email_id, send_list_ids, suppression)
     except Exception as exc:
         log.error(f"[SET-SEND-LIST] failed: {exc}\n{traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"Failed to apply send list: {exc}")
 
     applied = result.get("success", False)
-    log.info(f"[SET-SEND-LIST] email={email_id} list={send_list_id} success={applied} type={result.get('list_type')}")
+    log.info(f"[SET-SEND-LIST] email={email_id} lists={send_list_ids} success={applied} type={result.get('list_type')}")
 
-    # Persist on the session so later steps know which list is the send list
+    # Persist on the session so later steps know which list(s) are the send list
     if sess:
-        sess.meta["audience_list_id"] = send_list_id
+        sess.meta["audience_list_id"] = send_list_ids[0] if len(send_list_ids) == 1 else send_list_ids
         session_store.update(sess)
 
     if not applied:
@@ -923,14 +927,14 @@ async def set_send_list(req: SetSendListRequest):
         raise HTTPException(
             status_code=502,
             detail=(
-                f"HubSpot did not accept send list {send_list_id} for email {email_id}. "
+                f"HubSpot did not accept send list(s) {send_list_ids} for email {email_id}. "
                 f"Applied `to`: {result.get('to')}"
             ),
         )
 
     return {
         "email_id":     email_id,
-        "send_list_id": send_list_id,
+        "send_list_id": send_list_ids[0] if len(send_list_ids) == 1 else ", ".join(send_list_ids),
         "list_type":    result.get("list_type"),
         "success":      applied,
         "to":           result.get("to"),

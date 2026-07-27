@@ -679,7 +679,15 @@ const AudienceBuilder = (() => {
   // Pre-selects the same lists (inclusion + suppression) that a prior send
   // used, adding any not already present as synthetic "added" cards — mirrors
   // the existing search-and-add flow rather than a separate code path.
-  function useLastSentSelection(idx, scope = "builder") {
+  //
+  // On scope="step3" it then wires up the send list without any extra click:
+  // a simple prior send (1-2 included lists, no suppression) reuses those
+  // list(s) directly as the campaign's send list — no new HubSpot list is
+  // created, exactly like app.js's selectList() does for a manually-picked
+  // list. Anything more complex (3+ included lists, or any suppression) still
+  // goes through buildMaster() to compose a single send target, since that's
+  // the only way today to combine >2 lists or apply a suppression exclusion.
+  async function useLastSentSelection(idx, scope = "builder") {
     const ids = _ids(scope), st = _st(scope);
     const e = st.lastSent[idx];
     if (!e) return;
@@ -709,6 +717,40 @@ const AudienceBuilder = (() => {
     if (results) results.classList.remove("hidden");
     renderCards(scope);
     renderSuppressionCards(scope);
+
+    if (!st.selected.size) return;
+
+    if (scope === "step3") {
+      const liveIncluded = (e.included_lists || []).filter(l => !l.missing);
+      const liveSuppression = (e.suppression_lists || []).filter(l => !l.missing);
+      if (liveIncluded.length >= 1 && liveIncluded.length <= 2 && liveSuppression.length === 0) {
+        _useListsDirectly(liveIncluded, scope);
+        return;
+      }
+    }
+    await buildMaster(scope);
+  }
+
+  // Wires 1-2 already-existing lists straight in as the campaign's send
+  // list(s), with no HubSpot list composed — mirrors app.js's selectList()
+  // ("An existing list becomes the send list directly").
+  function _useListsDirectly(lists, scope) {
+    const listIds = lists.map(l => String(l.list_id));
+    if (typeof _masterListIds !== "undefined") _masterListIds = listIds;
+    if (typeof _masterListId !== "undefined") _masterListId = listIds[0];
+    if (typeof _subLists !== "undefined") {
+      _subLists = lists.map(l => ({ name: l.name, id: String(l.list_id), kind: "selected" }));
+      if (typeof renderSubLists === "function") renderSubLists(scope);
+    }
+    const badge = document.getElementById("audience-status-badge");
+    if (badge) {
+      badge.textContent = listIds.length > 1
+        ? `✓ Using ${listIds.length} lists from last send directly`
+        : "✓ Using list from last send directly";
+      badge.style.color = "#166534";
+    }
+    const startImpl = document.getElementById("start-impl-btn");
+    if (startImpl) { startImpl.disabled = false; startImpl.textContent = "Create Campaign Draft →"; }
   }
 
   // Clears a scope's discovery state back to "no discovery run yet" — used by
@@ -941,6 +983,7 @@ const AudienceBuilder = (() => {
       // "Create Campaign Draft".
       if (scope === "step3" && data.list_id) {
         if (typeof _masterListId !== "undefined") _masterListId = String(data.list_id);
+        if (typeof _masterListIds !== "undefined") _masterListIds = [String(data.list_id)];
         if (typeof _markMaster === "function") _markMaster(data.list_id, data.hubspot_url, "step3");
         const badge = document.getElementById("audience-status-badge");
         if (badge) { badge.textContent = `✓ Audience ready (ID ${data.list_id})`; badge.style.color = "#166534"; }

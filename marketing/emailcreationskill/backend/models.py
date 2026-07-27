@@ -123,7 +123,8 @@ class SetSendListRequest(BaseModel):
     visible and verifiable, independent of the clone flow."""
     session_id: str = ""              # optional — resolves email_id + suppression from session
     email_id: str = ""                # optional — overrides session.email_id
-    send_list_id: str                 # the master/audience list to send to (required)
+    send_list_id: str = ""            # single-list form (back-compat) — one of send_list_id/send_list_ids required
+    send_list_ids: list[str] = []     # plural form — 2+ lists reused directly from a prior send, no compose step
     suppression_list_ids: list[str] = []  # optional — falls back to session brand_history
 
 

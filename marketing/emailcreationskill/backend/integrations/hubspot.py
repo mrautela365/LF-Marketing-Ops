@@ -692,22 +692,31 @@ def _is_ils_list(list_id: str) -> bool:
 
 def set_email_send_list(
     email_id: str,
-    send_list_id: str,
+    send_list_id,
     suppression_list_ids: list = None,
 ) -> dict:
     """
     Set the recipient + suppression lists on a HubSpot marketing email.
 
+    `send_list_id` accepts either a single list ID or a list of IDs — HubSpot's
+    contactIlsLists.include / contactLists.include arrays natively support
+    multiple lists (used e.g. to reuse 2 lists from a prior send directly,
+    without composing a new master list).
+
     Sends a COMPLETE `to` object so HubSpot replaces all sub-fields:
       - contactIds.include cleared  → removes any individual contacts from the clone source
-      - contactIlsLists.include     → ILS list (DYNAMIC/MANUAL/SNAPSHOT — incl. audience-built)
-      - contactLists.include        → legacy list (not found in CRM v3)
+      - contactIlsLists.include     → ILS list(s) (DYNAMIC/MANUAL/SNAPSHOT — incl. audience-built)
+      - contactLists.include        → legacy list(s) (not found in CRM v3)
       - suppression IDs are routed into the matching field by namespace
 
     Routing rule: a list goes into contactIlsLists if it exists in CRM v3
     (any processingType), else contactLists. This is ILS-vs-legacy, NOT
     dynamic-vs-static — putting an ILS list ID in contactLists makes HubSpot
     silently reject the entire `to` object, leaving the email with no recipients.
+    When multiple send lists are passed, they must all resolve to the SAME
+    namespace — HubSpot rejects a `to` object containing both contactLists and
+    contactIlsLists in one PATCH, so mixed-namespace lists can't be combined
+    into a single send without composing a master list first.
 
     Why complete object: HubSpot's PATCH keeps sub-fields you omit, so a partial
     `to` patch leaves stale contactIds / stale list IDs from the clone source.
@@ -715,11 +724,23 @@ def set_email_send_list(
     import logging as _logging
     _log = _logging.getLogger("email-staging")
 
-    send_list_id = str(send_list_id)
-    list_type = _get_list_processing_type(send_list_id)
-    send_is_ils = list_type in _ILS_PROCESSING_TYPES
+    send_list_ids = [str(x) for x in (send_list_id if isinstance(send_list_id, (list, tuple, set)) else [send_list_id])]
+    if not send_list_ids:
+        raise ValueError("send_list_id is required")
+
+    list_types = {sid: _get_list_processing_type(sid) for sid in send_list_ids}
+    ils_ids = [sid for sid in send_list_ids if list_types[sid] in _ILS_PROCESSING_TYPES]
+    legacy_ids = [sid for sid in send_list_ids if list_types[sid] not in _ILS_PROCESSING_TYPES]
+    if ils_ids and legacy_ids:
+        raise ValueError(
+            f"Cannot combine ILS lists {ils_ids} with legacy lists {legacy_ids} in a single "
+            "send — HubSpot rejects a `to` object containing both namespaces. Compose a "
+            "master list instead."
+        )
+    send_is_ils = bool(ils_ids)
+    list_type = list_types[send_list_ids[0]]
     _log.info(
-        f"[HS-LISTS] set_email_send_list email={email_id} list={send_list_id} "
+        f"[HS-LISTS] set_email_send_list email={email_id} lists={send_list_ids} "
         f"type={list_type} → {'contactIlsLists' if send_is_ils else 'contactLists'}"
     )
 
@@ -756,9 +777,9 @@ def set_email_send_list(
         "contactIds": {"include": [], "exclude": []},
     }
     if send_is_ils:
-        to_payload["contactIlsLists"] = {"include": [send_list_id], "exclude": same_ns_suppress}
+        to_payload["contactIlsLists"] = {"include": send_list_ids, "exclude": same_ns_suppress}
     else:
-        legacy_include = [int(send_list_id)] if send_list_id.isdigit() else []
+        legacy_include = [int(sid) for sid in send_list_ids if sid.isdigit()]
         to_payload["contactLists"] = {"include": legacy_include, "exclude": same_ns_suppress}
 
     _log.info(f"[HS-LISTS] PATCHing to={to_payload}")
@@ -769,19 +790,19 @@ def set_email_send_list(
         [str(x) for x in (applied_to.get("contactLists")    or {}).get("include", [])] +
         [str(x) for x in (applied_to.get("contactIlsLists") or {}).get("include", [])]
     )
-    success = str(send_list_id) in all_applied
+    success = all(sid in all_applied for sid in send_list_ids)
     if success:
-        _log.info(f"[HS-LISTS] ✓ send list {send_list_id} applied (type={list_type})")
+        _log.info(f"[HS-LISTS] ✓ send list(s) {send_list_ids} applied (type={list_type})")
     else:
         _log.warning(
-            f"[HS-LISTS] ⚠ send_list_id={send_list_id!r} not in PATCH response "
+            f"[HS-LISTS] ⚠ send_list_ids={send_list_ids!r} not fully in PATCH response "
             f"to={applied_to} — full response keys: {list(result.keys())}"
         )
 
     return {
         "success": success,
         "email_id": email_id,
-        "send_list_id": send_list_id,
+        "send_list_id": send_list_ids[0] if len(send_list_ids) == 1 else ", ".join(send_list_ids),
         "list_type": list_type,
         "to": applied_to,
     }

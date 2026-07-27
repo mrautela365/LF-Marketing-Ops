@@ -110,6 +110,21 @@ def _resolve_list_brief(list_id, cache: dict) -> dict:
     return brief
 
 
+def _dedupe_briefs(briefs: list[dict]) -> list[dict]:
+    """A raw ID list can contain both a legacy v1 ID and its live v3 ID for
+    the SAME list (e.g. static + dynamic recipient fields both referencing
+    it) — _resolve_list_brief resolves the legacy one to the same v3
+    list_id, so collapse duplicates here rather than showing the list twice."""
+    seen = set()
+    out = []
+    for b in briefs:
+        if b["list_id"] in seen:
+            continue
+        seen.add(b["list_id"])
+        out.append(b)
+    return out
+
+
 def find_last_sent_emails(event_name: str = "", brand_short: str = "", limit: int = 3) -> list[dict]:
     """Up to `limit` most-recently-published marketing emails whose name
     references this event, sorted by publishDate desc, with each email's
@@ -165,7 +180,7 @@ def find_last_sent_emails(event_name: str = "", brand_short: str = "", limit: in
                 f"https://app.hubspot.com/email/{HUBSPOT_PORTAL_ID}/edit/{email_id}"
                 if email_id else ""
             ),
-            "included_lists": [_resolve_list_brief(lid, cache) for lid in included_ids],
-            "suppression_lists": [_resolve_list_brief(lid, cache) for lid in excluded_ids],
+            "included_lists": _dedupe_briefs([_resolve_list_brief(lid, cache) for lid in included_ids]),
+            "suppression_lists": _dedupe_briefs([_resolve_list_brief(lid, cache) for lid in excluded_ids]),
         })
     return results

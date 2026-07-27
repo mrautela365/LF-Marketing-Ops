@@ -4,6 +4,7 @@ let _generatedHtml = "";
 let _emailId = null;          // HubSpot email id of the cloned draft (set at implementation)
 let _draftUrl = "";           // HubSpot draft URL of the cloned email
 let _masterListId = "";       // master audience list id produced by the build step
+let _masterListIds = [];      // plural form — supports attaching 2+ lists directly (no compose) at send time
 let _sections = [];           // editable email content blocks (removable on Email Preview)
 let _subLists = [];           // lists rolled into the master audience (built or selected)
 let _audiencePlanText       = "";     // Phase 1 segment plan, captured for review before any list is created
@@ -628,6 +629,17 @@ function switchAudienceTab(tab) {
   if (eventBtn)  { eventBtn.classList.toggle("btn-primary", tab === "event");   eventBtn.classList.toggle("btn-outline", tab !== "event"); }
   if (customBtn) { customBtn.classList.toggle("btn-primary", tab === "custom"); customBtn.classList.toggle("btn-outline", tab !== "custom"); }
   if (reuseBtn)  { reuseBtn.classList.toggle("btn-primary", tab === "reuse");   reuseBtn.classList.toggle("btn-outline", tab !== "reuse"); }
+  if (tab === "reuse") prefillReuseEventUrl();
+}
+
+// Pre-fill the Reuse/Discover tab's event URL from Step 1's planning URL, the
+// first time the tab is opened — never overwrites a URL the user already
+// typed/discovered against in this session.
+function prefillReuseEventUrl() {
+  const urlInput = document.getElementById("s3ab-event-url");
+  if (!urlInput || urlInput.value) return;
+  const step1Url = (document.getElementById("event_url") || {}).value || "";
+  if (step1Url) urlInput.value = step1Url;
 }
 
 // Show the "paste a URL" prompt whenever no event page has been scraped yet
@@ -660,6 +672,7 @@ function submitAudienceUrl() {
 // Reset the Audience Preview tab to its initial "choose an option" state.
 function resetAudienceUI() {
   _masterListId = "";
+  _masterListIds = [];
   _subLists = [];
   _audiencePlanText = "";
   _audiencePlanEventUrl = "";
@@ -700,6 +713,7 @@ function resetAudienceUI() {
 // Skip audience entirely — create the email only (no send list attached).
 function skipAudience() {
   _masterListId = "";
+  _masterListIds = [];
   startImplementation();
 }
 
@@ -741,21 +755,23 @@ async function startImplementation() {
     if (variantADraftUrl) showDraftLink("done-draft-link-a", variantADraftUrl, "Variant A (AI Template)");
     if (variantBDraftUrl) showDraftLink("done-draft-link-b", variantBDraftUrl, "Variant B (Existing Flow)");
 
-    // Attach the built master audience list (the "later update" after clone).
-    if (_masterListId && _emailId) {
+    // Attach the audience list(s) — either a composed master list or, for the
+    // direct-reuse path, the prior send's own list(s) with no new list built.
+    const sendListIds = (_masterListIds && _masterListIds.length) ? _masterListIds : (_masterListId ? [_masterListId] : []);
+    if (sendListIds.length && _emailId) {
       if (badge) badge.textContent = "Attaching audience…";
       try {
         const slResp = await fetch(`${API}/set-send-list`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ session_id: sessionId, email_id: _emailId, send_list_id: _masterListId }),
+          body: JSON.stringify({ session_id: sessionId, email_id: _emailId, send_list_ids: sendListIds }),
         });
         const slData = await slResp.json();
         if (!slResp.ok) throw new Error(slData.detail || "Send list not applied");
-        appendMessage("done-message", `✅ Master audience attached as send list (List ID ${_masterListId}${slData.list_type ? `, ${slData.list_type}` : ""}).`);
+        appendMessage("done-message", `✅ Audience attached as send list${sendListIds.length > 1 ? "s" : ""} (List ID${sendListIds.length > 1 ? "s" : ""} ${sendListIds.join(", ")}${slData.list_type ? `, ${slData.list_type}` : ""}).`);
         if (badge) { badge.textContent = "✓ Complete"; badge.style.color = "#166534"; }
       } catch (slErr) {
-        appendMessage("done-message", `⚠️ Audience list built (ID ${_masterListId}) but NOT attached: ${slErr.message}. Apply it manually in HubSpot.`);
+        appendMessage("done-message", `⚠️ Audience list(s) selected (ID${sendListIds.length > 1 ? "s" : ""} ${sendListIds.join(", ")}) but NOT attached: ${slErr.message}. Apply it manually in HubSpot.`);
         if (badge) { badge.textContent = "⚠ Attach failed"; badge.style.color = "#dc2626"; }
       }
     } else {
@@ -819,6 +835,7 @@ function startOver() {
   _emailId = null;
   _draftUrl = "";
   _masterListId = "";
+  _masterListIds = [];
   _sections = [];
   _inputMode = "event";
   closeBriefStream();
@@ -908,6 +925,7 @@ function selectList(id, name, size) {
 
   // An existing list becomes the send list directly (attached at implementation).
   _masterListId = String(id);
+  _masterListIds = [String(id)];
   _subLists = [{ name: name, id: String(id), kind: "selected" }];
   renderSubLists();
   const badge = document.getElementById("audience-status-badge");
@@ -926,6 +944,7 @@ function clearList() {
   // If the cleared selection was the chosen send list (no build ran), reset it.
   if (_subLists.length === 1 && _subLists[0].kind === "selected") {
     _masterListId = "";
+    _masterListIds = [];
     _subLists = [];
     renderSubLists();
     const startImpl = document.getElementById("start-impl-btn");
@@ -1228,6 +1247,7 @@ async function runAudienceBuild(urlOverride) {
 
   _activeAudienceFlow = "event";
   _masterListId = "";
+  _masterListIds = [];
   _subLists = [];
   _audiencePlanText = "";
   _audiencePlanEventUrl = eventUrl;
@@ -1356,6 +1376,7 @@ async function approveAudiencePlan() {
       const mid = msg.master_list_id;
       if (mid) {
         _masterListId = String(mid);
+        _masterListIds = [String(mid)];
         _markMaster(mid, msg.master_list_url);
         if (planActions) planActions.classList.add("hidden");
         const link = _masterListLinkHtml(mid, msg.master_list_url);
@@ -1397,6 +1418,7 @@ async function runCustomAudienceBuild(scope = "step3") {
 
   _activeAudienceFlow = "custom";
   _masterListId = "";
+  _masterListIds = [];
   _subLists = [];
   _customAudienceRequest = request;
   _customAudiencePlanText = "";
@@ -1519,6 +1541,7 @@ async function approveCustomAudiencePlan(scope = "step3") {
       const mid = msg.master_list_id;
       if (mid) {
         _masterListId = String(mid);
+        _masterListIds = [String(mid)];
         _markMaster(mid, msg.master_list_url, scope);
         if (planActions) planActions.classList.add("hidden");
         const link = _masterListLinkHtml(mid, msg.master_list_url);
@@ -1568,6 +1591,7 @@ async function runDirectSignalBuild(request, scope = "builder") {
 
   _activeAudienceFlow = "custom";
   _masterListId = "";
+  _masterListIds = [];
   _subLists = [];
   _customAudienceRequest = request;
   _customAudiencePlanText = "";
@@ -1630,6 +1654,7 @@ async function runDirectSignalBuild(request, scope = "builder") {
         return;
       }
       _masterListId = String(mid);
+      _masterListIds = [String(mid)];
       _markMaster(mid, msg.master_list_url, scope);
       const link = _masterListLinkHtml(mid, msg.master_list_url);
 
