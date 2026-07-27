@@ -21,10 +21,12 @@ if not log.handlers:
     log.propagate = False
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
-from models import PlanRequest, CloneRequest, ContentRequest, ChatRequest, GenerateContentRequest, StagingBriefRequest, AsanaPlanRequest, AudiencePlanRequest, AudienceRunRequest, BuildAudienceRequest, SetSendListRequest, UpdateSectionsRequest
+from models import PlanRequest, CloneRequest, ContentRequest, ChatRequest, GenerateContentRequest, StagingBriefRequest, AsanaPlanRequest, AudiencePlanRequest, AudienceRunRequest, BuildAudienceRequest, SetSendListRequest, UpdateSectionsRequest, CustomAudiencePlanRequest, CustomAudienceRunRequest
 import session_store
 import agent
+from core import agent as core_agent
 import audience_tools
+from audience_builder.routes import router as audience_builder_router
 from config import ANTHROPIC_API_KEY, HUBSPOT_PORTAL_ID, INTERNAL_API_TOKEN, ASANA_ACCESS_TOKEN, LITELLM_BASE_URL, LITELLM_API_KEY
 import asana_tools
 import json
@@ -545,9 +547,8 @@ def _create_plan_impl(req: PlanRequest, emit=lambda *a, **k: None):
 
     # ── Step B: Call Claude to generate the plan text ──
     emit("📝 Drafting the campaign plan…")
-    combined_context = "\n\n".join(filter(None, [req.extra_context, brand_hint, stage_content_hint]))
     try:
-        text, messages = agent.plan_turn(session, req.url, combined_context or None)
+        text, messages = agent.plan_turn(session, req.url)
     except Exception as exc:
         log.error(f"[PLAN] failed: {exc}\n{traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(exc))
@@ -555,6 +556,14 @@ def _create_plan_impl(req: PlanRequest, emit=lambda *a, **k: None):
     session.messages = messages
     session.phase = "planning"
     session.plan = {"url": req.url}
+
+    # If brand_history wasn't set by AI selection or keyword fallback above,
+    # try to extract it from plan_turn's messages (Claude may have called the tools).
+    if not session.meta.get("brand_history"):
+        extracted_bh = agent.extract_brand_history_from_messages(messages)
+        if extracted_bh:
+            session.meta["brand_history"] = extracted_bh
+            log.info(f"[PLAN] brand_history extracted from plan_turn messages: {extracted_bh.get('matched_email_id') or extracted_bh.get('last_email_id')!r}")
 
     # Fallback ONLY: if the deterministic name couldn't be built above, try to parse
     # a backtick-formatted name from Claude's plan text (`26Q2 - Brand - Event - Suffix`).
@@ -699,10 +708,32 @@ async def generate_content(req: GenerateContentRequest):
         session.meta["banner_url"]         = generated.get("banner_url", "")
         session.meta["sections"]           = generated.get("sections", [])
         session.meta["sponsors"]           = generated.get("sponsors", [])
+
+        # Variant A (AI Template) — generated from the same detected funnel stage,
+        # previewed alongside Variant B (the existing flow, above) so the user can
+        # compare before Implementation creates both as a real HubSpot A/B test.
+        progress_emit(token, "🤖 Drafting AI template variant…")
+        variant_a = await loop.run_in_executor(
+            None,
+            lambda: agent.generate_ai_template_content(
+                url_data, stage_info,
+                banner_url=generated.get("banner_url", ""),
+                sponsors=generated.get("sponsors", []),
+            )
+        )
+        session.meta["variant_a_subject"]      = variant_a.get("subject", "")
+        session.meta["variant_a_preview"]      = variant_a.get("preview_text", "")
+        session.meta["variant_a_html"]          = variant_a.get("html", "")
+        session.meta["variant_a_body_html"]     = variant_a.get("body_html", "")
+        session.meta["variant_a_sections"]      = variant_a.get("sections", [])
+        session.meta["variant_a_banner_url"]    = variant_a.get("banner_url", "")
+        session.meta["variant_a_template_key"]  = variant_a.get("template_key", "")
+        session.meta["variant_a_mode"]          = variant_a.get("mode", "")
         session_store.update(session)
 
         log.info(f"[GEN-CONTENT] done: subject={generated['subject']!r} "
-                 f"html_len={len(generated['html'])} banner={'yes' if generated.get('banner_url') else 'no'}")
+                 f"html_len={len(generated['html'])} banner={'yes' if generated.get('banner_url') else 'no'} "
+                 f"variant_a_mode={variant_a.get('mode')!r}")
         sections = generated.get("sections", []) or []
         progress_emit(token, f"📧 Email drafted — {len(sections)} content section(s).", done=True)
         return {
@@ -712,6 +743,11 @@ async def generate_content(req: GenerateContentRequest):
             "generated_html":    generated["html"],
             "sections":          sections,
             "banner_url":        generated.get("banner_url", ""),
+            "variant_a_subject":     variant_a.get("subject", ""),
+            "variant_a_preview":     variant_a.get("preview_text", ""),
+            "variant_a_html":        variant_a.get("html", ""),
+            "variant_a_template_key": variant_a.get("template_key", ""),
+            "variant_a_mode":        variant_a.get("mode", ""),
         }
     except Exception as exc:
         log.error(f"[GEN-CONTENT] failed: {exc}\n{traceback.format_exc()}")
@@ -789,7 +825,7 @@ async def clone_email(req: CloneRequest):
     # Verify a real clone happened — use only the ID set during THIS turn
     # agent._session_email_id is reset to None at the start of clone_turn, so
     # any value here was set by the clone_email tool call in this request.
-    real_email_id = agent._session_email_id
+    real_email_id = core_agent._session_email_id
     if not real_email_id:
         log.error("[CLONE] No email_id found — Claude may have hallucinated the response without calling clone_email")
         raise HTTPException(
@@ -801,6 +837,15 @@ async def clone_email(req: CloneRequest):
     validation_passed = session.meta.get("validation_passed", False)
     validation_issues = session.meta.get("validation_issues", [])
 
+    # variant_a_email_id == real_email_id (the master clone from Step 1 of clone_turn).
+    # variant_b_email_id is the separate A/B variation email created inside clone_turn;
+    # it's empty if create_ab_variation failed, in which case Variant B content was
+    # applied to the master itself as a fallback (see agent.clone_turn).
+    variant_a_email_id  = session.meta.get("variant_a_email_id", real_email_id)
+    variant_a_draft_url = session.meta.get("variant_a_draft_url", "")
+    variant_b_email_id  = session.meta.get("variant_b_email_id", "")
+    variant_b_draft_url = session.meta.get("variant_b_draft_url", "")
+
     session.phase     = "complete" if validation_passed else "cloned"
     session.email_id  = real_email_id
     session.draft_url = f"https://app.hubspot.com/email/{HUBSPOT_PORTAL_ID}/edit/{real_email_id}/settings"
@@ -808,7 +853,7 @@ async def clone_email(req: CloneRequest):
     log.info(
         f"[CLONE] verified email_id={real_email_id} "
         f"content_applied={content_applied} validation_passed={validation_passed} "
-        f"issues={validation_issues}"
+        f"issues={validation_issues} variant_a={variant_a_email_id} variant_b={variant_b_email_id}"
     )
 
     return {
@@ -820,6 +865,10 @@ async def clone_email(req: CloneRequest):
         "content_applied":   content_applied,
         "validation_passed": validation_passed,
         "validation_issues": validation_issues,
+        "variant_a_email_id":  variant_a_email_id,
+        "variant_a_draft_url": variant_a_draft_url or session.draft_url,
+        "variant_b_email_id":  variant_b_email_id,
+        "variant_b_draft_url": variant_b_draft_url,
     }
 
 
@@ -952,7 +1001,7 @@ async def stage_from_brief(req: StagingBriefRequest):
         clone_result = hubspot_tools.clone_email(req.clone_base_id, req.email_name)
         new_email_id = clone_result["email_id"]
         draft_url    = clone_result["draft_url"]
-        agent._session_email_id = new_email_id   # register safety lock
+        core_agent._session_email_id = new_email_id   # register safety lock
         log.info(f"[BRIEF] cloned → {new_email_id}")
 
         # ── Step 2: Apply settings ───────────────────────────────────────────
@@ -1266,7 +1315,7 @@ async def start_audience_plan(req: AudiencePlanRequest):
 
     # Reuse the scrape done during the Email Content stage if it's for this same URL.
     prescraped = cached if cached.get("url") == event_url else None
-    job_id = audience_tools.start_plan_job(event_url, prescraped=prescraped)
+    job_id = audience_tools.start_plan_job(event_url, prescraped=prescraped, qa=req.qa)
     log.info(f"[AUDIENCE-PLAN] job started: {job_id[:8]} url={event_url!r} reuse_scrape={bool(prescraped)}")
     return {"job_id": job_id, "event_url": event_url}
 
@@ -1309,7 +1358,7 @@ async def start_audience_plan_standalone(req: AudienceRunRequest):
     if not event_url:
         raise HTTPException(status_code=400, detail="event_url is required")
 
-    job_id = audience_tools.start_plan_job(event_url)
+    job_id = audience_tools.start_plan_job(event_url, qa=req.qa)
     log.info(f"[AUDIENCE-PLAN] standalone job {job_id[:8]} url={event_url!r}")
     return {"job_id": job_id, "event_url": event_url}
 
@@ -1329,6 +1378,39 @@ async def run_audience_standalone(req: AudienceRunRequest):
     job_id = audience_tools.start_build_job(event_url, plan=req.plan, qa=req.qa)
     log.info(f"[AUDIENCE-RUN] standalone job {job_id[:8]} url={event_url!r} plan={'yes' if req.plan else 'no'}")
     return {"job_id": job_id, "event_url": event_url}
+
+
+@app.post("/api/audience/custom-plan")
+async def start_custom_audience_plan(req: CustomAudiencePlanRequest):
+    """
+    Custom Request flow — Phase 1. Free-form audience description (e.g. a
+    location combined with one or more named events for context) instead of
+    a single event URL. Produces a Segment Plan; creates no HubSpot lists yet.
+    Returns job_id — poll /api/audience-stream/{job_id} for SSE output.
+    """
+    request_text = req.request.strip()
+    if not request_text:
+        raise HTTPException(status_code=400, detail="request is required")
+
+    job_id = audience_tools.start_custom_plan_job(request_text, qa=req.qa)
+    log.info(f"[AUDIENCE-CUSTOM-PLAN] job {job_id[:8]} request={request_text[:80]!r}")
+    return {"job_id": job_id}
+
+
+@app.post("/api/audience/custom-run")
+async def run_custom_audience(req: CustomAudienceRunRequest):
+    """
+    Custom Request flow — builds the audience list(s) from the approved plan,
+    or runs the full plan+build sequence in one job if no plan text is supplied.
+    Stream output via GET /api/audience-stream/{job_id}.
+    """
+    request_text = req.request.strip()
+    if not request_text:
+        raise HTTPException(status_code=400, detail="request is required")
+
+    job_id = audience_tools.start_custom_build_job(request_text, plan=req.plan, qa=req.qa)
+    log.info(f"[AUDIENCE-CUSTOM-RUN] job {job_id[:8]} plan={'yes' if req.plan else 'no'}")
+    return {"job_id": job_id}
 
 
 @app.get("/api/audience/status")
@@ -1404,15 +1486,21 @@ async def stream_audience_build(job_id: str, session_id: str = ""):
                             # Email was already cloned before build finished — apply send list now
                             if sess.email_id:
                                 try:
-                                    suppression_ids = (sess.meta.get("brand_history") or {}).get("suppression_list_ids", [])
+                                    history_ids = (sess.meta.get("brand_history") or {}).get("suppression_list_ids", [])
+                                    fresh_ids   = [row["list_id"] for row in suppression_lists if row.get("list_id")]
+                                    suppression_ids = list(dict.fromkeys(history_ids + fresh_ids))
                                     sls = hubspot_tools.set_email_send_list(sess.email_id, master_id, suppression_ids)
                                     posthoc_applied = sls.get("success", False)
                                     log.info(f"[AUDIENCE] post-hoc send list: email={sess.email_id} list={master_id} success={posthoc_applied}")
                                 except Exception as exc:
                                     log.warning(f"[AUDIENCE] post-hoc send list failed: {exc}")
 
+                    master_list_url = (
+                        f"https://app.hubspot.com/contacts/{HUBSPOT_PORTAL_ID}/objectLists/{master_id}/filters"
+                        if master_id else ""
+                    )
                     log.info(f"[AUDIENCE] build complete — master_id={master_id!r} posthoc_applied={posthoc_applied} suppressions={len(suppression_lists)}")
-                    yield f"data: {json.dumps({'type':'complete','done':True,'master_list_id':master_id,'suppression_lists':suppression_lists,'posthoc_applied':posthoc_applied,'success':item.get('success',False)})}\n\n"
+                    yield f"data: {json.dumps({'type':'complete','done':True,'master_list_id':master_id,'master_list_url':master_list_url,'suppression_lists':suppression_lists,'posthoc_applied':posthoc_applied,'success':item.get('success',False)})}\n\n"
                 except Exception as exc:
                     log.error(f"[AUDIENCE] completion handling error: {exc}")
                     yield f"data: {json.dumps({'type':'complete','done':True,'master_list_id':'','suppression_lists':[],'posthoc_applied':False,'success':False})}\n\n"
@@ -1425,6 +1513,12 @@ async def stream_audience_build(job_id: str, session_id: str = ""):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+# ── Audience Builder tab (existing-list discovery + master list composer) ─────
+# Own router/package (backend/audience_builder/) — registered before the static
+# mount/catch-all below so its routes aren't shadowed by the SPA fallback.
+app.include_router(audience_builder_router)
 
 
 # ── Serve frontend ───────────────────────────────────────────────────────────

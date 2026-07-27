@@ -75,6 +75,31 @@ header .subtitle {
 @media(max-width: 640px) { .container { padding: 24px 18px 64px; } }
 
 /* ── Pill tab nav (was the step indicator) ── */
+/* ── Top-level screen tabs (Campaign Builder / Audience Builder) ──
+   Deliberately separate from .steps/.step below: showStep(n) re-indexes every
+   .step-classed element on the page on each wizard-step transition, so the
+   top-level tab bar must not share that class. */
+.top-tabs {
+  display: inline-flex;
+  gap: 4px;
+  margin-bottom: 20px;
+  background: var(--gray-100);
+  border: 1px solid var(--gray-200);
+  border-radius: var(--radius);
+  padding: 5px;
+}
+.top-tab {
+  padding: 9px 20px;
+  border-radius: var(--radius-sm);
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--gray-500);
+  cursor: pointer;
+  transition: background .15s, color .15s, box-shadow .15s;
+}
+.top-tab:hover:not(.active) { background: var(--gray-200); }
+.top-tab.active { background: white; color: var(--gray-900); box-shadow: var(--shadow); }
+
 .steps {
   display: inline-flex;
   gap: 4px;

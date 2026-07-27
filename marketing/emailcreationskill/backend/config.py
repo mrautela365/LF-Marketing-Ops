@@ -2,13 +2,24 @@ import os
 from pathlib import Path
 from dotenv import load_dotenv, dotenv_values
 
-_env_path = Path(__file__).parent.parent / ".env"
-load_dotenv(dotenv_path=_env_path, override=False)
+# Checked in priority order (later entries win) so survey_workflow/.env takes
+# precedence over emailcreationskill/.env when both exist (this config module
+# is shared by both apps via sys.path insertion).
+_env_paths = [
+    Path(__file__).parent.parent / ".env",                              # emailcreationskill/.env
+    Path(__file__).parent.parent.parent / "survey_workflow" / ".env",   # survey_workflow/.env
+]
+for _p in _env_paths:
+    if _p.exists():
+        load_dotenv(dotenv_path=_p, override=True)
 
 # Claude Code injects its own ANTHROPIC_API_KEY session token into the subprocess
 # environment. That token is NOT valid for direct Anthropic API calls.
-# Only trust a key that was explicitly written in the .env file.
-_file_values = dotenv_values(dotenv_path=_env_path) if _env_path.exists() else {}
+# Only trust a key that was explicitly written in a .env file.
+_file_values = {}
+for _p in _env_paths:
+    if _p.exists():
+        _file_values.update(dotenv_values(dotenv_path=_p))
 ANTHROPIC_API_KEY = _file_values.get("ANTHROPIC_API_KEY", "")
 CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-6")
 

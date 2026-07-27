@@ -1,0 +1,379 @@
+{
+  "event": {
+    "name": "KeycloakCon + ArgoCon Japan 2026",
+    "location": "Yokohama, Japan",
+    "date": "July 28, 2026",
+    "key_topics": [
+      "Keycloak",
+      "ArgoCD",
+      "Identity",
+      "GitOps",
+      "Kubernetes"
+    ]
+  },
+  "stages": {
+    "CFP Launch": {
+      "count": 2,
+      "emails": [
+        {
+          "id": "209236098821",
+          "name": "KeycloakCon + ArgoCon Japan 2026 | CFP Open + Reg Live (CNCF Foundation)",
+          "structure": {
+            "subject": "🎤 CFP ALERT: Submit to Speak at ArgoCon or KeycloakCon Japan in July!",
+            "preview": "Proposals Due April 12. Share Your Expertise in Yokohama.",
+            "from_name": "CNCF Events",
+            "has_hero_image": false,
+            "hero_image": null,
+            "image_count": 0,
+            "cta_count": 9,
+            "main_ctas": [
+              "Showcase your brand to the Argo and Keycloak communities in Japan. Signed sponsorship contracts must be received by ",
+              ". View sponsorship details on ",
+              "⭐️ Sponsor a Co-Located Event in Japan!",
+              ". All attendees must also be registered for KubeCon + CloudNativeCon Japan.",
+              "Submit to Speak by April 12"
+            ],
+            "text_sections": [
+              "Call for Speakers: ArgoCon and KeycloakCon Japan! Submit to Speak by April 12",
+              "🗣️ Share your expertise at ArgoCon KeycloakCon Yokohama, Japan July 28, taking place alongside KubeCon + CloudNativeCon Japan",
+              "Proposals are due by April 12.",
+              "💡 Submission Types + Suggested Topics",
+              "We're seeking presentations, panels, and lightning talks that dive into today’s challenges and solutions. Explore our suggested topics to find the best fit for your proposal:"
+            ],
+            "tone": "Urgent",
+            "key_elements": {
+              "emojis": "Yes",
+              "urgency_words": [
+                "deadline",
+                "ends",
+                "today"
+              ],
+              "social_proof": "Yes"
+            }
+          }
+        },
+        {
+          "id": "210638080306",
+          "name": "KeycloakCon + ArgoCon Japan 2026 | Last Chance CFP",
+          "structure": {
+            "subject": "🚨 Last Chance to Speak at ArgoCon and KeycloakCon Japan!",
+            "preview": "Submit Your Proposal This Week | Speak in Yokohama July 28",
+            "from_name": "CNCF Events",
+            "has_hero_image": false,
+            "hero_image": null,
+            "image_count": 0,
+            "cta_count": 9,
+            "main_ctas": [
+              "Showcase your brand to the Argo and Keycloak communities in Japan. Signed sponsorship contracts must be received by ",
+              ". View sponsorship details on ",
+              ". All attendees must also be registered for KubeCon + CloudNativeCon Japan.",
+              "Thank You to Our KeycloakCon Sponsor!",
+              "⭐️ Sponsor a Co-Located Event in Japan"
+            ],
+            "text_sections": [
+              "4 Days Left to Submit to Speak in Japan on July 28 CFP Closing Sunday for ArgoCon and KeycloakCon",
+              "This is your final chance to submit to speak at ArgoCon KeycloakCon Yokohama, Japan July 28 taking place alongside KubeCon + CloudNativeCon Japan ! Our CFP closes Sunday, April 12, at 23:59 JST Interested in attending? Secure early bird pricing for CNCF-hosted co-located events by April 17",
+              "✨ Inspire the Argo and Keycloak Communities in Japan",
+              "We’re seeking presentations, panel discussions, and lightning talks on the following core topics:",
+              "Software delivery Scalability Data processing Observability Progressive delivery KeycloakCon"
+            ],
+            "tone": "Urgent",
+            "key_elements": {
+              "emojis": "Yes",
+              "urgency_words": [
+                "final",
+                "closes",
+                "ends",
+                "days"
+              ],
+              "social_proof": "Yes"
+            }
+          }
+        }
+      ],
+      "template_patterns": {
+        "dominant_tone": "Urgent",
+        "common_ctas": [
+          "Showcase your brand to the Argo and Keycloak communities in Japan. Signed sponsorship contracts must be received by ",
+          ". View sponsorship details on ",
+          "⭐️ Sponsor a Co-Located Event in Japan!",
+          ". All attendees must also be registered for KubeCon + CloudNativeCon Japan.",
+          "Thank You to Our KeycloakCon Sponsor!",
+          "⭐️ Sponsor a Co-Located Event in Japan",
+          "Submit to Speak by April 12"
+        ],
+        "common_urgency_words": [
+          "final",
+          "ends",
+          "days",
+          "closes",
+          "deadline",
+          "today"
+        ],
+        "avg_cta_count": 5.0,
+        "has_hero_image_standard": false
+      }
+    },
+    "Schedule Announcement": {
+      "count": 1,
+      "emails": [
+        {
+          "id": "212761246058",
+          "name": "ArgoCon + KeycloakCon Japan 2026 | Schedules Announced",
+          "structure": {
+            "subject": "📣 KeycloakCon and ArgoCon Japan | Your Schedule is Live!",
+            "preview": "Register + Join Us July 28 in Yokohama",
+            "from_name": "CNCF Events",
+            "has_hero_image": false,
+            "hero_image": null,
+            "image_count": 0,
+            "cta_count": 12,
+            "main_ctas": [
+              "Your Yokohama Agenda is Here | Register Now",
+              "Showcase your brand to the Argo and Keycloak communities in Japan. Signed sponsorship contracts must be received by ",
+              ". View sponsorship details on ",
+              ". All attendees must also be registered for KubeCon + CloudNativeCon Japan.",
+              "🎟️ Seats are Limited: Register Soon"
+            ],
+            "text_sections": [
+              "Schedules Announced for ArgoCon and KeycloakCon",
+              "Your Yokohama Agenda is Here | Register Now",
+              "Get ready for a full day of learning in Yokohama, Japan ! We're excited to announce the schedules for ArgoCon and KeycloakCon July 28 , taking place alongside KubeCon + CloudNativeCon Japan",
+              "Browse the schedules, start building your agenda, and be sure to add these events to your registration before prices go up!",
+              "🐙 ArgoCon Schedule"
+            ],
+            "tone": "Urgent",
+            "key_elements": {
+              "emojis": "Yes",
+              "urgency_words": [
+                "limited",
+                "ends",
+                "now"
+              ],
+              "social_proof": "Yes"
+            }
+          }
+        }
+      ],
+      "template_patterns": {
+        "dominant_tone": "Urgent",
+        "common_ctas": [
+          "Your Yokohama Agenda is Here | Register Now",
+          "Showcase your brand to the Argo and Keycloak communities in Japan. Signed sponsorship contracts must be received by ",
+          ". View sponsorship details on ",
+          ". All attendees must also be registered for KubeCon + CloudNativeCon Japan.",
+          "🎟️ Seats are Limited: Register Soon"
+        ],
+        "common_urgency_words": [
+          "ends",
+          "limited",
+          "now"
+        ],
+        "avg_cta_count": 5.0,
+        "has_hero_image_standard": false
+      }
+    },
+    "Registration / Pricing Push": {
+      "count": 1,
+      "emails": [
+        {
+          "id": "214701049921",
+          "name": "ArgoCon + KeycloakCon Japan 2026 | More Sessions to See | Standard Pricing Ends Today",
+          "structure": {
+            "subject": "⌛️ Final Hours to Save on ArgoCon and KeycloakCon Japan!",
+            "preview": "PLUS: More Sessions to See July 28 in Yokohama ➡️",
+            "from_name": "CNCF Events",
+            "has_hero_image": false,
+            "hero_image": null,
+            "image_count": 0,
+            "cta_count": 10,
+            "main_ctas": [
+              "Showcase your brand to the Argo and Keycloak communities in Japan. Signed sponsorship contracts must be received by ",
+              ". View sponsorship details on ",
+              ". All attendees must also be registered for KubeCon + CloudNativeCon Japan.",
+              "Thank You to Our KeycloakCon Sponsors!",
+              "⭐️ Sponsor a Co-Located Event in Japan"
+            ],
+            "text_sections": [
+              "Last Day to Save on ArgoCon and KeycloakCon Japan! Standard Ends at 23:59 JST Tonight, June 16",
+              "This is it — standard registration for ArgoCon and KeycloakCon closes tonight, Tuesday, June 16, at 23:59 J",
+              "If you've been on the fence, now is the time to secure your pass. Add these July 28 CNCF-sponsored, co-located events to your KubeCon + CloudNativeCon Japan registration for just ¥15,800 before the deadline.",
+              "🐙 More Sessions to See at ArgoCon",
+              "Argonauts get excited! We’ve got more exclusive talks coming your way:"
+            ],
+            "tone": "Urgent",
+            "key_elements": {
+              "emojis": "Yes",
+              "urgency_words": [
+                "hurry",
+                "deadline",
+                "closes",
+                "ends",
+                "now"
+              ],
+              "social_proof": "Yes"
+            }
+          }
+        }
+      ],
+      "template_patterns": {
+        "dominant_tone": "Urgent",
+        "common_ctas": [
+          "Showcase your brand to the Argo and Keycloak communities in Japan. Signed sponsorship contracts must be received by ",
+          ". View sponsorship details on ",
+          ". All attendees must also be registered for KubeCon + CloudNativeCon Japan.",
+          "Thank You to Our KeycloakCon Sponsors!",
+          "⭐️ Sponsor a Co-Located Event in Japan"
+        ],
+        "common_urgency_words": [
+          "ends",
+          "hurry",
+          "now",
+          "closes",
+          "deadline"
+        ],
+        "avg_cta_count": 5.0,
+        "has_hero_image_standard": false
+      }
+    },
+    "Discount Offer": {
+      "count": 2,
+      "emails": [
+        {
+          "id": "216185138264",
+          "name": "KeycloakCon Japan 2026 | Alumni Email Invitation",
+          "structure": {
+            "subject": "📣 Alumni Discount Inside: Save ¥13,200 on KeycloakCon Japan!",
+            "preview": "Join us in Yokohama July 28 for nearly half off!",
+            "from_name": "CNCF Events",
+            "has_hero_image": false,
+            "hero_image": null,
+            "image_count": 0,
+            "cta_count": 4,
+            "main_ctas": [
+              "Join speakers from "
+            ],
+            "text_sections": [
+              "Alumni Discount: Join Us for KeycloakCon in Yokohama!",
+              "We’re excited to welcome you back to KeycloakCon KubeCon + CloudNativeCon Japan with a special alumni offer! Join us in Yokohama July 28 at our standard rate of ¥15,800 a savings of ¥13,200!",
+              "Use code ALUMNI at checkout to redeem your discount!",
+              "KeycloakCon is an immersive half-day, single-track event that brings together the Keycloak community for technical talks, professional growth, and networking opportunities. When: 2026 July 28 | 9:00 - 12:30 Where: PACIFICO Yokohama",
+              "Add KeycloakCon to your KubeCon + CloudNativeCon Japan pass now!"
+            ],
+            "tone": "Excited",
+            "key_elements": {
+              "emojis": "Yes",
+              "urgency_words": [
+                "now"
+              ],
+              "social_proof": "Yes"
+            }
+          }
+        },
+        {
+          "id": "216270210681",
+          "name": "ArgoCon Japan 2026 | Discount Offer Invitation",
+          "structure": {
+            "subject": "🐙 A Discount For You: Save ¥13,200 on ArgoCon Japan!",
+            "preview": "Love Argo? Join us in Yokohama July 28.",
+            "from_name": "CNCF Events",
+            "has_hero_image": false,
+            "hero_image": null,
+            "image_count": 0,
+            "cta_count": 3,
+            "main_ctas": [
+              "Thank You to Our Sponsor!",
+              "Join speakers from "
+            ],
+            "text_sections": [
+              "Claim Your Discount for ArgoCon in Yokohama!",
+              "You’ve expressed interest in ArgoCon so we’re extending you a special invitation to join us in Yokohama July 28 at our standard rate of ¥15,800 – a savings of ¥13,200",
+              "Use code ARGO at checkout to redeem your discount",
+              "ArgoCon is an immersive half-day, single-track event happening alongside KubeCon + CloudNativeCon Japan that features technical talks, professional growth, and networking opportunities for the Argo community.",
+              "When: 2026 July 28 | 13:30 - 18:15 Where: PACIFICO Yokohama"
+            ],
+            "tone": "Community-focused",
+            "key_elements": {
+              "emojis": "Yes",
+              "urgency_words": [
+                "now"
+              ],
+              "social_proof": "Yes"
+            }
+          }
+        }
+      ],
+      "template_patterns": {
+        "dominant_tone": "Excited",
+        "common_ctas": [
+          "Thank You to Our Sponsor!",
+          "Join speakers from "
+        ],
+        "common_urgency_words": [
+          "now"
+        ],
+        "avg_cta_count": 1.5,
+        "has_hero_image_standard": false
+      }
+    },
+    "Final Countdown": {
+      "count": 1,
+      "emails": [
+        {
+          "id": "216822129827",
+          "name": "ArgoCon + KeycloakCon Japan 2026 | Last Chance to Register",
+          "structure": {
+            "subject": "12 Days Until ArgoCon and KeycloakCon at KubeCon + CloudNativeCon Japan!",
+            "preview": "1️⃣ day, 2️⃣ communities, endless connections: July 28 in Yokohama.",
+            "from_name": "CNCF Events",
+            "has_hero_image": false,
+            "hero_image": null,
+            "image_count": 0,
+            "cta_count": 6,
+            "main_ctas": [
+              ". All attendees must also be registered for KubeCon + CloudNativeCon Japan.",
+              "Thank You to Our KeycloakCon Sponsors!",
+              "Thank You to Our ArgoCon Sponsor!",
+              "Cap off the day at the shared ArgoCon + KeycloakCon reception starting at 17:00. It's the perfect chance to swap notes with speakers, maintainers, and fellow attendees before KubeCon + CloudNativeCon Japan gets into full swing.",
+              "🎟️ Time is Running Out. Register Today!"
+            ],
+            "text_sections": [
+              "12 Days: ArgoCon and KeycloakCon are Almost Here! Don’t Miss Your Chance to Join Us July 28 in Yokohama",
+              "The countdown is on! ArgoCon and KeycloakCon land in Yokohama in just 12 days These CNCF-hosted co-located events kick off KubeCon + CloudNativeCon Japan with a full day of technical talks: KeycloakCon takes the morning, ArgoCon takes the afternoon, and a shared evening reception brings everyone together. Add one (or both!) to your registration before time runs out.",
+              "Start Your Morning at KeycloakCon",
+              "Grab your coffee and settle in! KeycloakCon's half-day, single-track program puts you in the room with Keycloak developers, maintainers, and power users. This year's talks dig into securing applications and cloud native infrastructure, identity for AI agents, the newest Keycloak features, and lessons from real-world deployments.",
+              "🐙 An Afternoon Built for Argonauts"
+            ],
+            "tone": "Community-focused",
+            "key_elements": {
+              "emojis": "No",
+              "urgency_words": [
+                "now",
+                "today",
+                "days"
+              ],
+              "social_proof": "Yes"
+            }
+          }
+        }
+      ],
+      "template_patterns": {
+        "dominant_tone": "Community-focused",
+        "common_ctas": [
+          ". All attendees must also be registered for KubeCon + CloudNativeCon Japan.",
+          "Thank You to Our KeycloakCon Sponsors!",
+          "Thank You to Our ArgoCon Sponsor!",
+          "Cap off the day at the shared ArgoCon + KeycloakCon reception starting at 17:00. It's the perfect chance to swap notes with speakers, maintainers, and fellow attendees before KubeCon + CloudNativeCon Japan gets into full swing.",
+          "🎟️ Time is Running Out. Register Today!"
+        ],
+        "common_urgency_words": [
+          "now",
+          "days",
+          "today"
+        ],
+        "avg_cta_count": 5.0,
+        "has_hero_image_standard": false
+      }
+    }
+  }
+}

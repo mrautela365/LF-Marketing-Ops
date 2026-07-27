@@ -1,0 +1,112 @@
+{
+  "event_data": {
+    "dates": [],
+    "location": [
+      "Tokyo, Japan"
+    ],
+    "event_name": "KeycloakCon Japan",
+    "description": "",
+    "key_topics": [
+      "Keycloak",
+      "Cloud Native",
+      "Kubernetes",
+      "Identity",
+      "GitOps"
+    ],
+    "ctas": [
+      "Register",
+      "Submit Talk",
+      "Sponsor",
+      "View Schedule"
+    ]
+  },
+  "stages": {},
+  "emails_by_stage": {
+    "Unknown": [
+      {
+        "id": "165478935316",
+        "name": "5/17\u958b\u50ac Cloud Native Security Japan\u30ad\u30c3\u30af\u30aa\u30d5 - \u8a8d\u8a3c\u30fb\u8a8d\u53ef\u3092\u30c6\u30fc\u30de\u306bKubernetes/Keycloak/Open Policy Agent",
+        "subject": "5/17\u958b\u50ac Cloud Native Security Japan\u30ad\u30c3\u30af\u30aa\u30d5 - \u8a8d\u8a3c\u30fb\u8a8d\u53ef\u3092\u30c6\u30fc\u30de\u306bKubernetes/Keycloak/Open Policy Agent",
+        "preview": "5/17\u958b\u50ac Cloud Native Security Japan\u30ad\u30c3\u30af\u30aa\u30d5 - \u8a8d\u8a3c\u30fb\u8a8d\u53ef\u3092\u30c6\u30fc\u30de\u306bKubernetes/Keycloak/Open Policy Agent",
+        "publish_date": "2024-04-26T02:36:25Z",
+        "from_name": "The Linux Foundation"
+      },
+      {
+        "id": "212761246058",
+        "name": "ArgoCon + KeycloakCon Japan 2026 | Schedules Announced",
+        "subject": "\ud83d\udce3 KeycloakCon and ArgoCon Japan | Your Schedule is Live!",
+        "preview": "Register + Join Us July 28 in Yokohama",
+        "publish_date": "2026-05-21T00:00:00Z",
+        "from_name": "CNCF Events"
+      },
+      {
+        "id": "214701049921",
+        "name": "ArgoCon + KeycloakCon Japan 2026 | More Sessions to See | Standard Pricing Ends Today",
+        "subject": "\u231b\ufe0f Final Hours to Save on ArgoCon and KeycloakCon Japan!",
+        "preview": "PLUS: More Sessions to See July 28 in Yokohama \u27a1\ufe0f",
+        "publish_date": "2026-06-16T00:00:00Z",
+        "from_name": "CNCF Events"
+      },
+      {
+        "id": "216185138264",
+        "name": "KeycloakCon Japan 2026 | Alumni Email Invitation",
+        "subject": "\ud83d\udce3 Alumni Discount Inside: Save \u00a513,200 on KeycloakCon Japan!",
+        "preview": "Join us in Yokohama July 28 for nearly half off!",
+        "publish_date": "2026-07-02T02:00:00Z",
+        "from_name": "CNCF Events"
+      },
+      {
+        "id": "216270210681",
+        "name": "ArgoCon Japan 2026 | Discount Offer Invitation",
+        "subject": "\ud83d\udc19 A Discount For You: Save \u00a513,200 on ArgoCon Japan!",
+        "preview": "Love Argo? Join us in Yokohama July 28.",
+        "publish_date": "2026-07-08T02:00:00Z",
+        "from_name": "CNCF Events"
+      }
+    ],
+    "CFP Launch": [
+      {
+        "id": "209236098821",
+        "name": "KeycloakCon + ArgoCon Japan 2026 | CFP Open + Reg Live (CNCF Foundation)",
+        "subject": "\ud83c\udfa4 CFP ALERT: Submit to Speak at ArgoCon or KeycloakCon Japan in July!",
+        "preview": "Proposals Due April 12. Share Your Expertise in Yokohama.",
+        "publish_date": "2026-03-19T00:00:00Z",
+        "from_name": "CNCF Events"
+      },
+      {
+        "id": "209435089982",
+        "name": "KeycloakCon + ArgoCon Japan 2026 | CFP Open + Reg Live (Linux Foundation)",
+        "subject": "\ud83c\udfa4 CFP ALERT: Submit to Speak at ArgoCon or KeycloakCon Japan in July!",
+        "preview": "The Linux Foundation Notification: Proposals Due April 12. Share Your Expertise in Yokohama.",
+        "publish_date": "2026-03-19T00:00:00Z",
+        "from_name": "The Linux Foundation"
+      },
+      {
+        "id": "209435090071",
+        "name": "KeycloakCon + ArgoCon Japan 2026 | CFP Open + Reg Live (LF Events)",
+        "subject": "\ud83c\udfa4 CFP ALERT: Submit to Speak at ArgoCon or KeycloakCon Japan in July!",
+        "preview": "Proposals Due April 12. Share Your Expertise in Yokohama.",
+        "publish_date": "2026-03-19T00:00:00Z",
+        "from_name": "Linux Foundation Events"
+      },
+      {
+        "id": "210638080306",
+        "name": "KeycloakCon + ArgoCon Japan 2026 | Last Chance CFP",
+        "subject": "\ud83d\udea8 Last Chance to Speak at ArgoCon and KeycloakCon Japan!",
+        "preview": "Submit Your Proposal This Week | Speak in Yokohama July 28",
+        "publish_date": "2026-04-09T01:44:52Z",
+        "from_name": "CNCF Events"
+      }
+    ],
+    "Final Countdown": [
+      {
+        "id": "216822129827",
+        "name": "ArgoCon + KeycloakCon Japan 2026 | Last Chance to Register",
+        "subject": "12 Days Until ArgoCon and KeycloakCon at KubeCon + CloudNativeCon Japan!",
+        "preview": "1\ufe0f\u20e3 day, 2\ufe0f\u20e3 communities, endless connections: July 28 in Yokohama.",
+        "publish_date": "2026-07-16T00:00:00Z",
+        "from_name": "CNCF Events"
+      }
+    ]
+  }
+}
