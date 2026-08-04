@@ -685,6 +685,8 @@ function resetAudienceUI() {
   renderExtraFilters();
   const roleSpeakers = document.getElementById("role-filter-speakers");
   if (roleSpeakers) roleSpeakers.checked = false;
+  const roleSpeakerScope = document.getElementById("role-filter-speaker-scope");
+  if (roleSpeakerScope) roleSpeakerScope.value = "current_past";
   const roleAmbassadors = document.getElementById("role-filter-ambassadors");
   if (roleAmbassadors) roleAmbassadors.checked = false;
   if (typeof AudienceBuilder !== "undefined") AudienceBuilder.reset("step3");
@@ -1071,14 +1073,20 @@ function _extraFiltersPlanText() {
 // reuse-a-speakers-list-first for speakers, multi-branch OR-distribution across
 // ambassador properties for ambassadors — not a simple per-branch AND condition.
 const _ROLE_FILTER_IDS = {
-  step3:   { speakers: "role-filter-speakers",    ambassadors: "role-filter-ambassadors" },
-  builder: { speakers: "ab-role-filter-speakers", ambassadors: "ab-role-filter-ambassadors" },
+  step3:   { speakers: "role-filter-speakers",    speakerScope: "role-filter-speaker-scope",    ambassadors: "role-filter-ambassadors" },
+  builder: { speakers: "ab-role-filter-speakers", speakerScope: "ab-role-filter-speaker-scope", ambassadors: "ab-role-filter-ambassadors" },
 };
+
+const _SPEAKER_SCOPE_TAGS = { current: "Current", past: "Past", current_past: "Current + Past" };
 
 function _roleFiltersPlanText(scope = "step3") {
   const ids = _ROLE_FILTER_IDS[scope] || _ROLE_FILTER_IDS.step3;
   const lines = [];
-  if (document.getElementById(ids.speakers)?.checked) lines.push("- Event speakers only");
+  if (document.getElementById(ids.speakers)?.checked) {
+    const scopeVal = document.getElementById(ids.speakerScope)?.value || "current_past";
+    const tag = _SPEAKER_SCOPE_TAGS[scopeVal] || _SPEAKER_SCOPE_TAGS.current_past;
+    lines.push(`- Event speakers only (SPEAKER SCOPE: ${tag})`);
+  }
   if (document.getElementById(ids.ambassadors)?.checked) lines.push("- Community ambassadors only");
   return lines.length ? `\n\n## ROLE FILTERS\n${lines.join("\n")}\n` : "";
 }

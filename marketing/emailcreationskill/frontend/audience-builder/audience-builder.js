@@ -60,9 +60,39 @@ const AudienceBuilder = (() => {
     event_speakers: {
       label: "Event Speakers",
       description: "Contacts who are speakers for this event specifically, not all registrants.",
-      prompt: (eventUrl) => `Build a list of contacts who are speakers (not general registrants) for the event at ${eventUrl}.${_NO_SUPPRESSION_NOTE}`,
+      // scope: "current" | "past" | "current_past" (default) — embeds an explicit
+      // "SPEAKER SCOPE: ..." marker the backend (RULE 9/12 in audience_tools.py)
+      // parses to decide which edition(s) of the event to match event_name against.
+      prompt: (eventUrl, scope = "current_past") => {
+        const label = SPEAKER_SCOPE_LABELS[scope] || SPEAKER_SCOPE_LABELS.current_past;
+        const scopeNote = scope === "current"
+          ? " Only include speakers from the CURRENT/upcoming edition of this event — exclude speakers from any past edition."
+          : scope === "past"
+          ? " Only include speakers from PAST editions of this event — exclude speakers from the current/upcoming edition."
+          : " Include speakers from both the current/upcoming edition and every past edition of this event.";
+        return `Build a list of contacts who are speakers (not general registrants) for the event at ${eventUrl}.${scopeNote} SPEAKER SCOPE: ${label}.${_NO_SUPPRESSION_NOTE}`;
+      },
     },
   };
+
+  // Speaker lists are scoped by event edition rather than being one generic
+  // bucket — surfaced as 3 independently discoverable/buildable rows wherever
+  // event_speakers cards or the "not found" widget render.
+  const SPEAKER_SCOPES = [
+    { key: "current", label: "Current event speakers" },
+    { key: "past", label: "Past event speakers" },
+    { key: "current_past", label: "Current + Past event speakers" },
+  ];
+  const SPEAKER_SCOPE_LABELS = { current: "Current", past: "Past", current_past: "Current + Past" };
+
+  // A card's scope satisfies a requested scope if they match exactly, or if
+  // the card covers both editions (current_past is a superset of either).
+  // A blank/missing scope (older cards predating this field) is treated as
+  // current_past too, matching discovery_agent.py's own safest-default rule.
+  function _speakerCardCoversScope(card, scopeKey) {
+    const s = card.scope || "current_past";
+    return s === "current_past" || s === scopeKey;
+  }
 
   // Section-grouping order + per-section accent/caption — mirrors the
   // layered "Layer 1 / Layer 2 / Layer 3" grouping from the audience-engine
@@ -206,6 +236,12 @@ const AudienceBuilder = (() => {
       // can show it inline on that card instead of relying on the (now hidden,
       // since we stay on this tab) Custom Audience tab's own status badge.
       buildError: null, // { signal, message } | null
+      // True once a discovery pass has actually resolved this event (the
+      // "discovered" SSE frame arrived) — gates the always-on speaker-scope
+      // widget so it doesn't show before any discovery has run, or after a
+      // reset, while still showing through a total-discovery-failure case
+      // (nothing found for any signal) since the event itself did resolve.
+      discoveryRan: false,
     };
   }
   const _states = { builder: _newState(), step3: _newState() };
@@ -368,6 +404,8 @@ const AudienceBuilder = (() => {
       ? `<span class="ab-lastsent-badge" title="Used in a past send for this event">📧 Used last time</span>` : "";
     const newBadge = c.justCreated
       ? `<span class="ab-newlycreated-badge" title="Built just now in this session">✨ Newly created</span>` : "";
+    const speakerScopeBadge = (c.signal === "event_speakers" && c.scope)
+      ? `<span class="ab-lastsent-badge" title="Speaker scope">🎤 ${escapeHtml(SPEAKER_SCOPE_LABELS[c.scope] || c.scope)}</span>` : "";
     const stats = [
       { label: "Contacts", value: c.size != null ? Number(c.size).toLocaleString() : "—" },
     ];
@@ -386,7 +424,7 @@ const AudienceBuilder = (() => {
           ${newBadge}
         </div>
         <div class="ab-card-name">${escapeHtml(c.name || "(untitled list)")}</div>
-        <div class="ab-card-meta"><span>ID ${escapeHtml(id)}</span>${usedLastSent}</div>
+        <div class="ab-card-meta"><span>ID ${escapeHtml(id)}</span>${usedLastSent}${speakerScopeBadge}</div>
         <div class="ab-stat-row">${statsHtml}</div>
         ${c.reason ? `<div class="ab-card-reason">${escapeHtml(c.reason)}</div>` : ""}
         ${hubspotLink}
@@ -423,18 +461,52 @@ const AudienceBuilder = (() => {
     updateSummary(scope);
   }
 
+  // One row per speaker scope, computed fresh from st.cards every render (not
+  // from st.missingSignals — the base discovery signal is just "found at
+  // least one event_speakers list at all," but each of the 3 scopes needs its
+  // own found/missing status so, e.g., a "Past" list existing doesn't hide
+  // the still-missing "Current" row).
+  function _speakerScopeRowHtml(scopeKey, label, scope, st) {
+    const found = st.cards.find(c => c.signal === "event_speakers" && _speakerCardCoversScope(c, scopeKey));
+    const buildKey = `event_speakers:${scopeKey}`;
+    const building = st.buildingSignals.has(buildKey);
+    if (found) {
+      const link = found.hubspot_url
+        ? `<a href="${escapeHtml(found.hubspot_url)}" target="_blank" rel="noopener">${escapeHtml(found.name)}</a>`
+        : escapeHtml(found.name);
+      return `<div class="ab-speaker-scope-row"><span>✓ ${escapeHtml(label)}</span> — ${link}</div>`;
+    }
+    const errorHtml = (st.buildError && st.buildError.signal === buildKey)
+      ? `<div style="color:#dc2626;font-size:12px;margin-top:2px">⚠ ${escapeHtml(st.buildError.message)}</div>` : "";
+    return `
+      <div class="ab-speaker-scope-row">
+        <span>${escapeHtml(label)}</span> — not found
+        <button class="btn btn-outline" type="button" ${building ? "disabled" : ""} onclick="AudienceBuilder.createMissingSignal('event_speakers','${scope}','${scopeKey}')">${building ? "Building…" : "Create list"}</button>
+        ${errorHtml}
+      </div>`;
+  }
+
+  function _speakerScopeWidgetHtml(scope, st) {
+    const rows = SPEAKER_SCOPES.map(s => _speakerScopeRowHtml(s.key, s.label, scope, st)).join("");
+    return `
+      <div class="ab-card ab-card-missing ab-card-speaker-scope">
+        <div class="ab-card-top">
+          <span class="ab-signal-badge ab-signal-event_speakers">${escapeHtml(SIGNAL_INFO.event_speakers.label)}</span>
+        </div>
+        <div class="ab-card-reason" style="border-top:none;padding-top:0;margin-top:0">Speakers are scoped by event edition — reuse whichever already exists below, or create the one(s) you need.</div>
+        <div class="ab-speaker-scope-rows" style="margin-top:8px;display:flex;flex-direction:column;gap:8px">${rows}</div>
+      </div>`;
+  }
+
   function renderMissingSignals(missing, scope = "builder") {
     const ids = _ids(scope), st = _st(scope);
     st.missingSignals = missing || [];
     const section = document.getElementById(ids.missingSection);
     const grid = document.getElementById(ids.missingGrid);
     if (!section || !grid) return;
-    if (!st.missingSignals.length) {
-      section.classList.add("hidden");
-      grid.innerHTML = "";
-      return;
-    }
-    grid.innerHTML = st.missingSignals.map(sig => {
+
+    const otherMissing = st.missingSignals.filter(sig => sig !== "event_speakers");
+    const otherCardsHtml = otherMissing.map(sig => {
       const info = SIGNAL_INFO[sig] || { label: sig, description: "" };
       const building = st.buildingSignals.has(sig);
       const errorHtml = (st.buildError && st.buildError.signal === sig)
@@ -451,6 +523,21 @@ const AudienceBuilder = (() => {
           </div>
         </div>`;
     }).join("");
+
+    // The speaker-scope widget always renders once a discovery pass has
+    // actually resolved this event — not gated on "event_speakers" having
+    // been in missingSignals, since each of its 3 scope rows tracks its own
+    // found/missing status independently.
+    const combined = st.discoveryRan
+      ? _speakerScopeWidgetHtml(scope, st) + otherCardsHtml
+      : otherCardsHtml;
+
+    if (!combined.trim()) {
+      section.classList.add("hidden");
+      grid.innerHTML = "";
+      return;
+    }
+    grid.innerHTML = combined;
     section.classList.remove("hidden");
   }
 
@@ -465,18 +552,24 @@ const AudienceBuilder = (() => {
   // progress/result surface inline on the missing-signal card itself (via
   // renderMissingSignals' "Building…" state and onCustomListBuilt/
   // onCustomBuildFailed below).
-  async function createMissingSignal(signalKey, scope = "builder") {
+  async function createMissingSignal(signalKey, scope = "builder", speakerScope) {
     const ids = _ids(scope), st = _st(scope);
     const info = SIGNAL_INFO[signalKey];
-    if (!info || st.buildingSignals.has(signalKey)) return;
-    st.pendingMissingSignal = signalKey;
-    st.buildingSignals.add(signalKey);
-    if (st.buildError && st.buildError.signal === signalKey) st.buildError = null;
+    if (!info) return;
+    const isSpeakers = signalKey === "event_speakers";
+    // event_speakers has 3 independently-buildable scopes, so its in-flight/
+    // error state is tracked per scope via a compound "event_speakers:<scope>"
+    // key rather than the plain signal key every other build uses.
+    const buildKey = isSpeakers ? `event_speakers:${speakerScope || "current_past"}` : signalKey;
+    if (st.buildingSignals.has(buildKey)) return;
+    st.pendingMissingSignal = buildKey;
+    st.buildingSignals.add(buildKey);
+    if (st.buildError && st.buildError.signal === buildKey) st.buildError = null;
     renderMissingSignals(st.missingSignals, scope);
 
     const urlInput = document.getElementById(ids.eventUrl);
     const eventUrl = ((urlInput && urlInput.value) || "").trim();
-    const request = info.prompt(eventUrl);
+    const request = isSpeakers ? info.prompt(eventUrl, speakerScope || "current_past") : info.prompt(eventUrl);
     const textarea = document.getElementById(ids.customRequest);
     if (textarea) textarea.value = request;
 
@@ -494,10 +587,19 @@ const AudienceBuilder = (() => {
   // app.js's confirmation message can vary accordingly).
   function onCustomListBuilt({ list_id, name, hubspot_url }, scope = "builder") {
     const st = _st(scope);
-    const signal = st.pendingMissingSignal;
+    const buildKey = st.pendingMissingSignal;
     st.pendingMissingSignal = null;
-    if (!signal) return null;
-    st.buildingSignals.delete(signal);
+    if (!buildKey) return null;
+    st.buildingSignals.delete(buildKey);
+
+    // Unpack the compound "event_speakers:<scope>" key back into its signal
+    // + scope parts so the new card carries the right .scope field (needed
+    // by the speaker-scope widget's found/missing check on the next render).
+    let signal = buildKey, cardScope;
+    if (buildKey.startsWith("event_speakers:")) {
+      signal = "event_speakers";
+      cardScope = buildKey.slice("event_speakers:".length);
+    }
 
     const id = String(list_id);
     if (!st.cards.some(c => String(c.list_id) === id)) {
@@ -505,6 +607,7 @@ const AudienceBuilder = (() => {
         list_id: id,
         name: name || `List ${id}`,
         signal,
+        scope: cardScope,
         size: null,
         reason: "Created via Build From Scratch",
         hubspot_url: hubspot_url || "",
@@ -903,6 +1006,7 @@ const AudienceBuilder = (() => {
         st.cards = found.concat(uncertain);
         st.brandShort = msg.brand_short || "";
         st.eventName = msg.event_name || "";
+        st.discoveryRan = true;
         const results2 = document.getElementById(ids.results);
         if (results2) results2.classList.remove("hidden");
         renderCards(scope);
@@ -1056,6 +1160,8 @@ const AudienceBuilder = (() => {
 
     const roleSpeakers = document.getElementById("ab-role-filter-speakers");
     if (roleSpeakers) roleSpeakers.checked = false;
+    const roleSpeakerScope = document.getElementById("ab-role-filter-speaker-scope");
+    if (roleSpeakerScope) roleSpeakerScope.value = "current_past";
     const roleAmbassadors = document.getElementById("ab-role-filter-ambassadors");
     if (roleAmbassadors) roleAmbassadors.checked = false;
   }

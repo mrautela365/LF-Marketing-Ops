@@ -495,6 +495,11 @@
             </div>
             <label style="display:flex;align-items:center;gap:6px;margin-top:8px;font-size:13px">
               <input type="checkbox" id="role-filter-speakers" /> Event speakers only
+              <select id="role-filter-speaker-scope" style="font-size:12px;padding:2px 6px">
+                <option value="current">Current event speakers</option>
+                <option value="past">Past event speakers</option>
+                <option value="current_past" selected>Current + Past event speakers</option>
+              </select>
             </label>
             <label style="display:flex;align-items:center;gap:6px;margin-top:6px;font-size:13px">
               <input type="checkbox" id="role-filter-ambassadors" /> Community ambassadors only
@@ -738,6 +743,11 @@
           </div>
           <label style="display:flex;align-items:center;gap:6px;margin-top:8px;font-size:13px">
             <input type="checkbox" id="ab-role-filter-speakers" /> Event speakers only
+            <select id="ab-role-filter-speaker-scope" style="font-size:12px;padding:2px 6px">
+              <option value="current">Current event speakers</option>
+              <option value="past">Past event speakers</option>
+              <option value="current_past" selected>Current + Past event speakers</option>
+            </select>
           </label>
           <label style="display:flex;align-items:center;gap:6px;margin-top:6px;font-size:13px">
             <input type="checkbox" id="ab-role-filter-ambassadors" /> Community ambassadors only

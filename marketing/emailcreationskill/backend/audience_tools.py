@@ -21,6 +21,7 @@ import re
 import shutil
 import subprocess
 import threading
+import time
 import uuid
 from pathlib import Path
 
@@ -117,8 +118,22 @@ def _hs_headers() -> dict:
 # Tool implementations (ported from lf-event-studio/app/tools.py)
 # ══════════════════════════════════════════════════════════════════════════════
 
+_WEB_FETCH_CACHE: dict[str, tuple[float, dict]] = {}
+_WEB_FETCH_CACHE_TTL = 1800  # 30 min — long enough to span discover -> create-list on the same event
+
+
 def web_fetch(url: str) -> dict:
-    """Fetch a URL and return its cleaned text content."""
+    """Fetch a URL and return its cleaned text content.
+
+    Every audience flow (discovery, plan, build, custom-plan, custom-build) shares
+    this one function as its "web_fetch" tool, so a short-lived per-URL cache here
+    stops the event page from being re-scraped every time a build is triggered
+    right after discovery already fetched it (e.g. clicking "Create list")."""
+    now = time.time()
+    cached = _WEB_FETCH_CACHE.get(url)
+    if cached and (now - cached[0]) < _WEB_FETCH_CACHE_TTL:
+        return cached[1]
+
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -134,9 +149,13 @@ def web_fetch(url: str) -> dict:
             tag.decompose()
         text = soup.get_text(separator="\n", strip=True)
         lines = [l for l in text.splitlines() if l.strip()]
-        return {"url": url, "status": r.status_code, "content": "\n".join(lines)[:12000]}
+        result = {"url": url, "status": r.status_code, "content": "\n".join(lines)[:12000]}
     except Exception as exc:
-        return {"url": url, "error": str(exc)}
+        result = {"url": url, "error": str(exc)}
+
+    if "error" not in result:
+        _WEB_FETCH_CACHE[url] = (now, result)
+    return result
 
 
 def hubspot_search_campaigns(query: str) -> dict:
@@ -867,14 +886,16 @@ RULE 2 — communitySeg lists MUST NEVER be used, referenced, or rebuilt:
 RULE 3 — Print ## BUILD PLAN before creating anything in HubSpot.
   Number each list to create. State its filter type and logic.
 
-RULE 4 — MASTER LIST IS MANDATORY. You MUST always build (create OR, per RULE 10,
-  update-in-place) the master list as the final step. Even if some inclusion lists
-  failed, build the master from whatever IDs you DO have. Never end without a master
-  list. It is the primary deliverable.
+RULE 4 — MASTER LIST IS MANDATORY. You MUST always build the master list as the
+  final step, following RULE 10's version-on-collision behavior like every other
+  list in this build (never update an existing master list's filters in place).
+  Even if some inclusion lists failed, build the master from whatever IDs you DO
+  have. Never end without a master list. It is the primary deliverable.
 
 RULE 5 — After EVERY successful hubspot_create_list call print:
   ✅ [List name] created — ID: [listId] — [hubspot_url]
-  (see RULE 10 for the update-in-place case, which prints a different line)
+  (see RULE 10 for the name-collision case — same line format, using the
+  versioned name actually created, not a different line)
 
 RULE 6 — If unsure about anything → skip and add to ## FLAGGED FOR REVIEW.
 
@@ -912,18 +933,20 @@ RULE 9 — PRODUCT/TECHNOLOGY DOMAIN FIT IS MANDATORY for groups 4, 5, and 7
   — otherwise group 4 keeps its existing country-only filter and the gap is
   flagged, not silently dropped.
 
-RULE 10 — REUSE, DON'T DUPLICATE. Before calling hubspot_create_list for ANY list in
-  this build (each inclusion list in STEP 4, the Combined Suppression list in STEP 5B,
-  and the Master list in STEP 6), call hubspot_search_lists with that list's exact
-  intended name FIRST. If a list with that EXACT name already exists — this happens
-  when an event's build is re-run after an earlier run (e.g. to pick up a plan fix or
-  a retry) — call hubspot_update_list_filters on its existing ID with the new
-  filterBranch instead of calling hubspot_create_list and making a duplicate. Print
-  🔁 [List name] updated in place — ID: [listId] — [hubspot_url]
-  instead of the RULE 5 "created" line for that list. Only call hubspot_create_list
-  when hubspot_search_lists finds no exact-name match. This keeps re-running a build
-  for the same event idempotent instead of littering the portal with duplicate
-  inclusion/suppression/master lists every time.
+RULE 10 — VERSION ON NAME COLLISION, NEVER OVERWRITE. Before calling
+  hubspot_create_list for ANY list in this build (each inclusion list in STEP 4, the
+  Combined Suppression list in STEP 5B, and the Master list in STEP 6), call
+  hubspot_search_lists with that list's exact intended name FIRST. If a list with
+  that EXACT name already exists, do NOT call hubspot_update_list_filters on it —
+  a name match alone does not prove it is the same request being rebuilt, and
+  silently overwriting an existing list's filters risks destroying a different,
+  unrelated audience that happens to share the same name. Instead, find the next
+  unused version suffix: search hubspot_search_lists for "[name] (v2)", then
+  "[name] (v3)", and so on in order until a search finds no match, then call
+  hubspot_create_list with that first unused versioned name. Print the RULE 5
+  "created" line using the versioned name actually used. Only call
+  hubspot_create_list with the plain, unversioned name when hubspot_search_lists
+  finds no exact-name match at all.
 
 RULE 11 — USER-ADDED FILTERS. If the Segment Plan below contains a
   "## USER-ADDED FILTERS" section, each line there is an extra condition the user
@@ -961,20 +984,65 @@ RULE 12 — ROLE FILTERS. If the Segment Plan below contains a "## ROLE FILTERS"
     (bool: "true") or the older numeric is_event_speaker ("1") — so check all three
     signals, not just one.
 
-    Do NOT scope event_name to a single value — this applies to every event, not
-    just one. Many LF events bundle co-located tracks under one registration flow
-    (e.g. Open Source Summit Japan bundles Automotive Linux Summit and Embedded
-    Linux Conference Asia as separate tracks under the same umbrella event), and
-    UNIFIED_EVENTS.event_name may carry the specific track name rather than the
-    umbrella name — matching only the umbrella name silently drops those track
-    speakers. It also matters across years: a speaker's registration record lives
-    under THAT year's exact event_name, so matching only the current year's name
-    misses returning speakers from past editions. Collect a list of ALL relevant
-    event_name values before building: (1) this event's own umbrella name, (2)
-    every co-located track named in the Segment Plan / scraped event page, and (3)
-    that same set for past editions/years of this event and its tracks — reuse
-    the same past-edition discovery (Snowflake STEP 1 / hubspot_search_campaigns)
-    already used for STEP 4 group 1, don't re-derive it separately.
+    NEVER, under any circumstance, resolve speaker names to email addresses
+    yourself (via web/page scraping, contact search, or any other lookup) and
+    then encode that resolved set as a static filter like
+    email IS_EQUAL_TO [addr1, addr2, ...] — even though HubSpot will let you
+    mark the resulting list "DYNAMIC," a hardcoded email-equality filter is a
+    frozen snapshot wearing a dynamic label: it never updates as speakers are
+    added/removed, and it silently misses anyone whose email you failed to
+    resolve. This is not an acceptable fallback. The ONLY acceptable outcomes
+    when no exact-name speaker list exists are: (1) reuse via IN_LIST if found
+    above, (2) the eventTypeId "6-48984571" property-based filter described in
+    this same rule, or (3) FLAGGED FOR REVIEW per below. If you find yourself
+    about to search for or list out individual speakers' names/emails, stop —
+    that means no valid signal exists and the correct move is FLAGGED FOR
+    REVIEW, not fabricating one.
+
+    Determine the SPEAKER SCOPE for this request before collecting event_name
+    values: look for an explicit "SPEAKER SCOPE: Current" / "SPEAKER SCOPE: Past" /
+    "SPEAKER SCOPE: Current + Past" marker in the Segment Plan above (case-
+    insensitive substring match). If no such marker is present at all, default to
+    "Current + Past" — this preserves the original, broader behavior for plans that
+    predate this marker.
+
+    Do NOT scope event_name to a single value regardless of which SPEAKER SCOPE
+    applies — this applies to every event, not just one. Many LF events bundle
+    co-located tracks under one registration flow (e.g. Open Source Summit Japan
+    bundles Automotive Linux Summit and Embedded Linux Conference Asia as separate
+    tracks under the same umbrella event), and UNIFIED_EVENTS.event_name may carry
+    the specific track name rather than the umbrella name — matching only the
+    umbrella name silently drops those track speakers.
+
+    Do NOT confuse a co-located TRACK (a distinctly-named sub-event bundled into
+    the SAME registration flow, at the same time and place as the umbrella event —
+    e.g. Automotive Linux Summit inside Open Source Summit Japan) with a sibling
+    REGIONAL/CITY EDITION of the same series (a separate event, at a different
+    time and/or place, that merely shares the series' brand name — e.g. "MCP Dev
+    Summit Seoul 2026" vs "MCP Dev Summit Bengaluru 2026" vs "MCP Dev Summit
+    Mumbai 2026" vs "MCP Dev Summit North America 2026" are four separate events,
+    not tracks of one event, exactly like "KubeCon + CloudNativeCon North America"
+    vs "... Europe" vs "... China" are separate events). When the request
+    specifies one particular region/city, include ONLY that region's own
+    event_name value (and that region's own genuine co-located tracks, if any) —
+    never pull in another region's event_name value just because it shares the
+    series/brand prefix. Only combine multiple regions' event_name values if the
+    request explicitly asks for more than one region.
+
+    Collect the event_name values to match based on the SPEAKER SCOPE:
+    - "Current": ONLY (1) this event's own current/upcoming-edition umbrella name
+      and (2) every co-located track named in the Segment Plan / scraped event page
+      for that SAME current edition. Do NOT include any past edition/year's
+      event_name value — a "Current" scope must exclude every prior year's speakers.
+    - "Past": ONLY the umbrella name + co-located track names for PRIOR editions/
+      years of this event and its tracks — reuse the same past-edition discovery
+      (Snowflake STEP 1 / hubspot_search_campaigns) already used for STEP 4 group 1,
+      don't re-derive it separately. Do NOT include the current/upcoming edition's
+      own event_name value at all.
+    - "Current + Past" (default): the full set — (1) current edition's umbrella
+      name, (2) current edition's co-located tracks, and (3) that same set for every
+      past edition/year of this event and its tracks (same past-edition discovery as
+      above) — this is the original, unscoped behavior.
 
     Every value you put in this filter MUST be the FULL, exact event_name string
     as it appears on a real registration record — e.g. the complete name "Open
@@ -1015,6 +1083,17 @@ RULE 12 — ROLE FILTERS. If the Segment Plan below contains a "## ROLE FILTERS"
     build an unfiltered list — add to ## FLAGGED FOR REVIEW with reason "no speaker
     list or event-registration speaker data found for this event or its
     editions/tracks".
+
+    NAMING: when this restriction is applied to a STEP 4 inclusion list whose
+    entire purpose is the speakers audience (not some other audience additionally
+    filtered to speakers), name that list "[Event Name] Speakers - Current",
+    "[Event Name] Speakers - Past", or "[Event Name] Speakers - Current + Past" to
+    match whichever SPEAKER SCOPE applied above — never just "[Event Name]
+    Speakers" alone. Use the event's real, exact name, not a placeholder. If this
+    rule instead restricts several unrelated inclusion lists at once (each keeping
+    its own established name from STEP 4's group definitions), this naming
+    convention does not apply to those — it's specifically for a dedicated speaker
+    list. This naming feeds RULE 10's exact-name collision search too.
   - "Community ambassadors only": call read_reference_file("ambassador-properties.md")
     for the current list of per-program ambassador properties (CNCF, LF Energy, Open
     Mainframe, etc. — extend as new programs are documented there). Since the root
@@ -1715,7 +1794,8 @@ After success print:
 🏆 Master list created — ID: [listId] — [hubspot_url]
 
 If this step fails for any reason, print the exact HubSpot error and add it to ## FLAGGED FOR REVIEW.
-DO NOT end without attempting to create (or, per RULE 10, update-in-place) the master list.
+DO NOT end without attempting to create the master list, following RULE 10's
+version-on-collision behavior like every other list in this build.
 
 ═══════════════════════════════════════════════════
 STEP 7 — Final summary
@@ -1914,19 +1994,24 @@ RULE 2 — Print ## BUILD PLAN before creating anything in HubSpot. Number each 
   its filter shape, and why.
 RULE 3 — After EVERY successful hubspot_create_list call print:
   ✅ [List name] created — ID: [listId] — [hubspot_url]
-  (see RULE 6 for the update-in-place case, which prints a different line)
+  (see RULE 6 for the name-collision case — same line format, using the
+  versioned name actually created, not a different line)
 RULE 4 — Membership filters MUST use filterType "IN_LIST" (never "LIST_MEMBERSHIP",
   which HubSpot rejects). The root filterBranch MUST be "OR" with AND sub-branches
   (HubSpot rejects an AND root and rejects nested OR branches).
 RULE 5 — If unsure about anything → skip and add to ## FLAGGED FOR REVIEW rather than guessing.
-RULE 6 — REUSE, DON'T DUPLICATE. Before calling hubspot_create_list for STEP 1's
-  list(s) or STEP 2's Combined Suppression list, call hubspot_search_lists with the
-  exact intended name FIRST. If a list with that EXACT name already exists — this
-  request is being rebuilt after an earlier run — call hubspot_update_list_filters on
-  its existing ID instead of creating a duplicate, and print
-  🔁 [List name] updated in place — ID: [listId] — [hubspot_url]
-  instead of the RULE 3 "created" line. Only call hubspot_create_list when no
-  exact-name match is found.
+RULE 6 — VERSION ON NAME COLLISION, NEVER OVERWRITE. Before calling
+  hubspot_create_list for STEP 1's list(s) or STEP 2's Combined Suppression list,
+  call hubspot_search_lists with the exact intended name FIRST. If a list with that
+  EXACT name already exists, do NOT call hubspot_update_list_filters on it — a name
+  match alone does not prove it is the same request being rebuilt, and silently
+  overwriting an existing list's filters risks destroying a different, unrelated
+  audience that happens to share the same name. Instead, find the next unused
+  version suffix: search hubspot_search_lists for "[name] (v2)", then "[name] (v3)",
+  and so on in order until a search finds no match, then call hubspot_create_list
+  with that first unused versioned name. Print the RULE 3 "created" line using the
+  versioned name actually used. Only call hubspot_create_list with the plain,
+  unversioned name when hubspot_search_lists finds no exact-name match at all.
 RULE 7 — USER-ADDED FILTERS. If the Segment Plan below contains a
   "## USER-ADDED FILTERS" section, each line there is an extra condition the user
   typed in during plan review (e.g. Property "job_title" contains "director"). Add
@@ -1981,21 +2066,66 @@ RULE 9 — ROLE FILTERS. Apply this rule whenever EITHER (a) the Segment Plan be
     is_event_speaker_bool (bool: "true") or the older numeric is_event_speaker
     ("1") — so check all three signals, not just one.
 
-    Do NOT scope event_name to a single value — this applies to every event, not
-    just one. Many LF events bundle co-located tracks under one registration flow
-    (e.g. Open Source Summit Japan bundles Automotive Linux Summit and Embedded
-    Linux Conference Asia as separate tracks under the same umbrella event), and
-    UNIFIED_EVENTS.event_name may carry the specific track name rather than the
-    umbrella name a registrant actually searched for — matching only the umbrella
-    name silently drops those track speakers. It also matters across years: a
-    speaker's registration record lives under THAT year's exact event_name, so
-    matching only the current year's name misses returning speakers from past
-    editions. Collect a list of ALL relevant event_name values before building:
-    (1) this event's own umbrella name, (2) every co-located track named in the
-    Segment Plan / scraped event page, and (3) that same set for past editions/
-    years of this event and its tracks — reuse whatever past-edition discovery
-    (hubspot_search_campaigns / Snowflake) this build already does elsewhere for
-    past-registrant inclusion lists, don't re-derive it separately.
+    NEVER, under any circumstance, resolve speaker names to email addresses
+    yourself (via web/page scraping, contact search, or any other lookup) and
+    then encode that resolved set as a static filter like
+    email IS_EQUAL_TO [addr1, addr2, ...] — even though HubSpot will let you
+    mark the resulting list "DYNAMIC," a hardcoded email-equality filter is a
+    frozen snapshot wearing a dynamic label: it never updates as speakers are
+    added/removed, and it silently misses anyone whose email you failed to
+    resolve. This is not an acceptable fallback. The ONLY acceptable outcomes
+    when no exact-name speaker list exists are: (1) reuse via IN_LIST if found
+    above, (2) the eventTypeId "6-48984571" property-based filter described in
+    this same rule, or (3) FLAGGED FOR REVIEW per below. If you find yourself
+    about to search for or list out individual speakers' names/emails, stop —
+    that means no valid signal exists and the correct move is FLAGGED FOR
+    REVIEW, not fabricating one.
+
+    Determine the SPEAKER SCOPE for this request before collecting event_name
+    values: look for an explicit "SPEAKER SCOPE: Current" / "SPEAKER SCOPE: Past" /
+    "SPEAKER SCOPE: Current + Past" marker in the Original request or Segment Plan
+    above (case-insensitive substring match). If no such marker is present at all,
+    default to "Current + Past" — this preserves the original, broader behavior for
+    requests that predate this marker.
+
+    Do NOT scope event_name to a single value regardless of which SPEAKER SCOPE
+    applies — this applies to every event, not just one. Many LF events bundle
+    co-located tracks under one registration flow (e.g. Open Source Summit Japan
+    bundles Automotive Linux Summit and Embedded Linux Conference Asia as separate
+    tracks under the same umbrella event), and UNIFIED_EVENTS.event_name may carry
+    the specific track name rather than the umbrella name a registrant actually
+    searched for — matching only the umbrella name silently drops those track
+    speakers.
+
+    Do NOT confuse a co-located TRACK (a distinctly-named sub-event bundled into
+    the SAME registration flow, at the same time and place as the umbrella event —
+    e.g. Automotive Linux Summit inside Open Source Summit Japan) with a sibling
+    REGIONAL/CITY EDITION of the same series (a separate event, at a different
+    time and/or place, that merely shares the series' brand name — e.g. "MCP Dev
+    Summit Seoul 2026" vs "MCP Dev Summit Bengaluru 2026" vs "MCP Dev Summit
+    Mumbai 2026" vs "MCP Dev Summit North America 2026" are four separate events,
+    not tracks of one event, exactly like "KubeCon + CloudNativeCon North America"
+    vs "... Europe" vs "... China" are separate events). When the request
+    specifies one particular region/city, include ONLY that region's own
+    event_name value (and that region's own genuine co-located tracks, if any) —
+    never pull in another region's event_name value just because it shares the
+    series/brand prefix. Only combine multiple regions' event_name values if the
+    request explicitly asks for more than one region.
+
+    Collect the event_name values to match based on the SPEAKER SCOPE:
+    - "Current": ONLY (1) this event's own current/upcoming-edition umbrella name
+      and (2) every co-located track named in the Segment Plan / scraped event page
+      for that SAME current edition. Do NOT include any past edition/year's
+      event_name value — a "Current" scope must exclude every prior year's speakers.
+    - "Past": ONLY the umbrella name + co-located track names for PRIOR editions/
+      years of this event and its tracks — reuse whatever past-edition discovery
+      (hubspot_search_campaigns / Snowflake) this build already does elsewhere for
+      past-registrant inclusion lists, don't re-derive it separately. Do NOT include
+      the current/upcoming edition's own event_name value at all.
+    - "Current + Past" (default): the full set — (1) current edition's umbrella
+      name, (2) current edition's co-located tracks, and (3) that same set for every
+      past edition/year of this event and its tracks (same past-edition discovery as
+      above) — this is the original, unscoped behavior.
 
     Every value you put in this filter MUST be the FULL, exact event_name string
     as it appears on a real registration record — e.g. the complete name "Open
@@ -2030,6 +2160,14 @@ RULE 9 — ROLE FILTERS. Apply this rule whenever EITHER (a) the Segment Plan be
     registrants in eventTypeId "6-48984571", do NOT silently build an unfiltered
     list — add to ## FLAGGED FOR REVIEW with reason "no speaker list or event-
     registration speaker data found for this event or its editions/tracks".
+
+    NAMING: when this restriction is STEP 1's list's entire purpose (the common
+    case — the request is specifically for a speakers audience, not some other
+    audience additionally filtered to speakers), name that list "[Event Name]
+    Speakers - Current", "[Event Name] Speakers - Past", or "[Event Name] Speakers
+    - Current + Past" to match whichever SPEAKER SCOPE applied above — never just
+    "[Event Name] Speakers" alone. Use the event's real, exact name, not a
+    placeholder. This naming feeds RULE 6's exact-name collision search too.
   - "Community ambassadors only": call read_reference_file("ambassador-properties.md")
     for the current list of per-program ambassador properties. Since the root
     filterBranch must stay OR-of-AND (RULE 4 — HubSpot rejects a nested OR), do NOT
