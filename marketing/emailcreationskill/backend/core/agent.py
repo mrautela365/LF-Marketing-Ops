@@ -425,9 +425,11 @@ def _execute_tool(name: str, inputs: dict, session_email_id: str | None = None) 
 
 # ── Single-turn Claude helper (no tools, plain text) ─────────────────────────
 
-def _claude_text(prompt: str, max_tokens: int = 100, timeout: int = 60) -> str:
+def _claude_text(prompt: str, max_tokens: int = 100, timeout: int = 60,
+                 idle_timeout: int | None = None) -> str:
     """Single-shot text (no tools). Deterministic on every backend via the gateway."""
-    return llm_gateway.complete_text(prompt, max_tokens=max_tokens, timeout=timeout)
+    return llm_gateway.complete_text(prompt, max_tokens=max_tokens, timeout=timeout,
+                                     idle_timeout=idle_timeout)
 
 
 def _format_ab_test_comparison(variant_a_info: dict, variant_b_info: dict) -> str:
@@ -1397,7 +1399,7 @@ sections: ordered array of content blocks. The system automatically adds the her
     - rich_text "html" must NOT have an outer <div> wrapper — just the inner content.
 {("" if not change_request else f"{chr(10)}━━━ CHANGE REQUEST ━━━{chr(10)}{change_request}{chr(10)}")}"""
 
-    raw = _claude_text(prompt, max_tokens=6000, timeout=240)
+    raw = _claude_text(prompt, max_tokens=6000, timeout=480, idle_timeout=90)
 
     # Strip markdown fences
     raw = _re.sub(r'^```(?:json)?\s*', '', raw.strip())
@@ -2057,35 +2059,6 @@ def clone_turn(session, subject=None, preview_text=None, send_list_id=None) -> t
     return text, updated_messages
 
 
-# AI_STAGE_TEMPLATES key -> keycloak_argocon_templates.json stage key. The two libraries
-# use slightly different stage names for the same funnel position; only the 5 forward-
-# funnel stages have a real reference (there's no "Post-Event" campaign in that dataset).
-_KEYCLOAK_ARGOCON_STAGE_MAP = {
-    "CFP Launch":                          "CFP Launch",
-    "Schedule Announcement":               "Schedule Announcement",
-    "Registration Push / Pricing Deadline": "Registration / Pricing Push",
-    "Discount Offer / VIP Access":         "Discount Offer",
-    "Final Countdown":                     "Final Countdown",
-}
-
-_keycloak_argocon_templates_cache: dict | None = None
-
-
-def _load_keycloak_argocon_templates() -> dict:
-    """Load the real 'KeycloakCon + ArgoCon Japan' per-stage structure reference
-    (subject/preview/CTA/paragraph patterns from actually-sent emails), cached after
-    first read. Returns {} if the file is missing so callers degrade gracefully."""
-    global _keycloak_argocon_templates_cache
-    if _keycloak_argocon_templates_cache is None:
-        try:
-            _path = os.path.join(os.path.dirname(__file__), "keycloak_argocon_templates.json")
-            with open(_path, "r", encoding="utf-8") as f:
-                _keycloak_argocon_templates_cache = json.load(f)
-        except Exception:
-            _keycloak_argocon_templates_cache = {}
-    return _keycloak_argocon_templates_cache
-
-
 def generate_ai_template_content(
     url_data: dict,
     stage_info: dict,
@@ -2096,11 +2069,11 @@ def generate_ai_template_content(
     Generate Variant A (AI Template) content for the production A/B flow.
 
     Unlike generate_email_content() (Variant B, which reads THIS brand's own real
-    reference emails), Variant A is driven by a fixed stage-template library
-    (ai_email_templates.AI_STAGE_TEMPLATES) plus a structural style guide extracted
-    from real past "KeycloakCon + ArgoCon Japan" emails (keycloak_argocon_templates.json)
-    for the matching funnel stage — so each of the 5 AI-template stages mirrors the
-    real cadence/CTA-density/tone sent for that same stage, without copying its facts.
+    reference emails), Variant A is driven entirely by this event's own scraped facts
+    plus the 13-stage marketing journey data for the detected funnel stage
+    (marketing_strategy, content_ideas, industry_best_practices — sourced from
+    templates/marketing_journey_stages.json). It does not reference any fixed
+    stage-template library or any other past campaign's content/structure.
 
     Generation goes through _claude_text() (the same CLI-fallback-aware helper used by
     generate_email_content()) instead of a direct Anthropic client, and reuses Variant
@@ -2118,7 +2091,7 @@ def generate_ai_template_content(
     _log = _logging.getLogger("email-staging")
 
     stage_name = (stage_info or {}).get("name", "Unknown")
-    template_key = "CFP Launch"
+    template_key = stage_name
     sponsors = sponsors or []
 
     try:
@@ -2131,41 +2104,22 @@ def generate_ai_template_content(
         topics      = url_data.get("topics", [])
         reg         = url_data.get("registration") or {}
         links       = url_data.get("links", {}) or {}
+        audience    = url_data.get("audience") or []
+        inclusions  = url_data.get("inclusions") or []
 
         cta_label          = stage_info.get("cta_label", "Register Now")
         event_date         = stage_info.get("event_date_str", "") or (event_dates[0] if event_dates else "")
-        dates_display      = event_dates[0] if event_dates else event_date
+        # Prefer the already-computed date RANGE (event_date_str spans start→end via
+        # format_event_date_range) over the raw scraped list's first entry, which is
+        # often just the start date alone — using it here silently turned real
+        # multi-day events into a single-day description in the generated copy.
+        dates_display      = event_date
         funnel             = stage_info.get("funnel", "")
         marketing_strategy = stage_info.get("marketing_strategy", "")
         content_ideas      = stage_info.get("content_ideas", [])
-
-        template_key = ai_email_templates.map_funnel_stage_to_ai_template(stage_name)
-        template = ai_email_templates.AI_STAGE_TEMPLATES.get(template_key) \
-            or ai_email_templates.AI_STAGE_TEMPLATES["CFP Launch"]
-        _log.info(f"[AI-TEMPLATE] funnel stage '{stage_name}' -> AI template '{template_key}'")
-
-        # ── Structural style guide from real KeycloakCon+ArgoCon Japan emails ────
-        ref_stage_key = _KEYCLOAK_ARGOCON_STAGE_MAP.get(template_key, "")
-        ref_stage = (_load_keycloak_argocon_templates().get("stages") or {}).get(ref_stage_key, {})
-        style_guide = ""
-        if ref_stage:
-            patterns = ref_stage.get("template_patterns", {})
-            sample   = (ref_stage.get("emails") or [{}])[0].get("structure", {})
-            sample_ctas  = "\n".join(f'  • "{c}"' for c in (sample.get("main_ctas") or [])[:5])
-            sample_paras = "\n".join(f'  • "{t}"' for t in (sample.get("text_sections") or [])[:5])
-            style_guide = (
-                "━━━ STRUCTURE REFERENCE — real 'KeycloakCon + ArgoCon Japan' email for THIS stage ━━━\n"
-                f"This is a REAL past email sent for the '{ref_stage_key}' stage of a co-located LF\n"
-                "event campaign. Match its STRUCTURE, cadence, tone, and CTA density — do NOT copy\n"
-                "its event-specific facts (names, dates, topics, prices); only mirror the shape.\n\n"
-                f"Dominant tone        : {patterns.get('dominant_tone', sample.get('tone',''))}\n"
-                f"Typical CTA count    : {patterns.get('avg_cta_count', sample.get('cta_count',''))}\n"
-                f"Common urgency words : {', '.join(patterns.get('common_urgency_words') or [])}\n\n"
-                f"Sample CTA phrasing (structure only — do not reuse facts):\n{sample_ctas}\n\n"
-                f"Sample paragraph openings (structure/cadence only):\n{sample_paras}\n"
-            )
-        else:
-            _log.info(f"[AI-TEMPLATE] no KeycloakCon+ArgoCon reference for template_key={template_key!r}")
+        best_practices     = stage_info.get("industry_best_practices", {})
+        stage_goal         = stage_info.get("goal", "")
+        _log.info(f"[AI-TEMPLATE] generating for funnel stage '{stage_name}'")
 
         speakers_str = "\n".join(f"  • {s}" for s in speakers) if speakers else "  (to be announced)"
         topics_str   = ", ".join(topics[:4]) if topics else "Open Source, Cloud Native, Linux"
@@ -2175,12 +2129,34 @@ def generate_ai_template_content(
 
         reg_lines = []
         if reg.get("ticket_types"):
-            reg_lines.append(f"Ticket info: {'; '.join(reg['ticket_types'][:2])}")
+            # Pass ALL scraped tiers (already capped at 3 by the scraper), not just the
+            # first 2 — for a 3-tier event those are usually the already-expired Early
+            # Bird/Standard prices, silently dropping the current active tier (the real,
+            # grounded urgency fact) and forcing the model to invent scarcity instead.
+            # The DATE AWARENESS rule below still tells it to ignore any expired tier.
+            reg_lines.append(f"Ticket info: {'; '.join(reg['ticket_types'])}")
         if reg.get("deadlines"):
             reg_lines.append(f"Deadline: {reg['deadlines'][0]}")
         if reg.get("url"):
             reg_lines.append(f"Register at: {reg['url']}")
         reg_info = "\n".join(reg_lines)
+
+        # Real scraped facts (never invented) that let Variant A match Variant B's
+        # level of detail — omitted entirely when the source page didn't have them.
+        extra_detail_block = ""
+        if audience:
+            extra_detail_block += (
+                "\nWHO SHOULD ATTEND (real facts scraped from the event page — include EVERY\n"
+                "one of these as its own 'Who Should Attend' bullet; do not merge, condense,\n"
+                "paraphrase-and-drop, or invent additional ones):\n"
+                + "\n".join(f"  • {a}" for a in audience[:6]) + "\n"
+            )
+        if inclusions:
+            extra_detail_block += (
+                "\nWHAT'S INCLUDED (real facts scraped from the event/registration page — turn\n"
+                "these into a short 'What's Included' bullet list, do not invent additional ones):\n"
+                + "\n".join(f"  • {i}" for i in inclusions[:6]) + "\n"
+            )
 
         _link_labels = {
             "register": "Registration page",
@@ -2204,27 +2180,27 @@ def generate_ai_template_content(
             f"Today's date is {_today_str}. The event takes place on "
             f"{event_date or dates_display or 'the date above'}.\n"
             "- NEVER include a registration tier, early-bird price, or deadline that has\n"
-            "  already passed relative to today. Do not invent dates — omit rather than guess."
+            "  already passed relative to today. Do not invent dates — omit rather than guess.\n"
+            "- The Date field above is the REAL, complete event date — if it shows a range\n"
+            "  (e.g. \"September 10-11, 2026\"), the event spans that many days. Never\n"
+            "  describe a multi-day event as \"a day\" / \"a full day\" — say \"two days\" or\n"
+            "  cite the exact date range as given, verbatim."
         )
 
         hs_firstname = "{{ contact.firstname }}"
         hs_company   = "{{ contact.company }}"
 
         prompt = f"""You are a senior email marketer for Linux Foundation open source events,
-writing Variant A of an A/B test: an "AI Template" email built from a fixed stage-template
-library, structurally modeled on real past co-located-event campaign emails.
+writing Variant A of an A/B test: an "AI Template" email generated fresh for this event and
+this funnel stage, using only this event's own real facts and this stage's own strategy
+guidance below.
 
-━━━ STAGE TEMPLATE ({template_key}) ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Purpose        : {template.get('purpose','')}
-Tone           : {template.get('tone','')}
-Urgency (1-10) : {template.get('urgency_level','')}
-CTA strategy   :
-{chr(10).join('  • ' + c for c in template.get('cta_strategy', []))}
+━━━ STAGE OBJECTIVE ({stage_name}) ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Funnel stage   : {funnel}
+Goal           : {stage_goal}
+Primary CTA    : {cta_label}
 
-Content guidance:
-{template.get('content_prompt','')}
-
-{style_guide}
+{ai_email_templates.AI_VARIANT_STYLE_RULES}
 ━━━ NEW EVENT ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Event Name  : {event_name}
 Date        : {dates_display}
@@ -2241,30 +2217,60 @@ Sponsors / Partners:
 
 Topics      : {topics_str}
 {reg_info}
-
+{extra_detail_block}
 {links_block}
 
 {date_rule}
 
-{("MARKETING STRATEGY FOR THIS STAGE (use as messaging direction):\\n  " + marketing_strategy) if marketing_strategy else ""}
+{("MARKETING STRATEGY FOR THIS STAGE (use as messaging direction):\n  " + marketing_strategy) if marketing_strategy else ""}
 
-{("CONTENT IDEAS FOR THIS STAGE (draw from these for section headlines & copy):\\n" + chr(10).join(f"  • {idea}" for idea in content_ideas[:6])) if content_ideas else ""}
+{("CONTENT IDEAS FOR THIS STAGE (draw from these for section headlines & copy):\n" + chr(10).join(f"  • {idea}" for idea in content_ideas[:6])) if content_ideas else ""}
+
+{(
+"━━━ INDUSTRY BEST PRACTICES FOR THIS STAGE (researched, apply these techniques) ━━━━━━\n"
+f"Structure           : {best_practices.get('structure','')}\n"
+f"Clear/actionable CTA: {best_practices.get('cta_guidance','')}\n"
+f"Urgency & FOMO      : {best_practices.get('urgency_fomo_tactics','')}\n"
+f"Specificity         : {best_practices.get('specificity_notes','')}\n"
+) if best_practices else ""}
 
 ━━━ YOUR TASK ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Write a detailed, engaging, multi-paragraph email for the event above, following the
-STAGE TEMPLATE's purpose/tone/CTA strategy and mirroring the STRUCTURE REFERENCE's
-cadence (paragraph count, CTA density, urgency wording) — but ALL facts (name, dates,
-speakers, sponsors, links) must be the NEW EVENT's real facts, never the reference's.
+Write a detailed, engaging, multi-paragraph email for the event above, driven by the
+STAGE OBJECTIVE's goal/CTA and the MARKETING STRATEGY, CONTENT IDEAS, and INDUSTRY BEST
+PRACTICES for this stage below. Use ONLY the NEW EVENT's real facts (name, dates,
+speakers, sponsors, links) — never invent facts from any other source.
 
 RULES:
-- Never output a literal bracket placeholder like [EVENT_NAME] or [DATE] — always
+- Never output a literal bracket placeholder like [EVENT_NAME] or [DATE], always
   substitute the real value above. If a fact isn't available, write around it instead
   of leaving a placeholder in the output.
-- Multiple distinct rich_text paragraphs (greeting, why-it-matters, details/topics,
-  speakers if available) — never one flat paragraph dump.
-- Real styled CTA buttons as separate button sections, matching the CTA strategy above
-  (primary + at least one secondary CTA where the strategy lists one).
-- Include ALL confirmed speakers by name (never "and more").
+- SECTION ORDER (mandatory, do not reorder):
+    1. Greeting (short, on its own line/block).
+    2. ONE short hook block: 1-2 sentences max, the single most important fact
+       (what the event is + why it matters now). No bullets, no other details here.
+    3. PRIMARY CTA button — must come immediately after the hook, BEFORE any
+       bullet lists or "what's included" / "who should attend" / speakers detail.
+       Never bury the primary CTA below a wall of details.
+    4. Supporting detail sections, in this order — most persuasive/relevant first,
+       purely logistical last:
+       a. "Who Should Attend" (use real scraped facts if given above; otherwise
+          write short, generic, standard-for-this-kind-of-event bullets inferred
+          from the description/topics/speakers — never invent numbers/prices/dates)
+          — lets the reader immediately self-identify as the target audience.
+       b. Speakers and topics — the concrete credibility/value payoff.
+       c. "What's Included" last — logistics/amenities are the least persuasive
+          content and should not appear before the reader has seen why to attend.
+    5. A final urgency/FOMO line + secondary CTA button near the end.
+  Put details, topics, speakers, and dates/deadlines into bullets, not paragraphs.
+- Real styled CTA buttons as separate button sections, built around the Primary CTA
+  named in STAGE OBJECTIVE above (primary right after the hook per SECTION ORDER, plus
+  at least one secondary CTA). CTA button text must be a direct action verb
+  ("Register Now", "Secure Your Seat", "Reserve Your Spot Today", "View the Agenda
+  & Register") — never a passive/generic label like "Explore {event_name}",
+  "Learn More", or "Click Here".
+- Include ALL confirmed speakers by name (never "and more"). Heading the section
+  "Featured Speakers" rather than "Confirmed Speakers" unless the data explicitly
+  says the roster is final.
 - Do NOT include sponsor images, sponsor names, or a sponsor heading in your sections —
   the system adds them automatically as native modules from the sponsors list.
 - HubSpot personalization tokens (exact syntax): first name {hs_firstname}, company
@@ -2272,12 +2278,32 @@ RULES:
   margin-bottom — never run it into the next sentence.
 - No closing sign-off line ("Regards," / "Best," / "The Linux Foundation" etc.).
 - Bullet lists: <ul>/<li> tags — never the • character.
+- FOMO/urgency is MANDATORY in every email, regardless of funnel stage — never skip
+  it just because this stage has no hard registration deadline. It must appear at
+  least twice, in two DIFFERENT spots: once in the step-2 hook (why this matters
+  now) and once in step 5 near the final CTA. Every stage has SOME real angle:
+    - If a real deadline/price-increase/CFP-close date exists above, use it directly
+      (real days-remaining count from today's date, real ticket-tier cutoff, real
+      submission deadline).
+    - If no such deadline exists yet (e.g. an early-announcement, post-event, or
+      ongoing-nurture email), use this stage's Urgency & FOMO guidance from INDUSTRY
+      BEST PRACTICES above instead — momentum/social proof, limited speaking slots,
+      "the only event of its kind", a what-you-missed angle for past content, or
+      aspirational "don't miss next time" framing. Never invent a fake countdown or
+      scarcity number just to fill this gap.
+  Do not repeat the same urgency line twice — vary the wording and the fact/angle used.
+- NEVER claim venue/seat capacity is limited, "filling fast", or "almost sold out"
+  unless that exact claim appears in the scraped facts above — this is a fabricated-
+  scarcity claim, not a real one. When Ticket info above shows a current price tier
+  (e.g. a "Late"/"Standard" tier now in effect vs. a cheaper tier that already
+  expired), prefer that real price-increase-in-effect fact as your urgency device
+  over any capacity/scarcity wording.
 
 ═══ OUTPUT FORMAT ════════════════════════════════════════════════════════════════
 Return ONLY a JSON object — no markdown fences, no text before or after:
 {{"subject": "...", "preview_text": "...", "sections": [...]}}
 
-subject: max 60 chars, matches {stage_name} urgency and the STAGE TEMPLATE's subject style
+subject: max 60 chars, matches {stage_name}'s urgency and goal
 preview_text: preheader text, max 90 chars
 sections: ordered array — the system automatically adds the hero banner image, sponsor
   images/names, social icons footer, and unsubscribe footer — do NOT include those.
@@ -2287,7 +2313,7 @@ sections: ordered array — the system automatically adds the hero banner image,
   Do NOT embed buttons as HTML inside rich_text blocks — separate button objects only.
   rich_text "html" must NOT have an outer <div> wrapper — just the inner content."""
 
-        raw = _claude_text(prompt, max_tokens=4000, timeout=240)
+        raw = _claude_text(prompt, max_tokens=4000, timeout=480, idle_timeout=90)
 
         raw = _re.sub(r'^```(?:json)?\s*', '', raw.strip())
         raw = _re.sub(r'\s*```\s*$', '', raw)
@@ -2314,12 +2340,19 @@ sections: ordered array — the system automatically adds the hero banner image,
         if not sections_list and data.get("html"):
             sections_list = [{"type": "rich_text", "html": str(data["html"])}]
         sections_list = _drop_system_sections(sections_list, sponsors)
+        # Safety net for AI_VARIANT_STYLE_RULES' "no em dash" instruction — strip any
+        # em/en dash the model used anyway, in subject/preview/every section's copy.
+        for _section in sections_list:
+            if _section.get("html"):
+                _section["html"] = ai_email_templates.strip_em_dashes(_section["html"])
+            if _section.get("text"):
+                _section["text"] = ai_email_templates.strip_em_dashes(_section["text"])
         body_html    = _sections_to_html(sections_list, "#04c0da", sponsors)
         preview_html = _build_email_preview(banner_url, body_html, url, event_name)
 
         return {
-            "subject":      str(data.get("subject", "")),
-            "preview_text": str(data.get("preview_text", "")),
+            "subject":      ai_email_templates.strip_em_dashes(str(data.get("subject", ""))),
+            "preview_text": ai_email_templates.strip_em_dashes(str(data.get("preview_text", ""))),
             "html":         preview_html,
             "body_html":    body_html,
             "sections":     sections_list,

@@ -30,6 +30,89 @@ Writing Rules:
 
 from datetime import datetime
 import json
+import re
+
+# ── AI Template variant (Variant A) — mandatory style rules ──────────────────
+# Applies ONLY to the "AI Template" variant generators (generate_ai_template_content
+# in core/agent.py and generate_email_content in generate_ai_content.py). Does NOT
+# apply to Variant B (reference-driven) or the pre-written messaging-variant
+# strategies in email_templates.py.
+AI_VARIANT_STYLE_RULES = """━━━ MANDATORY STYLE RULES — AI TEMPLATE VARIANT ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+These rules OVERRIDE any "no urgency", "no fake urgency", or "authentic, not
+promotional" wording in the Content guidance above — this variant is written to
+convert, not just to inform.
+- NEVER use an em dash (—) anywhere in the output. Use a period, comma, or "and"
+  instead.
+- Be concrete and specific: use the real numbers, dates, names, and facts given
+  below. No vague marketing filler ("amazing", "incredible", "don't miss out on
+  this opportunity") without a concrete fact backing it up.
+- Every CTA must be a clear, specific, action-oriented instruction (e.g. "Submit
+  Your Talk by August 15" or "Claim Your Early-Bird Seat"), never a generic
+  "Learn More" or "Click Here". Match the verb to the stage's actual goal
+  (register vs. submit vs. sponsor vs. view agenda).
+- Create genuine urgency and FOMO (fear of missing out), grounded in real facts:
+  real deadlines, limited capacity, or expiring pricing (e.g. "Only 12 speaker
+  slots left", "Early-bird pricing ends in 5 days"). Never invent a number or
+  date that isn't provided — omit it rather than fabricate it.
+- Prefer short bullet lists (<ul><li>) over long paragraphs. Break dense
+  information into scannable bullets, each highlighting one important fact.
+  Keep any remaining paragraphs to 1-2 short sentences.
+- STRUCTURE ORDER (mandatory): (1) short greeting, (2) a 1-2 sentence hook with
+  ONLY the single most important fact and why it matters now, (3) the PRIMARY
+  CTA button immediately after the hook, BEFORE any bullet lists or detail
+  sections, (4) supporting details as bullets (what's included, who should
+  attend, speakers, topics, agenda), (5) a final urgency/FOMO line plus a
+  secondary CTA near the end. Never bury the primary CTA below a long list.
+- If real "who should attend" / "what's included" facts are provided, use them
+  verbatim (reworded for flow). If none are provided, still include short
+  "Who Should Attend" and "What's Included" bullet sections inferred from the
+  event's topic/description/speakers (e.g. "open-source engineers working with
+  X", "sessions, workshops, and networking") — generic, standard-for-this-kind-
+  of-event language is fine; only avoid specific numbers, prices, or dates that
+  were not provided.
+- OPENING HOOK must be concrete, never a vague label. Do not describe the event
+  as "the flagship conference" or "the premier event" with nothing behind it.
+  Instead pack in the real specifics in one flowing sentence: what kind of
+  community/audience it brings together, the format (in-person/virtual/hybrid),
+  the city, and the date(s), plus what attendees actually do there (sessions,
+  workshops, networking, hands-on learning) — e.g. "[Event] brings together
+  [community] for [N] days of [activities] in [city] on [dates]."
+- WORD VARIETY: never repeat the same keyword, topic phrase, or descriptor two+
+  times in close proximity (e.g. the event's core technology/theme name showing
+  up in the hook, a bullet, AND the CTA). Use synonyms or rephrase after the
+  first mention (e.g. alternate between the literal term and a broader
+  description of the same idea).
+- URGENCY LINES must be action-oriented, not a flat statement of fact. Don't
+  just state the countdown and stop ("Event is in 41 days. Registration does
+  not stay open indefinitely."). Pair the real countdown with a direct call to
+  act now and a concrete reason grounded in real facts, ideally naming a
+  confirmed speaker, session, or benefit (e.g. "With only 41 days left, now is
+  the time to secure your spot, hear from [Speaker Name], and connect with
+  [audience] in [city].").
+- CTA WORDING: never use "Explore [Event Name]" or other passive/generic
+  phrasing as a CTA. Use a direct, first-person-imperative action verb instead:
+  "Register Now", "Secure Your Seat", "Reserve Your Spot Today", "View the
+  Agenda & Register", etc. Pick the verb that matches the stage's primary
+  CTA and goal (register vs. submit vs. sponsor vs. view agenda).
+- SPEAKERS SECTION HEADING: default to "Featured Speakers" rather than
+  "Confirmed Speakers" unless the event data explicitly states the full speaker
+  roster is final/complete. "Featured Speakers" reads naturally whether 2 or 20
+  are listed and doesn't imply an incomplete-sounding partial list.
+"""
+
+
+def strip_em_dashes(text: str) -> str:
+    """Safety net: replace stray em/en dashes with a comma or period.
+
+    Backstop for AI_VARIANT_STYLE_RULES' "no em dash" instruction, in case the
+    model ignores the prompt rule. Only intended for AI Template variant output.
+    """
+    if not text:
+        return text
+    # " word — word " -> " word, word " (dash used as a clause separator)
+    text = re.sub(r"\s*[—–]\s*", ", ", text)
+    return text
+
 
 AI_STAGE_TEMPLATES = {
     "CFP Launch": {

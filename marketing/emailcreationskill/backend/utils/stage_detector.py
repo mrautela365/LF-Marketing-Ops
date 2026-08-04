@@ -2,181 +2,16 @@
 Campaign stage detection — maps event date to the 13-stage marketing journey.
 """
 from datetime import datetime, date
+import json
 import re
+from pathlib import Path
 
-# Full marketing journey detail per stage — strategy, expected performance, content ideas.
-# Keys match the STAGES name field. Stages 1-9 have rich data; post-event stages use minimal defaults.
-MARKETING_JOURNEY: dict[str, dict] = {
-    "Event Announcement": {
-        "stage_number": 1,
-        "timeline": "Month 1, Week 1",
-        "marketing_strategy": (
-            "Save-the-date email, website live, social launch, newsletter feature | "
-            "Expected Performance: 25-30% OR, 3-5% CTR | Budget: $5K awareness campaigns | "
-            "A/B test send times (9am vs 2pm)"
-        ),
-        "content_ideas": [
-            "Blog post announcing event with embedded video teaser",
-            "Animated social graphics with date/location",
-            "Newsletter banner with countdown timer",
-            "Partner toolkit for amplification",
-            "Press release to tech media",
-            "Teaser video from past event highlights",
-        ],
-    },
-    "CFP Launch": {
-        "stage_number": 2,
-        "timeline": "Month 1, Week 2",
-        "marketing_strategy": (
-            "CFP email blast, blog post, speaker outreach, social campaign, influencer DMs | "
-            "Expected Performance: 18-22% OR, 8-12% CTR (high intent) | Budget: $3K targeted speaker outreach | "
-            "Segment by: past speakers, CFP submitters, GitHub contributors"
-        ),
-        "content_ideas": [
-            "CFP blog with topic wishlist & trending themes",
-            "Speaker testimonial video series ('Why I Spoke at [Event]')",
-            "Twitter/LinkedIn campaign with past speaker quotes & session clips",
-            "Community Slack/Discord announcements with @here mentions",
-            "Email to GitHub contributors of popular CNCF projects",
-            "AMA session on Reddit/HackerNews",
-            "Podcast appearances on devops/cloud shows",
-        ],
-    },
-    "Registration Launch": {
-        "stage_number": 3,
-        "timeline": "Month 1, Week 3-4",
-        "marketing_strategy": (
-            "Registration announcement, early bird pricing, partner amplification, paid ads TOFU→MOFU, "
-            "retargeting site visitors | Expected Performance: 35-40% OR, 12-18% CTR, 8-12% conversion | "
-            "Budget: $15K (largest spend — peak conversion period) | "
-            "A/B test: discount messaging vs value messaging"
-        ),
-        "content_ideas": [
-            "Animated countdown timer graphics for social (Instagram Stories, Twitter)",
-            "Group discount promo video",
-            "Scholarship announcement blog post",
-            "Paid social ads targeting past attendees & lookalikes",
-            "Partner co-marketing emails with custom discount codes",
-            "Boss approval kit landing page",
-            "Influencer partnerships (send free tickets to tech influencers for promotion)",
-            "Early bird reminder email series (7 days, 3 days, 24 hours, 6 hours)",
-        ],
-    },
-    "Co-Located Events + CFP Reminder": {
-        "stage_number": 4,
-        "timeline": "Month 2, Week 5-6",
-        "marketing_strategy": (
-            "Co-located event announcements, bundled registration, CFP deadline reminders, "
-            "value prop reinforcement | Expected Performance: 28-32% OR, 10-14% CTR | "
-            "Budget: $8K (value-add messaging) | Target: Registration abandoners, fence-sitters"
-        ),
-        "content_ideas": [
-            "Co-located event deep-dive blog posts (one per event)",
-            "CFP deadline countdown social media series",
-            "Speaker submission tips email series",
-            "Partner cross-promotion toolkit",
-            "Retargeting ads emphasizing value (6 events for 1 price)",
-            "Comparison chart showing value vs competitors",
-            "Video interviews with co-located event organizers",
-            "Reddit AMA about co-located tracks",
-        ],
-    },
-    "DEI & Travel Fund": {
-        "stage_number": 5,
-        "timeline": "Month 2, Week 7",
-        "marketing_strategy": (
-            "DEI scholarship emails, LFX Portal live, community spotlights, travel fund promotion, "
-            "grassroots outreach | Expected Performance: 22-26% OR, 15-20% CTR (highly targeted) | "
-            "Budget: $2K (community partnership ads) | Focus on mission-driven conversion"
-        ),
-        "content_ideas": [
-            "DEI spotlight video interview series (past recipients)",
-            "Blog: 'How Scholarships Changed My Open Source Journey'",
-            "LFX mentorship program tie-in",
-            "Partnership outreach: Women Who Code, Black Girls Code, Out in Tech, Lesbians Who Tech",
-            "Community partner social media toolkit",
-            "Reddit AMA with DEI committee",
-            "Podcast appearances on diversity in tech shows",
-            "University/bootcamp email partnerships",
-        ],
-    },
-    "Schedule Announcement": {
-        "stage_number": 6,
-        "timeline": "Month 2, Week 8-9",
-        "marketing_strategy": (
-            "Agenda page live, speaker announcements, session highlights, social graphics, press release | "
-            "Expected Performance: 30-35% OR, 10-15% CTR | Budget: $10K (re-engage warm leads) | "
-            "A/B test: keynote-focused vs session-focused messaging"
-        ),
-        "content_ideas": [
-            "Speaker spotlight social series",
-            "Track-by-track blog breakdowns",
-            "Press release for media",
-            "Influencer outreach",
-            "Session highlight reels",
-            "Speaker AMA sessions",
-            "LinkedIn Live schedule walkthrough",
-        ],
-    },
-    "Main Registration Push": {
-        "stage_number": 7,
-        "timeline": "Month 3, Week 10-11",
-        "marketing_strategy": (
-            "Paid ads BoFU, retargeting campaigns, speaker-generated content, partner emails, "
-            "urgency messaging | Expected Performance: 35-40% OR, 18-22% CTR | "
-            "Budget: $18K (peak BOFU conversion) | A/B test: urgency vs social proof messaging"
-        ),
-        "content_ideas": [
-            "Attendee testimonial videos (30s clips)",
-            "ROI calculator landing page",
-            "Boss justification letter template",
-            "Retargeting ads with live countdown timer",
-            "Partner reminder emails",
-            "Speaker-generated content (personal invites)",
-            "Early bird deadline countdown social posts",
-            "LinkedIn Live Q&A with past attendees",
-        ],
-    },
-    "Final Countdown": {
-        "stage_number": 8,
-        "timeline": "Month 3, Week 12-14",
-        "marketing_strategy": (
-            "Last chance emails, registration deadline CTAs, social reminders, FOMO messaging | "
-            "Expected Performance: 28-32% OR, 15-20% CTR | Budget: $8K (final conversion push) | "
-            "A/B test: FOMO vs last-chance urgency"
-        ),
-        "content_ideas": [
-            "Hourly countdown social posts",
-            "FOMO video content ('What You'll Miss')",
-            "Last-minute email series (48hr, 24hr, 6hr warnings)",
-            "Aggressive cart abandonment retargeting",
-            "LinkedIn testimonial bombardment",
-            "Speaker call-to-action posts ('Hope to see you there!')",
-            "Community FOMO posts",
-        ],
-    },
-    "Event Week": {
-        "stage_number": 9,
-        "timeline": "Month 4, Week 15-16",
-        "marketing_strategy": (
-            "Daily emails, app usage, onsite signage, live social coverage | "
-            "Expected Performance: 55-65% OR (attendees), 80%+ app downloads | "
-            "Budget: $2K (FOMO ads for next event) | Focus: Attendee experience + future demand generation"
-        ),
-        "content_ideas": [
-            "Daily highlight emails (morning agenda + evening recap)",
-            "Live social coverage (Instagram Stories, LinkedIn updates, Twitter/X live-tweeting)",
-            "App push notifications (session reminders, breaking news, networking opportunities)",
-            "Onsite digital signage content (wayfinding, session alerts, sponsor highlights)",
-            "Photo booth prompts with branded frames",
-            "Live-streaming keynotes",
-            "Real-time session recordings upload",
-            "Speaker takeovers on social",
-            "Attendee-generated content campaigns",
-            "Daily video recaps",
-        ],
-    },
-}
+# Full marketing journey detail per stage — strategy, expected performance, content ideas,
+# and researched industry-best-practice guidance (structure/CTA/urgency-FOMO/specificity).
+# Keys match the STAGES name field. Source of truth: templates/marketing_journey_stages.json
+_JOURNEY_JSON_PATH = Path(__file__).resolve().parent.parent / "templates" / "marketing_journey_stages.json"
+with open(_JOURNEY_JSON_PATH, "r", encoding="utf-8") as _f:
+    MARKETING_JOURNEY: dict[str, dict] = json.load(_f)
 
 STAGES = [
     {"name": "Event Announcement",               "funnel": "TOFU",      "email_type": "Invite",      "min": 105,   "max": 9999},
@@ -353,6 +188,7 @@ def detect_stage(event_dates: list) -> dict:
                 "timeline": mj.get("timeline", ""),
                 "marketing_strategy": mj.get("marketing_strategy", ""),
                 "content_ideas": mj.get("content_ideas", []),
+                "industry_best_practices": mj.get("industry_best_practices", {}),
             }
 
     # Fallback for edge cases
@@ -372,4 +208,5 @@ def detect_stage(event_dates: list) -> dict:
         "timeline": mj.get("timeline", ""),
         "marketing_strategy": mj.get("marketing_strategy", ""),
         "content_ideas": mj.get("content_ideas", []),
+        "industry_best_practices": mj.get("industry_best_practices", {}),
     }

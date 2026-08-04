@@ -214,6 +214,76 @@ def fetch_url(url: str) -> dict:
         return {"url": url, "error": str(exc)}
 
 
+def _extract_bullets_after_heading(soup, keyword_re: str, max_items: int = 6) -> list:
+    """Find a heading matching keyword_re (e.g. "Who Should Attend"), then pull
+    short bullet-like strings (<li>, or short <p>) from the section right after it.
+    Used to recover facts (audience, ticket inclusions) that JSON-LD/meta tags
+    never carry, so Variant A can cite the SAME real facts Variant B pulls from
+    reference emails instead of only generic stage-template language.
+    """
+    items: list = []
+    pattern = re.compile(keyword_re, re.I)
+    for h in soup.find_all(["h1", "h2", "h3", "h4"], string=pattern):
+        section = h.find_next_sibling()
+        hops = 0
+        while section is not None and hops < 3 and not items:
+            lis = section.find_all("li") if hasattr(section, "find_all") else []
+            for li in lis[:max_items]:
+                text = li.get_text(separator=" ", strip=True)
+                if text and 3 < len(text) < 140 and text not in items:
+                    items.append(text)
+            if not items:
+                for p in (section.find_all("p")[:max_items] if hasattr(section, "find_all") else []):
+                    text = p.get_text(separator=" ", strip=True)
+                    if text and 10 < len(text) < 140 and text not in items:
+                        items.append(text)
+            section = section.find_next_sibling()
+            hops += 1
+        if items:
+            break
+    return items[:max_items]
+
+
+def _extract_speakers_after_heading(soup, max_items: int = 12) -> list:
+    """Fallback for sites that don't mark up speaker cards with a
+    speaker/keynote/presenter class (e.g. Linux Foundation event pages, which
+    render names in plain <h3> tags with no distinguishing wrapper class).
+    Locates a "Speakers"/"Keynote" heading, then walks the cards in the
+    section that follows, taking each card's first heading as the name.
+    Filters out job-title text (which often sits in a second heading right
+    next to the name) via a noise-keyword/comma check.
+    """
+    names: list = []
+    heading_re = re.compile(r"speakers?|keynotes?|presenters?", re.I)
+    noise_re = re.compile(
+        r"\b(director|engineer|manager|founder|president|chief|officer|"
+        r"architect|consultant|professor|lead|scientist|researcher|"
+        r"advocate|specialist|analyst|ceo|cto|coo|cfo|vp)\b", re.I
+    )
+    for h in soup.find_all(["h1", "h2", "h3", "h4"], string=heading_re):
+        section = h.find_next_sibling()
+        hops = 0
+        while section is not None and hops < 6 and len(names) < max_items:
+            cards = section.find_all(["div", "li", "article"]) if hasattr(section, "find_all") else []
+            for card in (cards or [section]):
+                if not hasattr(card, "find"):
+                    continue
+                name_el = card.find(["h2", "h3", "h4", "strong"])
+                if not name_el:
+                    continue
+                text = name_el.get_text(strip=True)
+                if (text and 3 < len(text) < 60 and "," not in text
+                        and not noise_re.search(text) and text not in names):
+                    names.append(text)
+                if len(names) >= max_items:
+                    break
+            section = section.find_next_sibling()
+            hops += 1
+        if names:
+            break
+    return names[:max_items]
+
+
 def scrape_event_full(url: str) -> dict:
     """
     Enhanced event scraping: extends fetch_url with hero/logo images,
@@ -262,6 +332,16 @@ def scrape_event_full(url: str) -> dict:
             if name_el:
                 name = name_el.get_text(strip=True)
                 if name and 3 < len(name) < 60 and name not in speakers:
+                    speakers.append(name)
+
+        # Fallback: many event sites (e.g. LF events pages) don't put a
+        # speaker/keynote/presenter class on the card wrapper at all, so the
+        # class-based pass above only turns up a stray match or two. When that
+        # happens, fall back to locating the "Speakers"/"Keynote" heading and
+        # reading the real names from the section that follows.
+        if len(speakers) < 3:
+            for name in _extract_speakers_after_heading(soup):
+                if name not in speakers:
                     speakers.append(name)
 
         # ── Topics / tracks ───────────────────────────────────────────────────
@@ -368,16 +448,40 @@ def scrape_event_full(url: str) -> dict:
 
         reg_url = links.get("register", "")
 
+        # ── Audience ("Who Should Attend") and inclusions ("What's Included") ──
+        # Neither field exists in JSON-LD/meta tags — these are the same real facts
+        # Variant A needs to match Variant B's level of detail (attendee types,
+        # ticket inclusions) without inventing them.
+        audience = _extract_bullets_after_heading(
+            soup, r"who\s+(should|is this for|attends?)|is\s+this\s+for\s+you|audience"
+        )
+        inclusions = _extract_bullets_after_heading(
+            soup, r"what.{0,4}included|(?:ticket|pass|registration)\s+includes?|what.{0,6}get"
+        )
+
         # ── Scrape registration page ─────────────────────────────────────────
         reg_details: dict = {}
         if reg_url and reg_url.rstrip("/") != url.rstrip("/"):
             try:
                 rr = requests.get(reg_url, timeout=10, headers=headers, allow_redirects=True)
                 rr.raise_for_status()
-                rt = BeautifulSoup(rr.text, "html.parser").get_text(separator=" ", strip=True)
+                reg_soup = BeautifulSoup(rr.text, "html.parser")
+                if not inclusions:
+                    inclusions = _extract_bullets_after_heading(
+                        reg_soup, r"what.{0,4}included|(?:ticket|pass|registration)\s+includes?|what.{0,6}get"
+                    )
+                if not audience:
+                    audience = _extract_bullets_after_heading(
+                        reg_soup, r"who\s+(should|is this for|attends?)|is\s+this\s+for\s+you|audience"
+                    )
+                rt = reg_soup.get_text(separator=" ", strip=True)
+                # Currency-agnostic: covers symbol currencies ($/€/£/¥) as well as
+                # ISO-code currencies (JPY/USD/EUR/...) — a $-only match returned zero
+                # ticket-tier data for non-USD events (e.g. a Japan event priced in ¥),
+                # silently losing the real "pricing just increased" urgency signal.
                 ticket_types = re.findall(
-                    r"(?:Early[ -]Bird|Regular|Standard|Professional|Academic|Student)"
-                    r"[^$\n]{0,40}\$[\d,]+",
+                    r"(?:Early[ -]Bird|Regular|Standard|Professional|Academic|Student|Late|Final|Onsite)"
+                    r"[^\n]{0,40}(?:[$€£¥]|\b[A-Z]{3}\b)\s?[\d,]+",
                     rt,
                 )
                 deadlines = re.findall(
@@ -398,11 +502,13 @@ def scrape_event_full(url: str) -> dict:
             **base,
             "hero_image_url": hero_image_url,
             "logo_url": logo_url,
-            "speakers": speakers[:8],
+            "speakers": speakers[:12],
             "topics": topics[:6],
             "sponsors": sponsors[:10],
             "registration": reg_details,
             "links": links,          # {register, sponsor, cfp, schedule, venue}
+            "audience": audience,     # "Who Should Attend" bullets, [] if not found
+            "inclusions": inclusions, # "What's Included" bullets, [] if not found
         }
 
     except Exception:
@@ -413,6 +519,8 @@ def scrape_event_full(url: str) -> dict:
             "speakers": [],
             "topics": [],
             "sponsors": [],
+            "audience": [],
+            "inclusions": [],
             "registration": {},
             "links": {},
         }
