@@ -48,9 +48,13 @@ def generate_email_content(stage: str, event_data: dict) -> dict:
         template["content_prompt"],
         event_data
     )
+    # AI Template variant (Variant A) style rules — urgency/FOMO, specific copy,
+    # clear CTA, bullets over paragraphs, no em dashes. Overrides any conflicting
+    # "no urgency" wording in the per-stage content_prompt above.
+    content_prompt = f"{content_prompt}\n\n{templates.AI_VARIANT_STYLE_RULES}"
 
     # Generate subject line
-    subject = generate_subject_line(template, event_data)
+    subject = templates.strip_em_dashes(generate_subject_line(template, event_data))
 
     try:
         log.info(f"Generating {stage} email content for {event_data.get('event_name')}")
@@ -67,7 +71,7 @@ def generate_email_content(stage: str, event_data: dict) -> dict:
             ]
         )
 
-        body = message.content[0].text if message.content else ""
+        body = templates.strip_em_dashes(message.content[0].text if message.content else "")
 
         return {
             "stage": stage,

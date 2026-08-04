@@ -1,0 +1,275 @@
+{
+  "Event Announcement": {
+    "stage_number": 1,
+    "timeline": "Month 1, Week 1",
+    "marketing_strategy": "Save-the-date email, website live, social launch, newsletter feature | Expected Performance: 25-30% OR, 3-5% CTR | Budget: $5K awareness campaigns | A/B test send times (9am vs 2pm)",
+    "content_ideas": [
+      "Blog post announcing event with embedded video teaser",
+      "Animated social graphics with date/location",
+      "Newsletter banner with countdown timer",
+      "Partner toolkit for amplification",
+      "Press release to tech media",
+      "Teaser video from past event highlights"
+    ],
+    "industry_best_practices": {
+      "structure": "Lead with the what/when/where hook in the first line, back it with one social-proof number (past attendance, speaker count) before secondary detail; subject lines name the event + a concrete driver (\"Speak at KubeCon: CFP now open\") rather than vague teasers.",
+      "cta_guidance": "One primary CTA per email as a specific verb (\"Submit a Proposal,\" \"Reserve Your Spot\") — not \"Learn More\"; secondary links (venue, travel grants) stay de-emphasized text links, not competing buttons.",
+      "urgency_fomo_tactics": "No real deadline yet, so FOMO comes from momentum/scarcity-of-opportunity (CFP close date, \"limited speaking slots,\" early-bird cutoff) plus social proof (\"2,347 already registered\") — never a manufactured countdown.",
+      "specificity_notes": "Insist on named past speakers or a real quote, exact (not rounded) past-year attendance figures, and concrete submission guidelines (themes, formats) instead of \"share your expertise\" filler."
+    }
+  },
+  "CFP Launch": {
+    "stage_number": 2,
+    "timeline": "Month 1, Week 2",
+    "marketing_strategy": "CFP email blast, blog post, speaker outreach, social campaign, influencer DMs | Expected Performance: 18-22% OR, 8-12% CTR (high intent) | Budget: $3K targeted speaker outreach | Segment by: past speakers, CFP submitters, GitHub contributors",
+    "content_ideas": [
+      "CFP blog with topic wishlist & trending themes",
+      "Speaker testimonial video series ('Why I Spoke at [Event]')",
+      "Twitter/LinkedIn campaign with past speaker quotes & session clips",
+      "Community Slack/Discord announcements with @here mentions",
+      "Email to GitHub contributors of popular CNCF projects",
+      "AMA session on Reddit/HackerNews",
+      "Podcast appearances on devops/cloud shows"
+    ],
+    "industry_best_practices": {
+      "structure": "Lead with the what/when/where hook in the first line, back it with one social-proof number (past attendance, speaker count) before secondary detail; subject lines name the event + a concrete driver (\"Speak at KubeCon: CFP now open\") rather than vague teasers.",
+      "cta_guidance": "One primary CTA per email as a specific verb (\"Submit a Proposal,\" \"Reserve Your Spot\") — not \"Learn More\"; secondary links (venue, travel grants) stay de-emphasized text links, not competing buttons.",
+      "urgency_fomo_tactics": "No real deadline yet, so FOMO comes from momentum/scarcity-of-opportunity (CFP close date, \"limited speaking slots,\" early-bird cutoff) plus social proof (\"2,347 already registered\") — never a manufactured countdown.",
+      "specificity_notes": "Insist on named past speakers or a real quote, exact (not rounded) past-year attendance figures, and concrete submission guidelines (themes, formats) instead of \"share your expertise\" filler."
+    }
+  },
+  "Registration Launch": {
+    "stage_number": 3,
+    "timeline": "Month 1, Week 3-4",
+    "marketing_strategy": "Registration announcement, early bird pricing, partner amplification, paid ads TOFU→MOFU, retargeting site visitors | Expected Performance: 35-40% OR, 12-18% CTR, 8-12% conversion | Budget: $15K (largest spend — peak conversion period) | A/B test: discount messaging vs value messaging",
+    "content_ideas": [
+      "Animated countdown timer graphics for social (Instagram Stories, Twitter)",
+      "Group discount promo video",
+      "Scholarship announcement blog post",
+      "Paid social ads targeting past attendees & lookalikes",
+      "Partner co-marketing emails with custom discount codes",
+      "Boss approval kit landing page",
+      "Influencer partnerships (send free tickets to tech influencers for promotion)",
+      "Early bird reminder email series (7 days, 3 days, 24 hours, 6 hours)"
+    ],
+    "industry_best_practices": {
+      "structure": "Lead with the what/when/where hook in the first line, back it with one social-proof number (past attendance, speaker count) before secondary detail; subject lines name the event + a concrete driver (\"Speak at KubeCon: CFP now open\") rather than vague teasers.",
+      "cta_guidance": "One primary CTA per email as a specific verb (\"Submit a Proposal,\" \"Reserve Your Spot\") — not \"Learn More\"; secondary links (venue, travel grants) stay de-emphasized text links, not competing buttons.",
+      "urgency_fomo_tactics": "No real deadline yet, so FOMO comes from momentum/scarcity-of-opportunity (CFP close date, \"limited speaking slots,\" early-bird cutoff) plus social proof (\"2,347 already registered\") — never a manufactured countdown.",
+      "specificity_notes": "Insist on named past speakers or a real quote, exact (not rounded) past-year attendance figures, and concrete submission guidelines (themes, formats) instead of \"share your expertise\" filler."
+    }
+  },
+  "Co-Located Events + CFP Reminder": {
+    "stage_number": 4,
+    "timeline": "Month 2, Week 5-6",
+    "marketing_strategy": "Co-located event announcements, bundled registration, CFP deadline reminders, value prop reinforcement | Expected Performance: 28-32% OR, 10-14% CTR | Budget: $8K (value-add messaging) | Target: Registration abandoners, fence-sitters",
+    "content_ideas": [
+      "Co-located event deep-dive blog posts (one per event)",
+      "CFP deadline countdown social media series",
+      "Speaker submission tips email series",
+      "Partner cross-promotion toolkit",
+      "Retargeting ads emphasizing value (6 events for 1 price)",
+      "Comparison chart showing value vs competitors",
+      "Video interviews with co-located event organizers",
+      "Reddit AMA about co-located tracks"
+    ],
+    "industry_best_practices": {
+      "structure": "Lead with the what/when/where hook in the first line, back it with one social-proof number (past attendance, speaker count) before secondary detail; subject lines name the event + a concrete driver (\"Speak at KubeCon: CFP now open\") rather than vague teasers.",
+      "cta_guidance": "One primary CTA per email as a specific verb (\"Submit a Proposal,\" \"Reserve Your Spot\") — not \"Learn More\"; secondary links (venue, travel grants) stay de-emphasized text links, not competing buttons.",
+      "urgency_fomo_tactics": "No real deadline yet, so FOMO comes from momentum/scarcity-of-opportunity (CFP close date, \"limited speaking slots,\" early-bird cutoff) plus social proof (\"2,347 already registered\") — never a manufactured countdown.",
+      "specificity_notes": "Insist on named past speakers or a real quote, exact (not rounded) past-year attendance figures, and concrete submission guidelines (themes, formats) instead of \"share your expertise\" filler."
+    }
+  },
+  "DEI & Travel Fund": {
+    "stage_number": 5,
+    "timeline": "Month 2, Week 7",
+    "marketing_strategy": "DEI scholarship emails, LFX Portal live, community spotlights, travel fund promotion, grassroots outreach | Expected Performance: 22-26% OR, 15-20% CTR (highly targeted) | Budget: $2K (community partnership ads) | Focus on mission-driven conversion",
+    "content_ideas": [
+      "DEI spotlight video interview series (past recipients)",
+      "Blog: 'How Scholarships Changed My Open Source Journey'",
+      "LFX mentorship program tie-in",
+      "Partnership outreach: Women Who Code, Black Girls Code, Out in Tech, Lesbians Who Tech",
+      "Community partner social media toolkit",
+      "Reddit AMA with DEI committee",
+      "Podcast appearances on diversity in tech shows",
+      "University/bootcamp email partnerships"
+    ],
+    "industry_best_practices": {
+      "structure": "Lead with the what/when/where hook in the first line, back it with one social-proof number (past attendance, speaker count) before secondary detail; subject lines name the event + a concrete driver (\"Speak at KubeCon: CFP now open\") rather than vague teasers.",
+      "cta_guidance": "One primary CTA per email as a specific verb (\"Submit a Proposal,\" \"Reserve Your Spot\") — not \"Learn More\"; secondary links (venue, travel grants) stay de-emphasized text links, not competing buttons.",
+      "urgency_fomo_tactics": "No real deadline yet, so FOMO comes from momentum/scarcity-of-opportunity (CFP close date, \"limited speaking slots,\" early-bird cutoff) plus social proof (\"2,347 already registered\") — never a manufactured countdown.",
+      "specificity_notes": "Insist on named past speakers or a real quote, exact (not rounded) past-year attendance figures, and concrete submission guidelines (themes, formats) instead of \"share your expertise\" filler."
+    }
+  },
+  "Schedule Announcement": {
+    "stage_number": 6,
+    "timeline": "Month 2, Week 8-9",
+    "marketing_strategy": "Agenda page live, speaker announcements, session highlights, social graphics, press release | Expected Performance: 30-35% OR, 10-15% CTR | Budget: $10K (re-engage warm leads) | A/B test: keynote-focused vs session-focused messaging",
+    "content_ideas": [
+      "Speaker spotlight social series",
+      "Track-by-track blog breakdowns",
+      "Press release for media",
+      "Influencer outreach",
+      "Session highlight reels",
+      "Speaker AMA sessions",
+      "LinkedIn Live schedule walkthrough"
+    ],
+    "industry_best_practices": {
+      "structure": "Lead with the what/when/where hook in the first line, back it with one social-proof number (past attendance, speaker count) before secondary detail; subject lines name the event + a concrete driver (\"Speak at KubeCon: CFP now open\") rather than vague teasers.",
+      "cta_guidance": "One primary CTA per email as a specific verb (\"Submit a Proposal,\" \"Reserve Your Spot\") — not \"Learn More\"; secondary links (venue, travel grants) stay de-emphasized text links, not competing buttons.",
+      "urgency_fomo_tactics": "No real deadline yet, so FOMO comes from momentum/scarcity-of-opportunity (CFP close date, \"limited speaking slots,\" early-bird cutoff) plus social proof (\"2,347 already registered\") — never a manufactured countdown.",
+      "specificity_notes": "Insist on named past speakers or a real quote, exact (not rounded) past-year attendance figures, and concrete submission guidelines (themes, formats) instead of \"share your expertise\" filler."
+    }
+  },
+  "Main Registration Push": {
+    "stage_number": 7,
+    "timeline": "Month 3, Week 10-11",
+    "marketing_strategy": "Paid ads BoFU, retargeting campaigns, speaker-generated content, partner emails, urgency messaging | Expected Performance: 35-40% OR, 18-22% CTR | Budget: $18K (peak BOFU conversion) | A/B test: urgency vs social proof messaging",
+    "content_ideas": [
+      "Attendee testimonial videos (30s clips)",
+      "ROI calculator landing page",
+      "Boss justification letter template",
+      "Retargeting ads with live countdown timer",
+      "Partner reminder emails",
+      "Speaker-generated content (personal invites)",
+      "Early bird deadline countdown social posts",
+      "LinkedIn Live Q&A with past attendees"
+    ],
+    "industry_best_practices": {
+      "structure": "Subject line carries the time pressure directly with a specific number (\"5 hours left,\" \"Registration closes tonight\"); body opens with the deadline/price change, states the one action, reinforces with a second lighter urgency cue near the CTA.",
+      "cta_guidance": "Exactly one CTA, imperative and time-bound (\"Register Before Midnight,\" \"Lock In Your Rate\") — a single hard CTA is non-negotiable here.",
+      "urgency_fomo_tactics": "Real tiered pricing that actually increases, genuine capacity caps (\"only 40 seats left\" — must stay true), escalating 4-email cadence (teaser → offer → countdown → last-chance), attendee/company social proof. Never state false scarcity.",
+      "specificity_notes": "Use the actual price delta, actual seat/ticket counts, exact date/time with timezone, named confirmed speakers/sessions for that week."
+    }
+  },
+  "Final Countdown": {
+    "stage_number": 8,
+    "timeline": "Month 3, Week 12-14",
+    "marketing_strategy": "Last chance emails, registration deadline CTAs, social reminders, FOMO messaging | Expected Performance: 28-32% OR, 15-20% CTR | Budget: $8K (final conversion push) | A/B test: FOMO vs last-chance urgency",
+    "content_ideas": [
+      "Hourly countdown social posts",
+      "FOMO video content ('What You'll Miss')",
+      "Last-minute email series (48hr, 24hr, 6hr warnings)",
+      "Aggressive cart abandonment retargeting",
+      "LinkedIn testimonial bombardment",
+      "Speaker call-to-action posts ('Hope to see you there!')",
+      "Community FOMO posts"
+    ],
+    "industry_best_practices": {
+      "structure": "Subject line carries the time pressure directly with a specific number (\"5 hours left,\" \"Registration closes tonight\"); body opens with the deadline/price change, states the one action, reinforces with a second lighter urgency cue near the CTA.",
+      "cta_guidance": "Exactly one CTA, imperative and time-bound (\"Register Before Midnight,\" \"Lock In Your Rate\") — a single hard CTA is non-negotiable here.",
+      "urgency_fomo_tactics": "Real tiered pricing that actually increases, genuine capacity caps (\"only 40 seats left\" — must stay true), escalating 4-email cadence (teaser → offer → countdown → last-chance), attendee/company social proof. Never state false scarcity.",
+      "specificity_notes": "Use the actual price delta, actual seat/ticket counts, exact date/time with timezone, named confirmed speakers/sessions for that week."
+    }
+  },
+  "Event Week": {
+    "stage_number": 9,
+    "timeline": "Month 4, Week 15-16",
+    "marketing_strategy": "Daily emails, app usage, onsite signage, live social coverage | Expected Performance: 55-65% OR (attendees), 80%+ app downloads | Budget: $2K (FOMO ads for next event) | Focus: Attendee experience + future demand generation",
+    "content_ideas": [
+      "Daily highlight emails (morning agenda + evening recap)",
+      "Live social coverage (Instagram Stories, LinkedIn updates, Twitter/X live-tweeting)",
+      "App push notifications (session reminders, breaking news, networking opportunities)",
+      "Onsite digital signage content (wayfinding, session alerts, sponsor highlights)",
+      "Photo booth prompts with branded frames",
+      "Live-streaming keynotes",
+      "Real-time session recordings upload",
+      "Speaker takeovers on social",
+      "Attendee-generated content campaigns",
+      "Daily video recaps"
+    ],
+    "industry_best_practices": {
+      "structure": "Subject line carries the time pressure directly with a specific number (\"5 hours left,\" \"Registration closes tonight\"); body opens with the deadline/price change, states the one action, reinforces with a second lighter urgency cue near the CTA.",
+      "cta_guidance": "Exactly one CTA, imperative and time-bound (\"Register Before Midnight,\" \"Lock In Your Rate\") — a single hard CTA is non-negotiable here.",
+      "urgency_fomo_tactics": "Real tiered pricing that actually increases, genuine capacity caps (\"only 40 seats left\" — must stay true), escalating 4-email cadence (teaser → offer → countdown → last-chance), attendee/company social proof. Never state false scarcity.",
+      "specificity_notes": "Use the actual price delta, actual seat/ticket counts, exact date/time with timezone, named confirmed speakers/sessions for that week."
+    }
+  },
+  "Thank You + Survey": {
+    "stage_number": 10,
+    "timeline": "Day 1-3 Post-Event",
+    "marketing_strategy": "Thank you email, survey request, session recordings preview | Expected Performance: 45-50% OR, 20-25% survey completion | Budget: $1K (retarget non-attendees) | Focus: Feedback collection + maintain momentum",
+    "content_ideas": [
+      "Thank you social posts with attendee photos",
+      "Survey incentive promotion (highlight prize)",
+      "Photo gallery launch with best-of compilation",
+      "Highlight reel video (3-5 min recap)",
+      "Attendee testimonial video compilation",
+      "Speaker thank you posts",
+      "Sponsor thank you posts",
+      "Community impact stats infographic ('By the numbers: X sessions, Y countries, Z connections made')"
+    ],
+    "industry_best_practices": {
+      "structure": "Thank-you within 24 hours, warm/authentic tone; survey ask follows 2-3 days later (own email or combined); recordings/content release is a separate wave 1-2 weeks out, built around a video thumbnail/highlight reel, not a plain link.",
+      "cta_guidance": "One next-best action per email (\"Take the Survey,\" \"Watch the Replay\") — CTA copy matches the content type; a visible video thumbnail near the CTA meaningfully lifts click rate.",
+      "urgency_fomo_tactics": "No real deadline — replace urgency with reciprocity/incentive framing (survey-completion incentive) and segment attendees vs. no-shows (\"you missed X, here's the recording\" FOMO-lite for no-shows).",
+      "specificity_notes": "Reference concrete session names, real attendee/session counts, a specific highlight moment or real quote/photo — avoid generic \"what a great event\" copy."
+    }
+  },
+  "Content & Recordings Release": {
+    "stage_number": 11,
+    "timeline": "Week 1-2 Post-Event",
+    "marketing_strategy": "Session replay emails, blog recaps, highlight content | Expected Performance: 40-45% OR, 25-30% CTR to recordings | Budget: $3K (content promotion + non-attendee upsell) | Focus: Value delivery + next-year demand gen",
+    "content_ideas": [
+      "Top 10 sessions blog series (by track)",
+      "Speaker interview follow-ups (video/podcast)",
+      "Key announcements roundup with technical deep-dives",
+      "Community award highlights with winner interviews",
+      "Session recommendation quiz ('Find your perfect session based on your role')",
+      "Curated playlists by role/topic",
+      "'Most controversial take' session highlights",
+      "Blog series: 'Implementing [Event] learnings in production'"
+    ],
+    "industry_best_practices": {
+      "structure": "Thank-you within 24 hours, warm/authentic tone; survey ask follows 2-3 days later (own email or combined); recordings/content release is a separate wave 1-2 weeks out, built around a video thumbnail/highlight reel, not a plain link.",
+      "cta_guidance": "One next-best action per email (\"Take the Survey,\" \"Watch the Replay\") — CTA copy matches the content type; a visible video thumbnail near the CTA meaningfully lifts click rate.",
+      "urgency_fomo_tactics": "No real deadline — replace urgency with reciprocity/incentive framing (survey-completion incentive) and segment attendees vs. no-shows (\"you missed X, here's the recording\" FOMO-lite for no-shows).",
+      "specificity_notes": "Reference concrete session names, real attendee/session counts, a specific highlight moment or real quote/photo — avoid generic \"what a great event\" copy."
+    }
+  },
+  "Next Event CFP Teaser": {
+    "stage_number": 12,
+    "timeline": "Week 3-4 Post-Event",
+    "marketing_strategy": "Teaser for next edition, CFP early access, community re-engagement | Expected Performance: 35-40% OR, 15-20% CTR | Budget: $2K (demand gen for next edition) | Focus: Early list building + speaker pipeline",
+    "content_ideas": [
+      "Animated save the date graphics",
+      "Speaker interest form with topic wishlist",
+      "VIP early bird waitlist",
+      "Community survey for next-year topics",
+      "Highlights video with next-edition teaser",
+      "City/venue reveal campaign",
+      "Early venue tour video"
+    ],
+    "industry_best_practices": {
+      "structure": "Light, predictable cadence (monthly for long-horizon teasers); content reads as a community update (wins, upcoming CFP date, past-event callback), not a sales pitch.",
+      "cta_guidance": "Subtle, low-friction CTA every time (join community channel, \"note the date\") rather than a hard conversion ask — presence of a soft CTA is fine, aggressiveness is not.",
+      "urgency_fomo_tactics": "Aspirational, not clock-based — \"CFP opens [month],\" community-growth momentum framing, callbacks to what people got out of the last event.",
+      "specificity_notes": "Anchor teaser copy to one real locked detail (confirmed date/city, theme, returning speaker) instead of \"stay tuned\" filler; use real community metrics (member count, meetups, contributor stats)."
+    }
+  },
+  "Community Nurture": {
+    "stage_number": 13,
+    "timeline": "Ongoing Monthly",
+    "marketing_strategy": "Newsletter inclusion, LFX engagement, mentorship programs, year-round community | Expected Performance: 25-30% OR, 8-12% CTR | Budget: $500/month (ongoing community engagement) | Focus: Long-term relationship building",
+    "content_ideas": [
+      "Monthly newsletter with personalized content",
+      "LFX mentorship program spotlights",
+      "Technical webinar series (recorded + live Q&A)",
+      "Regional meetup support and promotion",
+      "Contributor spotlight interviews (video + written)",
+      "Project milestone celebrations",
+      "Community success stories",
+      "Career advancement resources",
+      "Open source job board highlights",
+      "Certification achievement spotlights",
+      "Diversity & inclusion initiatives",
+      "Technical blog series"
+    ],
+    "industry_best_practices": {
+      "structure": "Light, predictable cadence (monthly for long-horizon teasers); content reads as a community update (wins, upcoming CFP date, past-event callback), not a sales pitch.",
+      "cta_guidance": "Subtle, low-friction CTA every time (join community channel, \"note the date\") rather than a hard conversion ask — presence of a soft CTA is fine, aggressiveness is not.",
+      "urgency_fomo_tactics": "Aspirational, not clock-based — \"CFP opens [month],\" community-growth momentum framing, callbacks to what people got out of the last event.",
+      "specificity_notes": "Anchor teaser copy to one real locked detail (confirmed date/city, theme, returning speaker) instead of \"stay tuned\" filler; use real community metrics (member count, meetups, contributor stats)."
+    }
+  }
+}
