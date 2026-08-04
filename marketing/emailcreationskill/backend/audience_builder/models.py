@@ -18,6 +18,7 @@ class DiscoveredList(BaseModel):
     size: int | None = None
     reason: str = ""
     list_type: str = ""  # HubSpot processingType, e.g. DYNAMIC | MANUAL | SNAPSHOT — real field, not computed
+    scope: str = ""  # current | past | current_past — only meaningful when signal == event_speakers
 
 
 class ComposeMasterListRequest(BaseModel):

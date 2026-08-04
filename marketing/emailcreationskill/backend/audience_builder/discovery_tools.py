@@ -72,6 +72,11 @@ _PRESENT_DISCOVERED_LISTS_DEF = audience_tools._fn(
                         "type": "string",
                         "description": "The list's real processingType field from hubspot_get_list, verbatim (e.g. DYNAMIC, MANUAL, SNAPSHOT). Do not guess — omit if you didn't call hubspot_get_list on it.",
                     },
+                    "scope": {
+                        "type": "string",
+                        "enum": ["current", "past", "current_past"],
+                        "description": "Only meaningful when signal is 'event_speakers' — which edition(s) of the event this speaker list actually covers, per STEP 3 rule 6. Omit for every other signal.",
+                    },
                 },
                 "required": ["list_id", "name", "signal"],
             },
