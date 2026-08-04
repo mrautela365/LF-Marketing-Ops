@@ -683,6 +683,10 @@ function resetAudienceUI() {
   _audienceQA = "";
   clearAudienceQuestions("step3");
   renderExtraFilters();
+  const roleSpeakers = document.getElementById("role-filter-speakers");
+  if (roleSpeakers) roleSpeakers.checked = false;
+  const roleAmbassadors = document.getElementById("role-filter-ambassadors");
+  if (roleAmbassadors) roleAmbassadors.checked = false;
   if (typeof AudienceBuilder !== "undefined") AudienceBuilder.reset("step3");
   switchAudienceTab("event");
   clearList();
@@ -1061,6 +1065,24 @@ function _extraFiltersPlanText() {
   return `\n\n## USER-ADDED FILTERS\n${lines.join("\n")}\n`;
 }
 
+// ── Plan-review "restrict to a role" checkboxes ───────────────────────────────
+// Kept as a distinct "## ROLE FILTERS" plan section (not folded into
+// USER-ADDED FILTERS above) because the backend handling is different per role:
+// reuse-a-speakers-list-first for speakers, multi-branch OR-distribution across
+// ambassador properties for ambassadors — not a simple per-branch AND condition.
+const _ROLE_FILTER_IDS = {
+  step3:   { speakers: "role-filter-speakers",    ambassadors: "role-filter-ambassadors" },
+  builder: { speakers: "ab-role-filter-speakers", ambassadors: "ab-role-filter-ambassadors" },
+};
+
+function _roleFiltersPlanText(scope = "step3") {
+  const ids = _ROLE_FILTER_IDS[scope] || _ROLE_FILTER_IDS.step3;
+  const lines = [];
+  if (document.getElementById(ids.speakers)?.checked) lines.push("- Event speakers only");
+  if (document.getElementById(ids.ambassadors)?.checked) lines.push("- Community ambassadors only");
+  return lines.length ? `\n\n## ROLE FILTERS\n${lines.join("\n")}\n` : "";
+}
+
 function _masterListLinkHtml(mid, url) {
   return url
     ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener">List ID ${escapeHtml(mid)}</a>`
@@ -1339,7 +1361,7 @@ async function approveAudiencePlan() {
   ticker.textContent += "\n── Building approved plan ──\n";
   ticker.scrollTop = ticker.scrollHeight;
 
-  const planWithExtras = _audiencePlanText + _extraFiltersPlanText();
+  const planWithExtras = _audiencePlanText + _extraFiltersPlanText() + _roleFiltersPlanText("step3");
 
   let jobId = null;
   try {
@@ -1510,7 +1532,7 @@ async function approveCustomAudiencePlan(scope = "step3") {
       body: JSON.stringify({
         request: _customAudienceRequest,
         session_id: standalone ? "" : sessionId,
-        plan: _customAudiencePlanText + _extraFiltersPlanText(),
+        plan: _customAudiencePlanText + _extraFiltersPlanText() + _roleFiltersPlanText(scope),
         qa: _audienceQA,
       }),
     });
@@ -1553,7 +1575,7 @@ async function approveCustomAudiencePlan(scope = "step3") {
         let _abSignal = null;
         if ((scope === "builder" || scope === "step3") && typeof AudienceBuilder !== "undefined") {
           const sub = _subLists.find(s => s.id === String(mid));
-          _abSignal = AudienceBuilder.onCustomListBuilt({ list_id: mid, name: sub && sub.name }, scope);
+          _abSignal = AudienceBuilder.onCustomListBuilt({ list_id: mid, name: sub && sub.name, hubspot_url: msg.master_list_url }, scope);
         }
 
         if (statusEl) {
@@ -1614,7 +1636,7 @@ async function runDirectSignalBuild(request, scope = "builder") {
   const fail = (message) => {
     if (badge)    { badge.textContent = "⚠ Build failed — " + escapeHtml(message); badge.style.color = "#dc2626"; }
     if (buildBtn) buildBtn.disabled = false;
-    if ((scope === "builder" || scope === "step3") && typeof AudienceBuilder !== "undefined") AudienceBuilder.onCustomBuildFailed(scope);
+    if ((scope === "builder" || scope === "step3") && typeof AudienceBuilder !== "undefined") AudienceBuilder.onCustomBuildFailed(scope, message);
   };
 
   const standalone = !sessionId;
@@ -1661,7 +1683,7 @@ async function runDirectSignalBuild(request, scope = "builder") {
       let _abSignal = null;
       if ((scope === "builder" || scope === "step3") && typeof AudienceBuilder !== "undefined") {
         const sub = _subLists.find(s => s.id === String(mid));
-        _abSignal = AudienceBuilder.onCustomListBuilt({ list_id: mid, name: sub && sub.name }, scope);
+        _abSignal = AudienceBuilder.onCustomListBuilt({ list_id: mid, name: sub && sub.name, hubspot_url: msg.master_list_url }, scope);
       }
 
       if (statusEl) {

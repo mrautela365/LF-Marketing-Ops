@@ -19,35 +19,48 @@ const AudienceBuilder = (() => {
     event_registration: "Event Registration",
     education_enrollment: "Education Enrollment",
     page_view: "Page View",
+    event_speakers: "Event Speakers",
     uncertain: "Uncertain",
     added: "Manually Added",
   };
+
+  // Every prompt below ends with the same explicit no-suppression instruction:
+  // these are single-signal inclusion lists built one at a time from the
+  // Discover/Reuse "Qualifying Lists Not Found" panel, not the final send
+  // audience. Suppressions must be applied exactly once, later, on the master
+  // list that combines these — never baked into an individual signal list here.
+  const _NO_SUPPRESSION_NOTE = " This is a single inclusion list for one signal only — it will be combined into a master audience later. Do not add any suppression filters or a Combined Suppression list to it; suppressions apply only at the master-list level.";
 
   const SIGNAL_INFO = {
     project_opt_in: {
       label: "Project Opt-In",
       description: "Contacts opted into this project's own email subscription type (not the general LF newsletter).",
-      prompt: (eventUrl) => `Build a list of contacts opted into this project's own email subscription type (project-specific opt-in, not the general Linux Foundation newsletter) for the event at ${eventUrl}.`,
+      prompt: (eventUrl) => `Build a list of contacts opted into this project's own email subscription type (project-specific opt-in, not the general Linux Foundation newsletter) for the event at ${eventUrl}.${_NO_SUPPRESSION_NOTE}`,
     },
     lf_newsletter_opt_in: {
       label: "LF Newsletter Opt-In",
       description: "Contacts opted into the Linux Foundation Newsletter subscription type.",
-      prompt: (eventUrl) => `Build a list of contacts opted into the Linux Foundation Newsletter subscription type, relevant to the event at ${eventUrl}.`,
+      prompt: (eventUrl) => `Build a list of contacts opted into the Linux Foundation Newsletter subscription type, relevant to the event at ${eventUrl}.${_NO_SUPPRESSION_NOTE}`,
     },
     event_registration: {
       label: "Event Registration",
       description: "All-time registrants for this event, across all past editions.",
-      prompt: (eventUrl) => `Build a list of all-time registrants (all editions) for the event at ${eventUrl}.`,
+      prompt: (eventUrl) => `Build a list of all-time registrants (all editions) for the event at ${eventUrl}.${_NO_SUPPRESSION_NOTE}`,
     },
     education_enrollment: {
       label: "Education Enrollment",
       description: "Contacts enrolled in LFX Education courses related to this event's topic area.",
-      prompt: (eventUrl) => `Build a list of contacts enrolled in LFX Education courses related to the topic area of the event at ${eventUrl}.`,
+      prompt: (eventUrl) => `Build a list of contacts enrolled in LFX Education courses related to the topic area of the event at ${eventUrl}.${_NO_SUPPRESSION_NOTE}`,
     },
     page_view: {
       label: "Page View",
       description: "Contacts who viewed this event's page (page-view based segment).",
-      prompt: (eventUrl) => `Build a page-view based list of contacts who viewed the event page at ${eventUrl}.`,
+      prompt: (eventUrl) => `Build a page-view based list of contacts who viewed the event page at ${eventUrl}.${_NO_SUPPRESSION_NOTE}`,
+    },
+    event_speakers: {
+      label: "Event Speakers",
+      description: "Contacts who are speakers for this event specifically, not all registrants.",
+      prompt: (eventUrl) => `Build a list of contacts who are speakers (not general registrants) for the event at ${eventUrl}.${_NO_SUPPRESSION_NOTE}`,
     },
   };
 
@@ -58,6 +71,7 @@ const AudienceBuilder = (() => {
   const SIGNAL_ORDER = [
     "last_sent",
     "event_registration",
+    "event_speakers",
     "project_opt_in",
     "lf_newsletter_opt_in",
     "education_enrollment",
@@ -72,6 +86,7 @@ const AudienceBuilder = (() => {
     event_registration: "All-time registrants for this event",
     education_enrollment: "Enrolled in related education content",
     page_view: "Viewed this event's page",
+    event_speakers: "Speakers for this event specifically",
     uncertain: "Needs manual review before including",
     added: "Manually added via search",
   };
@@ -82,6 +97,7 @@ const AudienceBuilder = (() => {
     event_registration: "#166534",
     education_enrollment: "var(--yellow)",
     page_view: "#be185d",
+    event_speakers: "#c2410c",
     uncertain: "var(--gray-400)",
     added: "var(--gray-500)",
   };
@@ -186,6 +202,10 @@ const AudienceBuilder = (() => {
       // purely informational, so the user can check whether one is still
       // current before building a new one.
       existingMasterLists: [],
+      // Last direct-build failure for a missing signal, so renderMissingSignals
+      // can show it inline on that card instead of relying on the (now hidden,
+      // since we stay on this tab) Custom Audience tab's own status badge.
+      buildError: null, // { signal, message } | null
     };
   }
   const _states = { builder: _newState(), step3: _newState() };
@@ -346,6 +366,8 @@ const AudienceBuilder = (() => {
     const selected = st.selected.has(id);
     const usedLastSent = st.lastSentIncludedIds.has(id)
       ? `<span class="ab-lastsent-badge" title="Used in a past send for this event">📧 Used last time</span>` : "";
+    const newBadge = c.justCreated
+      ? `<span class="ab-newlycreated-badge" title="Built just now in this session">✨ Newly created</span>` : "";
     const stats = [
       { label: "Contacts", value: c.size != null ? Number(c.size).toLocaleString() : "—" },
     ];
@@ -355,15 +377,19 @@ const AudienceBuilder = (() => {
         <div class="ab-stat-label">${escapeHtml(s.label)}</div>
         <div class="ab-stat-value">${escapeHtml(String(s.value))}</div>
       </div>`).join("");
+    const hubspotLink = c.hubspot_url
+      ? `<a class="ab-hubspot-link" href="${escapeHtml(c.hubspot_url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">View in HubSpot ↗</a>` : "";
     return `
-      <div class="ab-card${selected ? " selected" : ""}" onclick="AudienceBuilder.toggleCard('${id}','${scope}')">
+      <div class="ab-card${selected ? " selected" : ""}${c.justCreated ? " ab-card-new" : ""}" onclick="AudienceBuilder.toggleCard('${id}','${scope}')">
         <div class="ab-card-top">
           <span class="ab-card-check"></span>
+          ${newBadge}
         </div>
         <div class="ab-card-name">${escapeHtml(c.name || "(untitled list)")}</div>
         <div class="ab-card-meta"><span>ID ${escapeHtml(id)}</span>${usedLastSent}</div>
         <div class="ab-stat-row">${statsHtml}</div>
         ${c.reason ? `<div class="ab-card-reason">${escapeHtml(c.reason)}</div>` : ""}
+        ${hubspotLink}
       </div>`;
   }
 
@@ -411,12 +437,15 @@ const AudienceBuilder = (() => {
     grid.innerHTML = st.missingSignals.map(sig => {
       const info = SIGNAL_INFO[sig] || { label: sig, description: "" };
       const building = st.buildingSignals.has(sig);
+      const errorHtml = (st.buildError && st.buildError.signal === sig)
+        ? `<div class="ab-card-reason" style="border-top:none;padding-top:0;margin-top:6px;color:#dc2626">⚠ ${escapeHtml(st.buildError.message)}</div>` : "";
       return `
         <div class="ab-card ab-card-missing">
           <div class="ab-card-top">
             <span class="ab-signal-badge ab-signal-${escapeHtml(sig)}">${escapeHtml(info.label)}</span>
           </div>
           <div class="ab-card-reason" style="border-top:none;padding-top:0;margin-top:0">${escapeHtml(info.description)}</div>
+          ${errorHtml}
           <div class="btn-row" style="margin-top:10px">
             <button class="btn btn-outline" type="button" ${building ? "disabled" : ""} onclick="AudienceBuilder.createMissingSignal('${sig}','${scope}')">${building ? "Building…" : "Create list"}</button>
           </div>
@@ -430,15 +459,19 @@ const AudienceBuilder = (() => {
   // list" skips the plan-generation/review step entirely and calls
   // runDirectSignalBuild() (app.js) to build straight from a pre-set request,
   // via /api/audience/custom-run with an empty plan (chains planning+building
-  // in one job, no approval gate). For scope="step3" this targets Step 3's own
-  // "Custom Audience" sub-tab (see _AUD_UI_SCOPES.step3 in app.js), so we also
-  // switch that tab into view.
+  // in one job, no approval gate). Deliberately stays on THIS tab throughout —
+  // the request textarea is filled behind the scenes so runDirectSignalBuild
+  // has something to send, but we never switch to the Custom Audience sub-tab;
+  // progress/result surface inline on the missing-signal card itself (via
+  // renderMissingSignals' "Building…" state and onCustomListBuilt/
+  // onCustomBuildFailed below).
   async function createMissingSignal(signalKey, scope = "builder") {
     const ids = _ids(scope), st = _st(scope);
     const info = SIGNAL_INFO[signalKey];
     if (!info || st.buildingSignals.has(signalKey)) return;
     st.pendingMissingSignal = signalKey;
     st.buildingSignals.add(signalKey);
+    if (st.buildError && st.buildError.signal === signalKey) st.buildError = null;
     renderMissingSignals(st.missingSignals, scope);
 
     const urlInput = document.getElementById(ids.eventUrl);
@@ -446,9 +479,6 @@ const AudienceBuilder = (() => {
     const request = info.prompt(eventUrl);
     const textarea = document.getElementById(ids.customRequest);
     if (textarea) textarea.value = request;
-    if (scope === "step3" && typeof switchAudienceTab === "function") switchAudienceTab("custom");
-    const ticker = document.getElementById(ids.customTicker);
-    (ticker || textarea)?.scrollIntoView({ behavior: "smooth", block: "center" });
 
     if (typeof runDirectSignalBuild === "function") {
       await runDirectSignalBuild(request, scope);
@@ -457,11 +487,12 @@ const AudienceBuilder = (() => {
 
   // Called by app.js's runDirectSignalBuild() (scope="builder"/"step3" only)
   // once a directly-built list finishes. Folds the new list straight into the
-  // discovery grid — selected, under its signal — instead of leaving it
+  // discovery grid — selected, under its signal, flagged justCreated so
+  // _cardHtml can highlight it and link out to HubSpot — instead of leaving it
   // stranded only in the Build From Scratch result panel. Returns the signal
   // key it attached to, or null if this build wasn't for a missing signal (so
   // app.js's confirmation message can vary accordingly).
-  function onCustomListBuilt({ list_id, name }, scope = "builder") {
+  function onCustomListBuilt({ list_id, name, hubspot_url }, scope = "builder") {
     const st = _st(scope);
     const signal = st.pendingMissingSignal;
     st.pendingMissingSignal = null;
@@ -476,6 +507,8 @@ const AudienceBuilder = (() => {
         signal,
         size: null,
         reason: "Created via Build From Scratch",
+        hubspot_url: hubspot_url || "",
+        justCreated: true,
       });
     }
     st.selected.add(id);
@@ -489,12 +522,17 @@ const AudienceBuilder = (() => {
 
   // Called by app.js's runDirectSignalBuild() when a direct build fails —
   // clears the in-flight state so the missing-signal card's button resets to
-  // "Create list" instead of staying stuck on "Building…".
-  function onCustomBuildFailed(scope = "builder") {
+  // "Create list" instead of staying stuck on "Building…", and surfaces the
+  // failure reason inline on that card (we no longer switch to the Custom
+  // Audience tab, whose own status badge would otherwise have shown this).
+  function onCustomBuildFailed(scope = "builder", message = "") {
     const st = _st(scope);
     const signal = st.pendingMissingSignal;
     st.pendingMissingSignal = null;
-    if (signal) st.buildingSignals.delete(signal);
+    if (signal) {
+      st.buildingSignals.delete(signal);
+      st.buildError = { signal, message: message || "Build failed — see Custom Audience log" };
+    }
     renderMissingSignals(st.missingSignals, scope);
   }
 
@@ -1015,6 +1053,11 @@ const AudienceBuilder = (() => {
 
     const buildBtn = document.getElementById("ab-custom-build-btn");
     if (buildBtn) buildBtn.disabled = false;
+
+    const roleSpeakers = document.getElementById("ab-role-filter-speakers");
+    if (roleSpeakers) roleSpeakers.checked = false;
+    const roleAmbassadors = document.getElementById("ab-role-filter-ambassadors");
+    if (roleAmbassadors) roleAmbassadors.checked = false;
   }
 
   return {

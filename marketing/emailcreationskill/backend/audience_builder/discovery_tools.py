@@ -35,7 +35,7 @@ _PRESENT_DISCOVERED_LISTS_DEF = audience_tools._fn(
     "present_discovered_lists",
     "Present the final set of discovered HubSpot lists for user selection. Call this "
     "exactly ONCE, after you have investigated the event and classified every relevant "
-    "existing list into one of the 5 signal buckets (or into 'uncertain' if it doesn't "
+    "existing list into one of the 6 signal buckets (or into 'uncertain' if it doesn't "
     "confidently fit). This is a read-only discovery pass — you have no tool that can "
     "create or modify a HubSpot list, so do not attempt to.",
     {
@@ -49,7 +49,7 @@ _PRESENT_DISCOVERED_LISTS_DEF = audience_tools._fn(
         },
         "lists": {
             "type": "array",
-            "description": "Every existing HubSpot list confidently matched to one of the 5 signals.",
+            "description": "Every existing HubSpot list confidently matched to one of the 6 signals.",
             "items": {
                 "type": "object",
                 "properties": {
@@ -63,6 +63,7 @@ _PRESENT_DISCOVERED_LISTS_DEF = audience_tools._fn(
                             "event_registration",
                             "education_enrollment",
                             "page_view",
+                            "event_speakers",
                         ],
                     },
                     "size": {"type": "integer", "description": "Membership count, if known."},

@@ -940,6 +940,91 @@ RULE 11 — USER-ADDED FILTERS. If the Segment Plan below contains a
   isn't a real HubSpot contact property, do NOT guess a similar-sounding one — skip
   it and add to ## FLAGGED FOR REVIEW with reason "unknown property".
 
+RULE 12 — ROLE FILTERS. If the Segment Plan below contains a "## ROLE FILTERS"
+  section, apply EACH listed restriction to EVERY inclusion list's AND branch(es)
+  built in STEP 4 (never to the Combined Suppression list):
+  - "Event speakers only": call hubspot_search_lists for a list named like
+    "[event name] Speakers" (same reuse-first pattern as RULE 10). If found, AND an
+    IN_LIST filter on that list's ID into every inclusion branch. If no exact-name
+    match is found, do NOT go researching OTHER events' speaker lists as precedent
+    — many are genuinely MANUAL/Sessionize-curated, but that tells you nothing
+    about THIS event, and hubspot_create_list cannot import a CSV of speaker
+    emails, so creating an empty MANUAL placeholder is strictly worse than the
+    dynamic approximation below and must not be offered as the result. Do NOT use
+    the hosted_events property either (it's a legacy, sparsely-updated enum) —
+    instead build the restriction from the SAME fixed portal-wide "Event
+    Registered" eventTypeId "6-48984571" already used for past-registrant lists in
+    STEP 4 groups 1/5/7. That event type carries per-registrant properties
+    registration_type (string; speaker values are "Speaker" and "Speaker - User" —
+    match with CONTAINS_TOKEN "Speaker") and a speaker flag that different
+    events/source systems populate under two alternate names — is_event_speaker_bool
+    (bool: "true") or the older numeric is_event_speaker ("1") — so check all three
+    signals, not just one.
+
+    Do NOT scope event_name to a single value — this applies to every event, not
+    just one. Many LF events bundle co-located tracks under one registration flow
+    (e.g. Open Source Summit Japan bundles Automotive Linux Summit and Embedded
+    Linux Conference Asia as separate tracks under the same umbrella event), and
+    UNIFIED_EVENTS.event_name may carry the specific track name rather than the
+    umbrella name — matching only the umbrella name silently drops those track
+    speakers. It also matters across years: a speaker's registration record lives
+    under THAT year's exact event_name, so matching only the current year's name
+    misses returning speakers from past editions. Collect a list of ALL relevant
+    event_name values before building: (1) this event's own umbrella name, (2)
+    every co-located track named in the Segment Plan / scraped event page, and (3)
+    that same set for past editions/years of this event and its tracks — reuse
+    the same past-edition discovery (Snowflake STEP 1 / hubspot_search_campaigns)
+    already used for STEP 4 group 1, don't re-derive it separately.
+
+    Every value you put in this filter MUST be the FULL, exact event_name string
+    as it appears on a real registration record — e.g. the complete name "Open
+    Source Summit Japan 2026", never a shortened keyword or substring like just
+    "Japan". A bare country/city/keyword fragment is NOT an acceptable shortcut
+    for "cover every edition/track at once": it falsely matches any unrelated
+    event that happens to contain that word, and it still fails to match
+    co-located tracks whose full name doesn't contain that word at all (e.g.
+    "Embedded Linux Conference Asia" has no "Japan" in it, so a "Japan"
+    substring filter silently drops its speakers even though it's a listed
+    co-located track). List out every real name explicitly instead of
+    approximating with a keyword. For this same reason, use operator IS_ANY_OF
+    (exact match per value), never CONTAINS_TOKEN, for this event_name filter.
+    Match all of them at once with ONE event_name filter using operator IS_ANY_OF
+    (not one branch per name — same redundancy-reduction reasoning as RULE 8). Since the
+    root filterBranch must stay OR-of-AND (nested OR is rejected — same constraint
+    as the ambassador bullet below), distribute: for each of the 3 speaker-signal
+    filters, add one additional top-level AND branch per existing inclusion
+    branch = [that branch's other filters] AND a UNIFIED_EVENTS node, e.g.
+    (registration_type variant shown; repeat the whole AND branch with
+    is_event_speaker_bool EQ "true" and is_event_speaker EQ "1" as two more OR'd
+    sibling branches):
+    {{
+      "filterBranchType": "UNIFIED_EVENTS", "operator": "HAS_COMPLETED",
+      "eventTypeId": "6-48984571",
+      "filterBranches": [{{"filterBranchType": "AND", "filterBranches": [], "filters": [
+        {{"filterType": "PROPERTY", "property": "event_name", "operation": {{"operator": "IS_ANY_OF",
+           "includeObjectsWithNoValueSet": false, "values": ["[umbrella event name]", "[co-located track 1]", "[co-located track 2]", "[past edition name(s)]"], "operationType": "MULTISTRING"}}}},
+        {{"filterType": "PROPERTY", "property": "registration_type", "operation": {{"operator": "CONTAINS_TOKEN",
+           "includeObjectsWithNoValueSet": false, "values": ["Speaker"], "operationType": "MULTISTRING"}}}}
+      ]}}],
+      "filters": []
+    }}
+    (nested inside UNIFIED_EVENTS.filterBranches alongside event_name, same proven
+    placement as event_name in STEP 4 group 1 — not as a sibling PROPERTY filter).
+    If none of the collected event_name values have any registrants in eventTypeId
+    "6-48984571" (e.g. a brand-new event with no prior instance), do NOT silently
+    build an unfiltered list — add to ## FLAGGED FOR REVIEW with reason "no speaker
+    list or event-registration speaker data found for this event or its
+    editions/tracks".
+  - "Community ambassadors only": call read_reference_file("ambassador-properties.md")
+    for the current list of per-program ambassador properties (CNCF, LF Energy, Open
+    Mainframe, etc. — extend as new programs are documented there). Since the root
+    filterBranch must stay OR-of-AND (HubSpot rejects a nested OR — see RULE 9's
+    distribution pattern), do NOT try to OR the properties inside one branch.
+    Instead, for each documented ambassador property, add one additional top-level
+    AND branch equal to [that inclusion list's other filters] AND [HAS_PROPERTY on
+    that one ambassador property] — one branch per property, all siblings under the
+    same root OR alongside the list's other inclusion groups.
+
 ═══════════════════════════════════════════════════
 PRE-BUILD CHECK — Reuse Existing Lists (MANDATORY)
 ═══════════════════════════════════════════════════
@@ -1741,12 +1826,27 @@ Do not choose silently.
 ═══════════════════════════════════════════════════
 STEP 4 — Suppressions
 ═══════════════════════════════════════════════════
-This audience isn't tied to one upcoming event, so there is no "current registrants"
-exclusion to build (that's specific to the event-URL flow). Still ask whether to
-apply the standard hygiene suppressions (LF Global Opt-Outs, LF Events GDPR
-Suppression if EU-adjacent, 23Q1 LF Master Exclusion List) via a combined
-NOT_IN_LIST exclusion, or to leave them off to match the reference pattern exactly
-(neither 29911 nor 29913 has any). Ask — don't assume.
+Skip this entire step — do not ask, do not propose a suppression list, and write
+"N/A — single inclusion list; suppressions apply only at the master-list level"
+under "Suppression decision" — if the Request above is for a SINGLE INCLUSION LIST
+scoped to one signal rather than a full location-based mailable-contacts audience.
+This covers any request that says it's a single inclusion list to be combined into
+a master audience later (e.g. every missing-signal "Create list" request from the
+Discover/Reuse panel — event speakers, project opt-in, newsletter opt-in, event
+registration, education enrollment, page views), as well as any request that
+otherwise explicitly says not to add suppression filters. These lists are building
+blocks; suppressions get applied exactly once, later, at the master-list level —
+baking a suppression exclusion into an individual inclusion list would apply it
+redundantly (or incorrectly) every time that list is reused elsewhere.
+
+Otherwise, for a full location-based "mailable contacts" audience (the pattern
+this template is designed for): this audience isn't tied to one upcoming event,
+so there is no "current registrants" exclusion to build (that's specific to the
+event-URL flow). Still ask whether to apply the standard hygiene suppressions (LF
+Global Opt-Outs, LF Events GDPR Suppression if EU-adjacent, 23Q1 LF Master
+Exclusion List) via a combined NOT_IN_LIST exclusion, or to leave them off to
+match the reference pattern exactly (neither 29911 nor 29913 has any). Ask —
+don't assume.
 
 Flag any communitySeg / community_seg lists found along the way. They are retired —
 exclude them entirely; never rebuild or reuse their logic.
@@ -1851,6 +1951,92 @@ RULE 8 — COMBINE CONDITIONS INTELLIGENTLY. When building filters with multiple
   This reduces redundancy, improves efficiency, and is automatically optimized anyway.
   Apply this pattern to job titles, topics, tags, and any multi-value PROPERTY filters
   that share identical secondary gates (IN_LIST, location filters, etc.).
+
+RULE 9 — ROLE FILTERS. Apply this rule whenever EITHER (a) the Segment Plan below
+  contains a "## ROLE FILTERS" section, OR (b) the Original request above is itself
+  asking for a speakers-only or ambassadors-only audience (e.g. "speakers (not
+  general registrants)", "event speakers", "ambassadors") — condition (b) exists
+  because some callers skip plan review entirely and build straight from the raw
+  request, so the Segment Plan may never carry a "## ROLE FILTERS" heading even
+  though a role restriction was clearly requested. Whichever condition matched,
+  apply EACH implied restriction to EVERY AND branch of STEP 1's list(s) — never to
+  the Combined Suppression list:
+  - "Event speakers only": first call hubspot_search_lists for a list named like
+    "[event name] Speakers" and AND an IN_LIST filter on it into every branch of
+    STEP 1's list(s) if found — BUT do not stop there just because other, unrelated
+    past events happen to have MANUAL/Sessionize-curated speaker lists. That is
+    real, observed precedent for OTHER events and tells you nothing about THIS one;
+    do NOT research other events' speaker lists, do NOT let that precedent talk you
+    into concluding this list must also be MANUAL, and do NOT call hubspot_create_list
+    to create an empty MANUAL placeholder — that tool cannot import a CSV of speaker
+    emails, so an empty MANUAL list is strictly worse than the dynamic approximation
+    below and must not be offered as the "correct" result. If no exact-name list
+    exists, do NOT use the hosted_events property either (it's a legacy,
+    sparsely-updated enum) — instead build the restriction from the SAME fixed
+    portal-wide "Event Registered" eventTypeId "6-48984571" already used for the
+    event-history branches above. That event type carries per-registrant properties
+    registration_type (string; speaker values are "Speaker" and "Speaker - User" —
+    match with CONTAINS_TOKEN "Speaker") and a speaker flag that different
+    events/source systems populate under two alternate names —
+    is_event_speaker_bool (bool: "true") or the older numeric is_event_speaker
+    ("1") — so check all three signals, not just one.
+
+    Do NOT scope event_name to a single value — this applies to every event, not
+    just one. Many LF events bundle co-located tracks under one registration flow
+    (e.g. Open Source Summit Japan bundles Automotive Linux Summit and Embedded
+    Linux Conference Asia as separate tracks under the same umbrella event), and
+    UNIFIED_EVENTS.event_name may carry the specific track name rather than the
+    umbrella name a registrant actually searched for — matching only the umbrella
+    name silently drops those track speakers. It also matters across years: a
+    speaker's registration record lives under THAT year's exact event_name, so
+    matching only the current year's name misses returning speakers from past
+    editions. Collect a list of ALL relevant event_name values before building:
+    (1) this event's own umbrella name, (2) every co-located track named in the
+    Segment Plan / scraped event page, and (3) that same set for past editions/
+    years of this event and its tracks — reuse whatever past-edition discovery
+    (hubspot_search_campaigns / Snowflake) this build already does elsewhere for
+    past-registrant inclusion lists, don't re-derive it separately.
+
+    Every value you put in this filter MUST be the FULL, exact event_name string
+    as it appears on a real registration record — e.g. the complete name "Open
+    Source Summit Japan 2026", never a shortened keyword or substring like just
+    "Japan". A bare country/city/keyword fragment is NOT an acceptable shortcut
+    for "cover every edition/track at once": it falsely matches any unrelated
+    event that happens to contain that word, and it still fails to match
+    co-located tracks whose full name doesn't contain that word at all (e.g.
+    "Embedded Linux Conference Asia" has no "Japan" in it, so a "Japan"
+    substring filter silently drops its speakers even though it's a listed
+    co-located track). List out every real name explicitly instead of
+    approximating with a keyword. For this same reason, use operator IS_ANY_OF
+    (exact match per value), never CONTAINS_TOKEN, for this event_name filter.
+    Match all of them at once with ONE event_name filter using operator IS_ANY_OF
+    (not one branch per name — same redundancy-reduction reasoning as RULE 8), e.g.
+    (registration_type variant shown; repeat the whole AND branch with
+    is_event_speaker_bool EQ "true" and is_event_speaker EQ "1" as two more OR'd
+    sibling branches per RULE 4's OR-of-AND requirement):
+    {{
+      "filterBranchType": "UNIFIED_EVENTS", "operator": "HAS_COMPLETED",
+      "eventTypeId": "6-48984571",
+      "filterBranches": [{{"filterBranchType": "AND", "filterBranches": [], "filters": [
+        {{"filterType": "PROPERTY", "property": "event_name", "operation": {{"operator": "IS_ANY_OF",
+           "includeObjectsWithNoValueSet": false, "values": ["[umbrella event name]", "[co-located track 1]", "[co-located track 2]", "[past edition name(s)]"], "operationType": "MULTISTRING"}}}},
+        {{"filterType": "PROPERTY", "property": "registration_type", "operation": {{"operator": "CONTAINS_TOKEN",
+           "includeObjectsWithNoValueSet": false, "values": ["Speaker"], "operationType": "MULTISTRING"}}}}
+      ]}}],
+      "filters": []
+    }}
+    (nested inside UNIFIED_EVENTS.filterBranches alongside event_name — not as a
+    sibling PROPERTY filter). If none of the collected event_name values have any
+    registrants in eventTypeId "6-48984571", do NOT silently build an unfiltered
+    list — add to ## FLAGGED FOR REVIEW with reason "no speaker list or event-
+    registration speaker data found for this event or its editions/tracks".
+  - "Community ambassadors only": call read_reference_file("ambassador-properties.md")
+    for the current list of per-program ambassador properties. Since the root
+    filterBranch must stay OR-of-AND (RULE 4 — HubSpot rejects a nested OR), do NOT
+    try to OR the properties inside one branch. Instead, for each documented
+    ambassador property, add one additional top-level AND branch equal to
+    [STEP 1's other filters] AND [HAS_PROPERTY on that one ambassador property] —
+    one branch per property, all siblings under the same root OR.
 
 ═══════════════════════════════════════════════════
 PRE-BUILD CHECK — Reuse Existing Lists (MANDATORY)
@@ -1958,14 +2144,25 @@ Name each list per the plan's "Proposed list(s)" section (e.g. "[Quarter] [Year]
 ═══════════════════════════════════════════════════
 STEP 2 — Suppressions (only if the plan's Suppression decision says to apply them)
 ═══════════════════════════════════════════════════
-If the plan said to leave suppressions off (matching the reference pattern), skip
-this step — STEP 1's list is the final deliverable as built.
-If the plan said to apply hygiene suppressions: use hubspot_search_lists to find
-each one, combine them into one "[Quarter] [Year] - [Location] - Mailable Contacts
-- Combined Suppression" list (OR of AND branches, one IN_LIST filter per
-suppression — same shape as RULE 4), then call hubspot_update_list_filters on
-STEP 1's list to add a NOT_IN_LIST filter on this combined suppression list to
-every AND branch.
+ALWAYS skip this step — never call hubspot_create_list for a suppression list and
+never add a NOT_IN_LIST filter to STEP 1's list — when the plan's Suppression
+decision is "N/A — single inclusion list" (or otherwise identifies this build as
+one signal/inclusion list rather than a full mailable-contacts audience, per the
+planning prompt's STEP 4). Individual signal lists — event speakers, project
+opt-in, newsletter opt-in, event registration, education enrollment, page views,
+or any other single-signal list built via the Discover/Reuse "Qualifying Lists
+Not Found" flow — must NEVER carry their own suppression filter. Suppressions are
+applied exactly once, at the master audience list, not on every inclusion list
+that later feeds into it.
+
+If the plan said to leave suppressions off (matching the reference pattern), also
+skip this step — STEP 1's list is the final deliverable as built.
+If the plan said to apply hygiene suppressions for a full mailable-contacts
+audience: use hubspot_search_lists to find each one, combine them into one
+"[Quarter] [Year] - [Location] - Mailable Contacts - Combined Suppression" list
+(OR of AND branches, one IN_LIST filter per suppression — same shape as RULE 4),
+then call hubspot_update_list_filters on STEP 1's list to add a NOT_IN_LIST
+filter on this combined suppression list to every AND branch.
 
 ═══════════════════════════════════════════════════
 STEP 3 — Final summary
