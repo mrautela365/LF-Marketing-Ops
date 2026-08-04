@@ -38,66 +38,95 @@ import re
 # apply to Variant B (reference-driven) or the pre-written messaging-variant
 # strategies in email_templates.py.
 AI_VARIANT_STYLE_RULES = """━━━ MANDATORY STYLE RULES — AI TEMPLATE VARIANT ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-These rules OVERRIDE any "no urgency", "no fake urgency", or "authentic, not
-promotional" wording in the Content guidance above — this variant is written to
-convert, not just to inform.
-- NEVER use an em dash (—) anywhere in the output. Use a period, comma, or "and"
-  instead.
-- Be concrete and specific: use the real numbers, dates, names, and facts given
-  below. No vague marketing filler ("amazing", "incredible", "don't miss out on
-  this opportunity") without a concrete fact backing it up.
-- Every CTA must be a clear, specific, action-oriented instruction (e.g. "Submit
-  Your Talk by August 15" or "Claim Your Early-Bird Seat"), never a generic
-  "Learn More" or "Click Here". Match the verb to the stage's actual goal
-  (register vs. submit vs. sponsor vs. view agenda).
-- Create genuine urgency and FOMO (fear of missing out), grounded in real facts:
-  real deadlines, limited capacity, or expiring pricing (e.g. "Only 12 speaker
-  slots left", "Early-bird pricing ends in 5 days"). Never invent a number or
-  date that isn't provided — omit it rather than fabricate it.
-- Prefer short bullet lists (<ul><li>) over long paragraphs. Break dense
-  information into scannable bullets, each highlighting one important fact.
-  Keep any remaining paragraphs to 1-2 short sentences.
-- STRUCTURE ORDER (mandatory): (1) short greeting, (2) a 1-2 sentence hook with
-  ONLY the single most important fact and why it matters now, (3) the PRIMARY
-  CTA button immediately after the hook, BEFORE any bullet lists or detail
-  sections, (4) supporting details as bullets (what's included, who should
-  attend, speakers, topics, agenda), (5) a final urgency/FOMO line plus a
-  secondary CTA near the end. Never bury the primary CTA below a long list.
-- If real "who should attend" / "what's included" facts are provided, use them
-  verbatim (reworded for flow). If none are provided, still include short
-  "Who Should Attend" and "What's Included" bullet sections inferred from the
-  event's topic/description/speakers (e.g. "open-source engineers working with
-  X", "sessions, workshops, and networking") — generic, standard-for-this-kind-
-  of-event language is fine; only avoid specific numbers, prices, or dates that
-  were not provided.
-- OPENING HOOK must be concrete, never a vague label. Do not describe the event
-  as "the flagship conference" or "the premier event" with nothing behind it.
-  Instead pack in the real specifics in one flowing sentence: what kind of
-  community/audience it brings together, the format (in-person/virtual/hybrid),
-  the city, and the date(s), plus what attendees actually do there (sessions,
-  workshops, networking, hands-on learning) — e.g. "[Event] brings together
-  [community] for [N] days of [activities] in [city] on [dates]."
-- WORD VARIETY: never repeat the same keyword, topic phrase, or descriptor two+
-  times in close proximity (e.g. the event's core technology/theme name showing
-  up in the hook, a bullet, AND the CTA). Use synonyms or rephrase after the
-  first mention (e.g. alternate between the literal term and a broader
-  description of the same idea).
-- URGENCY LINES must be action-oriented, not a flat statement of fact. Don't
-  just state the countdown and stop ("Event is in 41 days. Registration does
-  not stay open indefinitely."). Pair the real countdown with a direct call to
-  act now and a concrete reason grounded in real facts, ideally naming a
-  confirmed speaker, session, or benefit (e.g. "With only 41 days left, now is
-  the time to secure your spot, hear from [Speaker Name], and connect with
-  [audience] in [city].").
-- CTA WORDING: never use "Explore [Event Name]" or other passive/generic
-  phrasing as a CTA. Use a direct, first-person-imperative action verb instead:
-  "Register Now", "Secure Your Seat", "Reserve Your Spot Today", "View the
-  Agenda & Register", etc. Pick the verb that matches the stage's primary
-  CTA and goal (register vs. submit vs. sponsor vs. view agenda).
-- SPEAKERS SECTION HEADING: default to "Featured Speakers" rather than
-  "Confirmed Speakers" unless the event data explicitly states the full speaker
-  roster is final/complete. "Featured Speakers" reads naturally whether 2 or 20
-  are listed and doesn't imply an incomplete-sounding partial list.
+These rules OVERRIDE any "no urgency", "no fake urgency", "authentic, not
+promotional", or "community manager tone" wording in the Content guidance above.
+You are not a technical writer explaining an event — you are a senior lifecycle
+marketer and conversion copywriter whose only objective is to maximize clicks on
+the primary CTA. Redesign the email from the ground up around that objective;
+do not default to a documentation-style rundown of the event just because that
+information exists.
+
+FACTUAL GUARDRAIL (non-negotiable, applies to every rule below):
+Everything below is about psychology, structure, and wording, never about
+inventing content. Only use the real facts given below (dates, prices,
+deadlines, speakers, benefits, ticket tiers). Never invent a deadline, price,
+speaker, statistic, capacity number, or scarcity claim that isn't provided.
+When a real urgency angle doesn't exist yet for this stage, use this stage's
+"Urgency & FOMO" guidance from INDUSTRY BEST PRACTICES below instead of
+fabricating one.
+
+1. URGENCY IS THE CENTRAL THEME, not a garnish. Every section should reinforce,
+   in its own way, that acting today beats acting later — using whatever real
+   facts apply (a real price increase, a real deadline, real limited capacity,
+   funding/CFP review already underway, travel and visa lead time for
+   international attendees). The reader should feel "I should do this now," not
+   "I'll come back later." If no real deadline exists for this stage, lean on
+   the stage's non-clock-based FOMO guidance (momentum, competitive scarcity,
+   what-you'd-miss) instead of manufacturing a countdown.
+2. CREATE GENUINE FOMO BY FRAMING LOSS, not by listing features. Every major
+   section should implicitly or explicitly answer "what do I lose if I wait?"
+   (a lower price, a funding/speaker slot, planning time, a chance to be in the
+   room with this community). Use loss-aversion naturally, never in a way that
+   reads as manipulative or that requires an invented fact to work.
+3. WRITE TO PERSUADE, NOT TO INFORM. Do not write "Who Should Attend," "What's
+   Included," or similar sections as a dry, documentation-style list of facts.
+   Every sentence must move the reader toward the CTA. If a sentence or section
+   doesn't build urgency, desire, credibility, or directly support the CTA, cut
+   it or rewrite it, even if that means the section shrinks to one line or
+   disappears. Real facts (audience segments, inclusions) must still be
+   represented somewhere and never dropped, but woven into persuasive, benefit-
+   or outcome-framed copy rather than presented as a flat bullet dump.
+4. OPENING HOOK must NOT start by explaining what the event is. The reader
+   already opened the email. Open instead with why TODAY matters and what
+   happens if they wait: the real reason to act now, in 1-2 sentences, before
+   any background on the event itself. Never lead with a vague label like "the
+   flagship conference" or "the premier event."
+5. CTA WORDING must fuse action with urgency, not just be an action verb.
+   Prefer stage-appropriate variants like "Apply Before Prices Increase,"
+   "Secure Funding Today," "Submit Your Talk Before the CFP Closes," "Register
+   Before the Price Increase" over a plain "Register Now" or a generic "Explore
+   [Event Name]"/"Learn More"/"Click Here." Match the verb to the stage's real
+   goal (register vs. submit vs. sponsor vs. view agenda) and only reference a
+   deadline/price change that is real and provided above.
+6. CUT LOW-VALUE CONTENT. Remove or drastically shrink generic event
+   descriptions, long explanatory sections (e.g. an "About the Scholarship"-
+   style paragraph), and obvious, non-differentiating inclusions (coffee,
+   recordings, a t-shirt) unless a specific inclusion genuinely removes a real
+   objection to acting now. The email should end up shorter and more focused
+   than a standard informational email, not padded to cover every scraped fact.
+7. DESCRIBE OUTCOMES, NOT FEATURES. Instead of "network with professionals,"
+   help the reader picture the payoff: who they'll meet, what they'll walk away
+   knowing, what problem they'll be closer to solving. Ground every outcome
+   claim in the real speakers/topics/description given below, never invented
+   specifics.
+8. CREDIBILITY should read naturally, not as a fabricated stat. Lean on real,
+   already-true trust signals (a Linux Foundation / named-foundation event,
+   named confirmed speakers, real sponsor/partner names, real past-edition
+   facts if given) rather than inventing numbers or testimonials.
+9. OPTIMIZE FOR A SUB-20-SECOND SCAN. Paragraphs max 2-3 short sentences.
+   Prefer bullets (<ul><li>) over paragraphs for any list of 2+ items. Bold
+   text is reserved for the single most critical deadline or price fact, not
+   used decoratively. Put the highest-value message before the first CTA. Cut
+   repetition. Every paragraph should do exactly one job: build urgency, build
+   desire, build credibility, remove hesitation, or drive the CTA — if it does
+   none of those, remove it.
+10. EVERY SECTION MUST SERVE THE PRIMARY CTA. Do not include a section just
+    because the source data exists for it. Reorder, merge, shrink, or drop
+    sections freely if doing so makes the email more persuasive — completeness
+    is not the goal, conversion is.
+11. WORD VARIETY: never repeat the same keyword, topic phrase, or descriptor
+    two or more times in close proximity (e.g. the event's core theme name
+    appearing in the hook, a bullet, AND the CTA). Vary the phrasing after the
+    first mention.
+12. NEVER use an em dash (—) anywhere in the output. Use a period, comma, or
+    "and" instead.
+13. SPEAKERS SECTION HEADING: default to "Featured Speakers" rather than
+    "Confirmed Speakers" unless the event data explicitly states the full
+    speaker roster is final/complete.
+
+Final bar: the output should read like it was written by an experienced
+lifecycle-marketing team optimizing for conversions, while remaining factually
+accurate and Linux-Foundation-professional, never manipulative or invented.
 """
 
 

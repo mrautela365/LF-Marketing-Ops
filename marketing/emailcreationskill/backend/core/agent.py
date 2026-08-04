@@ -2235,10 +2235,14 @@ f"Specificity         : {best_practices.get('specificity_notes','')}\n"
 ) if best_practices else ""}
 
 ━━━ YOUR TASK ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Write a detailed, engaging, multi-paragraph email for the event above, driven by the
-STAGE OBJECTIVE's goal/CTA and the MARKETING STRATEGY, CONTENT IDEAS, and INDUSTRY BEST
-PRACTICES for this stage below. Use ONLY the NEW EVENT's real facts (name, dates,
-speakers, sponsors, links) — never invent facts from any other source.
+Redesign this email from the ground up as a high-converting, urgency-driven
+lifecycle-marketing email, not as an informational writeup of the event. Your
+only objective is to maximize clicks on the STAGE OBJECTIVE's primary CTA,
+using the MARKETING STRATEGY, CONTENT IDEAS, and INDUSTRY BEST PRACTICES for
+this stage below as your psychology/technique guide. Use ONLY the NEW EVENT's
+real facts (name, dates, speakers, sponsors, links) — never invent facts from
+any other source. Prefer fewer, shorter, higher-impact sections over covering
+every scraped fact.
 
 RULES:
 - Never output a literal bracket placeholder like [EVENT_NAME] or [DATE], always
@@ -2246,22 +2250,32 @@ RULES:
   of leaving a placeholder in the output.
 - SECTION ORDER (mandatory, do not reorder):
     1. Greeting (short, on its own line/block).
-    2. ONE short hook block: 1-2 sentences max, the single most important fact
-       (what the event is + why it matters now). No bullets, no other details here.
+    2. ONE short hook block: 1-2 sentences max. Do NOT open by explaining what
+       the event is. Open with why acting TODAY matters and what's gained or
+       lost by waiting, using a real fact (price increase, deadline, funding
+       already under review, limited planning time). No bullets, no event
+       background here.
     3. PRIMARY CTA button — must come immediately after the hook, BEFORE any
-       bullet lists or "what's included" / "who should attend" / speakers detail.
-       Never bury the primary CTA below a wall of details.
-    4. Supporting detail sections, in this order — most persuasive/relevant first,
-       purely logistical last:
-       a. "Who Should Attend" (use real scraped facts if given above; otherwise
-          write short, generic, standard-for-this-kind-of-event bullets inferred
-          from the description/topics/speakers — never invent numbers/prices/dates)
-          — lets the reader immediately self-identify as the target audience.
-       b. Speakers and topics — the concrete credibility/value payoff.
-       c. "What's Included" last — logistics/amenities are the least persuasive
-          content and should not appear before the reader has seen why to attend.
+       bullet lists or detail sections. Never bury the primary CTA below a
+       wall of details. CTA text fuses action with urgency (see style rules).
+    4. Supporting sections, most persuasive/relevant first, purely logistical
+       last — keep only what earns its place:
+       a. Audience fit, framed persuasively (real scraped "who should attend"
+          facts if given above must all be represented, but woven into a short,
+          benefit-framed bullet or sentence, not a dry documentation list;
+          otherwise write brief generic bullets inferred from the description/
+          topics/speakers — never invent numbers/prices/dates) — lets the
+          reader immediately self-identify as the target audience.
+       b. Speakers and topics, framed as outcomes ("meet/learn from X"), the
+          concrete credibility/value payoff.
+       c. Logistics/inclusions last, and only if a specific inclusion removes a
+          real objection to acting now — cut generic, non-differentiating
+          inclusions (coffee, recordings, a t-shirt) rather than listing them
+          for completeness.
     5. A final urgency/FOMO line + secondary CTA button near the end.
   Put details, topics, speakers, and dates/deadlines into bullets, not paragraphs.
+  If a section doesn't build urgency, desire, credibility, or drive the CTA, cut
+  it or fold it into one shorter sentence elsewhere.
 - Real styled CTA buttons as separate button sections, built around the Primary CTA
   named in STAGE OBJECTIVE above (primary right after the hook per SECTION ORDER, plus
   at least one secondary CTA). CTA button text must be a direct action verb
