@@ -104,12 +104,13 @@ fabricating one.
    named confirmed speakers, real sponsor/partner names, real past-edition
    facts if given) rather than inventing numbers or testimonials.
 9. OPTIMIZE FOR A SUB-20-SECOND SCAN. Paragraphs max 2-3 short sentences.
-   Prefer bullets (<ul><li>) over paragraphs for any list of 2+ items. Bold
-   text is reserved for the single most critical deadline or price fact, not
-   used decoratively. Put the highest-value message before the first CTA. Cut
-   repetition. Every paragraph should do exactly one job: build urgency, build
-   desire, build credibility, remove hesitation, or drive the CTA — if it does
-   none of those, remove it.
+   Prefer bullets (<ul><li>) over paragraphs for any list of 2+ items. Put the
+   highest-value message before the first CTA. Cut repetition. Every paragraph
+   should do exactly one job: build urgency, build desire, build credibility,
+   remove hesitation, or drive the CTA — if it does none of those, remove it.
+   A reader who only scans the bold text, headings, CTA buttons, and links for
+   10-20 seconds must still walk away understanding the offer, the urgency, and
+   the action to take.
 10. EVERY SECTION MUST SERVE THE PRIMARY CTA. Do not include a section just
     because the source data exists for it. Reorder, merge, shrink, or drop
     sections freely if doing so makes the email more persuasive — completeness
@@ -123,6 +124,41 @@ fabricating one.
 13. SPEAKERS SECTION HEADING: default to "Featured Speakers" rather than
     "Confirmed Speakers" unless the event data explicitly states the full
     speaker roster is final/complete.
+14. VISUAL HIERARCHY AND FORMATTING — apply this EVERY SECTION, not just the
+    opening hook and closing paragraph. A reader who only skims the bold
+    words, links, and headings across the ENTIRE email (top to bottom) must
+    still get the full offer, urgency, and proof, not just the framing.
+    - EVERY section (hook, each supporting/detail section, and the closing
+      paragraph) must contain at least one bolded <strong> phrase: the
+      section's own key fact or benefit (a price, a deadline, a speaker/
+      company name, a concrete outcome, a real inclusion). Do not concentrate
+      all bolding in only the hook and the final paragraph and leave the
+      middle sections plain. Keep bolding to short phrases (roughly 10-15% of
+      that section's text, never a whole sentence or paragraph) so it still
+      stands out.
+    - Use an inline colored <span style="color:#XXXXXX"> in more than one
+      section, not just once in the whole email, wherever it meaningfully
+      increases emphasis (a deadline, a savings amount, an urgent notice, a
+      scarcity fact) — still selectively, not on every sentence.
+    - Include a contextual inline hyperlink in MULTIPLE sections (not just one
+      or two total), e.g. "View the Agenda", "Meet the Speakers", "CFP
+      Guidelines", "Travel Information", "Registration Details" alongside
+      whichever section naturally supports it. Use descriptive link text,
+      never "click here". Only link to a URL that is actually given above
+      (the matching event link, or the main event page as fallback) — never
+      invent a URL or a sub-page that wasn't provided.
+    - Give each supporting section a short, clear bolded lead-in line rather
+      than running straight from one paragraph into the next with no visual
+      break — every section gets one, not just some.
+    - Vary sentence length for a natural reading rhythm — avoid a string of
+      same-length, same-structure sentences in a row.
+    - Use generous whitespace between blocks; avoid dense, unbroken walls of
+      text.
+    - Overall visual flow should move: greeting/hook -> urgency -> benefits ->
+      primary CTA -> supporting proof (audience/speakers/credibility) -> final
+      CTA — so the structure itself, not just the words, guides the eye toward
+      the action, and each stop along that flow carries its own visual
+      emphasis rather than only the first and last stops.
 
 Final bar: the output should read like it was written by an experienced
 lifecycle-marketing team optimizing for conversions, while remaining factually
