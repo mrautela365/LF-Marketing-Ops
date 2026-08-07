@@ -14,10 +14,11 @@ class DiscoverListsRequest(BaseModel):
 class DiscoveredList(BaseModel):
     list_id: str
     name: str
-    signal: str  # project_opt_in | lf_newsletter_opt_in | event_registration | education_enrollment | page_view | uncertain
+    signal: str  # project_opt_in | lf_newsletter_opt_in | event_registration | education_enrollment | page_view | event_speakers | uncertain
     size: int | None = None
     reason: str = ""
     list_type: str = ""  # HubSpot processingType, e.g. DYNAMIC | MANUAL | SNAPSHOT — real field, not computed
+    scope: str = ""  # current | past | current_past — only meaningful when signal == event_speakers
 
 
 class ComposeMasterListRequest(BaseModel):

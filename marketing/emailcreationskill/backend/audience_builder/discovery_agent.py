@@ -2,9 +2,9 @@
 Audience Builder — existing-list discovery agent.
 
 Given an event URL, finds HubSpot lists that ALREADY EXIST for that event and
-classifies them into 5 signals (Project Opt-In, LF Newsletter Opt-In, Event
-Registration, Education Enrollment, Page View). Read-only — never creates or
-modifies a HubSpot list (see discovery_tools.py's restricted tool set).
+classifies them into 6 signals (Project Opt-In, LF Newsletter Opt-In, Event
+Registration, Education Enrollment, Page View, Event Speakers). Read-only — never
+creates or modifies a HubSpot list (see discovery_tools.py's restricted tool set).
 
 Structurally mirrors audience_tools.py's job/queue/SSE architecture
 (_run_agent / start_plan_job / get_job_queue / remove_job), but keeps its own
@@ -35,6 +35,7 @@ ALL_SIGNALS = [
     "event_registration",
     "education_enrollment",
     "page_view",
+    "event_speakers",
 ]
 
 DISCOVERY_TOOLS = llm_gateway.openai_tools_to_anthropic(TOOL_DEFS_OPENAI)
@@ -59,19 +60,40 @@ Call web_fetch on the event URL. Extract the exact event name, its brand/foundat
 and its location/edition (city/country, or region if it's a regional edition).
 
 STEP 2 — Search for candidate lists
-Call hubspot_search_lists using the event series name ALONE first (e.g. "KubeCon +
-CloudNativeCon North America", not "KubeCon NA Q3 2026 opt-in") — a bare event-name
-query surfaces the full family of related lists without prematurely narrowing by
-quarter, country, or keyword. Only run a second, narrower search (e.g. adding the
-brand short name) if the first search comes back with too few or clearly unrelated
-results. Also call hubspot_search_campaigns with the same event name to find prior
-email campaigns whose audience lists are worth inspecting via hubspot_get_list.
+Call hubspot_search_lists using the FULL exact event name you extracted in STEP 1,
+verbatim — including every brand/foundation joiner it contains (e.g. "KubeCon +
+CloudNativeCon North America", never shortened to just "KubeCon" or "KubeCon NA").
+This is NOT optional: hubspot_search_lists caps results at 20 with no recency
+ordering, and a bare brand acronym like "KubeCon" matches hundreds of lists spanning
+every year and every region (NA, EU, China, India, Japan) since this brand started —
+those 20 slots fill up entirely with old/unrelated-region noise and the current
+edition's own master lists never appear. The full series name is specific enough to
+stay within the 20-result cap while still surfacing the whole family across quarters.
+Then run a second search adding the edition year to the full series name (e.g.
+"KubeCon + CloudNativeCon North America 2026") — master-list names usually embed the
+year, and this catches current-edition lists that might rank below other results on
+the first, year-less query. Only fall back to a narrower query (e.g. adding the brand
+short name) if both of those come back with too few or clearly unrelated results.
+Also call hubspot_search_campaigns with the same event name to find prior email
+campaigns whose audience lists are worth inspecting via hubspot_get_list.
 
 STEP 3 — Inspect and classify each candidate
 For every candidate list whose name plausibly references this event or its brand,
 call hubspot_get_list(list_id) to read its filterBranch, then classify it into
-EXACTLY ONE of these 5 signals using both the name and the actual filter shape
+EXACTLY ONE of these 6 signals using both the name and the actual filter shape
 (never classify by name alone if the filterBranch contradicts it):
+
+Master/rollup lists are common here — a candidate's filterBranch may contain ONLY
+IN_LIST/NOT_IN_LIST filters pointing at other lists, with no PROPERTY/UNIFIED_EVENTS/
+PAGE_VIEW filter of its own. If so, resolve ONE level deep only: call hubspot_get_list
+on the referenced list ID(s) to see their real filter shape, then classify the
+ORIGINAL candidate from what you find at that one hop. Do NOT recurse a second level
+deep (e.g. into lists referenced BY those referenced lists) even if some of them are
+themselves rollups — you have a strict tool-call budget for this whole task, and going
+two-plus hops deep on every rollup will exhaust it before you ever call
+present_discovered_lists, silently producing an empty result. If a one-hop peek still
+leaves the signal ambiguous, classify from the name and the one-hop evidence you do
+have, or place it in `uncertain` with a reason — never spend a second hop chasing it.
 
 1. project_opt_in — a PROPERTY filter on an email-subscription-type property tied
    to the EVENT'S OWN project/foundation newsletter (e.g. "PyTorch", "CNCF",
@@ -94,9 +116,31 @@ EXACTLY ONE of these 5 signals using both the name and the actual filter shape
    as uncertain instead — note the missing brand scoping in its reason.
 5. page_view — a PAGE_VIEW filterType (operator like GTE 0/1) on this event's page,
    or a project-specific page-view segment. May be named "Page Views" or similar.
+6. event_speakers — a list scoped to this event's SPEAKERS specifically, not all
+   registrants. Look for a name containing "Speaker(s)" (e.g. "[Event] Speakers",
+   "[Event] Speaker List"), or a PROPERTY filter on hosted_events whose value ends
+   in " - Speakers" for this event. Do not classify a general registration/attendee
+   list here just because speakers are technically included in it — this signal is
+   only for lists that are speaker-specific.
+
+   Also determine which SCOPE this speaker list actually covers, and set it on the
+   `scope` field ("current" | "past" | "current_past"):
+   - If the list's name ends in " - Current" (the new naming convention, e.g.
+     "[Event] Speakers - Current"), scope is "current". Ends in " - Past" → "past".
+     Ends in " - Current + Past" → "current_past".
+   - If the name doesn't carry one of those suffixes (an older list predating this
+     convention), infer from the filterBranch's event_name values instead: compare
+     each value's edition/year against this event's own current/upcoming edition
+     (identified in STEP 1). If every value is this event's current edition (and
+     any of its co-located tracks), scope is "current". If every value is a PRIOR
+     edition/year only (never the current one), scope is "past". If it has a mix
+     of the current edition and at least one prior edition, scope is "current_past".
+   - If you truly cannot tell (e.g. no inspectable filter and no suffix), default
+     to "current_past" rather than guessing narrower — this is the safest default
+     since it means the list will be treated as covering both.
 
 Anything that clearly references this event but doesn't confidently fit one of the
-5 above goes in the `uncertain` bucket with a short `reason` explaining why (e.g.
+6 above goes in the `uncertain` bucket with a short `reason` explaining why (e.g.
 "suppression list, not an inclusion signal" or "ambiguous filter, could not
 determine subscription type").
 
@@ -104,14 +148,16 @@ Do NOT include unrelated lists for other events/brands — if hubspot_search_lis
 returns noise, filter it out rather than guessing.
 {qa_section}
 STEP 4 — Present results
-Call present_discovered_lists ONCE with the full `lists` (5-signal matches) and
+Call present_discovered_lists ONCE with the full `lists` (6-signal matches) and
 `uncertain` arrays, plus the `brand_short` and `event_name` you identified in STEP 1
 as top-level fields (these are reused to look up suppression lists and prior sends
 for this event — always include them, even if a signal list came back empty). Do
 not call it more than once, and do not create or update any HubSpot list at any
 point in this task. For every list you inspected with hubspot_get_list, copy its
 real `processingType` value verbatim into that list's `list_type` field — do not
-invent or guess a value for lists you didn't inspect.
+invent or guess a value for lists you didn't inspect. For every list classified as
+`event_speakers`, also set its `scope` field per STEP 3 rule 6 — omit `scope`
+entirely for all other signals, it has no meaning for them.
 """
 
 
@@ -140,7 +186,7 @@ def _normalize_list_items(items: list) -> list:
 
 
 def _compute_missing_signals(lists: list) -> list:
-    """Which of the 5 qualifying signals had zero matched lists — surfaced in the
+    """Which of the qualifying signals had zero matched lists — surfaced in the
     UI as a separate 'create this list' panel rather than left implicit."""
     found = {item.get("signal") for item in (lists or [])}
     return [s for s in ALL_SIGNALS if s not in found]
@@ -211,7 +257,7 @@ def _run_discovery_agent(prompt: str, q: queue.Queue) -> None:
             tools=DISCOVERY_TOOLS,
             execute_tool=_execute_and_track,
             max_tokens=16000,
-            max_steps=25,
+            max_steps=40,
             on_event=_on_event,
         )
         log.info(f"[DISCOVERY] done — {len(discovered['lists'])} lists, {len(discovered['uncertain'])} uncertain")

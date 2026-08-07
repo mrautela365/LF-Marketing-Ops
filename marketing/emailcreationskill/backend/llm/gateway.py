@@ -307,8 +307,16 @@ def _cli_call_streaming(prompt: str, *, timeout: int, idle_timeout: Optional[int
 # 1) Single-shot text completion (no tools)
 # ══════════════════════════════════════════════════════════════════════════════
 def complete_text(prompt: str, *, system: Optional[str] = None,
-                  max_tokens: int = 1024, timeout: int = 120) -> str:
-    """Deterministic single-shot text completion. Same output on any backend."""
+                  max_tokens: int = 1024, timeout: int = 120,
+                  idle_timeout: Optional[int] = None) -> str:
+    """Deterministic single-shot text completion. Same output on any backend.
+
+    `idle_timeout`, when given, routes the CLI backend through the streaming
+    call so a turn that's still actively producing tokens (long prompt, extended
+    thinking, a long generated email) isn't killed just because total wall-clock
+    exceeds `timeout` — only a genuine stall (no output for `idle_timeout`s) does.
+    Same fix already applied to the agentic tool loop; see _cli_call_streaming.
+    """
     if _has_sdk_key():
         client = _make_sdk_client()
         kwargs = dict(
@@ -324,6 +332,8 @@ def complete_text(prompt: str, *, system: Optional[str] = None,
 
     # CLI backend — embed system in stdin (no --system-prompt arg escaping issues)
     full = f"<system>\n{system}\n</system>\n\n{prompt}" if system else prompt
+    if idle_timeout is not None:
+        return _cli_call_streaming(full, timeout=timeout, idle_timeout=idle_timeout)
     return _cli_call(full, timeout=timeout)
 
 
