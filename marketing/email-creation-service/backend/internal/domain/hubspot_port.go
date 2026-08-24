@@ -40,13 +40,44 @@ type SendListUpdate struct {
 	ContactIlsLists model.ListIncludeExclude
 }
 
+// SearchEmailsForEventOptions parameterizes
+// HubSpotEmailClient.SearchEmailsForEvent — ports search_emails_for_event's
+// argument list.
+type SearchEmailsForEventOptions struct {
+	BrandName      string
+	EventName      string
+	Location       string
+	ShortBrandName string
+	EventShortName string
+	EmailType      string
+}
+
+// GetBrandEmailsOptions parameterizes HubSpotEmailClient.GetBrandEmails —
+// ports get_brand_emails's argument list. LimitPerCall defaults to 20.
+type GetBrandEmailsOptions struct {
+	ShortBrandName  string
+	BrandName       string
+	EventShortNames []string
+	EventURL        string
+	LimitPerCall    int
+}
+
+// UpdateEmailContentInput parameterizes HubSpotEmailClient.UpdateEmailContent
+// — ports update_email_content's argument list.
+type UpdateEmailContentInput struct {
+	HTMLContent     string
+	BannerURL       string
+	EventURL        string
+	ContentSections []model.ContentSection
+	Sponsors        []model.ScrapedSponsor
+	UTMParams       map[string]string
+	SentByOrg       string
+}
+
 // HubSpotEmailClient is the consolidated port for marketing-email
 // operations, replacing the 3 independent Python clients
 // (integrations/hubspot.py, audience_tools.py, hubspot_ab_workflow's
-// hubspot_integration.py). Widget-level content read/write, image upload,
-// and staged-email validation are intentionally deferred to the phase that
-// ports core/agent.py's content-generation flow (they depend on that
-// flow's HTML/section model, not on anything audience_builder needs).
+// hubspot_integration.py).
 type HubSpotEmailClient interface {
 	GetEmailDetails(ctx context.Context, emailID string) (*model.EmailDetails, error)
 	SearchEmails(ctx context.Context, opts EmailSearchOptions) ([]model.EmailSummary, error)
@@ -56,6 +87,30 @@ type HubSpotEmailClient interface {
 	SetEmailSendList(ctx context.Context, emailID string, update SendListUpdate) error
 	GetCampaign(ctx context.Context, emailID string) (campaignGUID, campaignName string, err error)
 	GetCampaignUTM(ctx context.Context, campaignGUID string) (*model.CampaignUTM, error)
+
+	// ResolveUTMCampaign follows sourceEmailID to its HubSpot Campaign and
+	// reads that campaign's hs_utm value, falling back to a slug built from
+	// fallbackName. Never returns an error — ports resolve_utm_campaign's
+	// never-raises contract.
+	ResolveUTMCampaign(ctx context.Context, sourceEmailID, fallbackName string) (*model.UTMResolution, error)
+	// SearchEmailsForEvent ports search_emails_for_event's 4-tier waterfall
+	// search + locale filter + rank-by-recency.
+	SearchEmailsForEvent(ctx context.Context, opts SearchEmailsForEventOptions) (*model.EventEmailMatch, error)
+	// GetBrandEmails ports get_brand_emails's 4-tier fetch, deduplicated by
+	// ID and capped at 60, newest-first.
+	GetBrandEmails(ctx context.Context, opts GetBrandEmailsOptions) ([]model.EmailSummary, error)
+	// GetEmailContentText ports get_email_content_text — reads the
+	// structured widget/section content of an existing email.
+	GetEmailContentText(ctx context.Context, emailID string) (*model.EmailContentText, error)
+	// UpdateEmailContent ports update_email_content — the DnD content
+	// writer that rebuilds an email's flexAreas/widgets.
+	UpdateEmailContent(ctx context.Context, emailID string, input UpdateEmailContentInput) (*model.UpdateEmailContentResult, error)
+	// ValidateStagedEmail ports validate_staged_email — re-fetches and
+	// checks a staged email's content was actually saved.
+	ValidateStagedEmail(ctx context.Context, emailID string, expectBanner bool, expectSections int) (*model.ValidateStagedEmailResult, error)
+	// UploadImageToHubSpot ports upload_image_to_hubspot. Never returns an
+	// error — returns "" on any download/upload failure, matching Python.
+	UploadImageToHubSpot(ctx context.Context, imageURL, filename string) (string, error)
 }
 
 // HubSpotListClient is the consolidated port for contact-list operations.

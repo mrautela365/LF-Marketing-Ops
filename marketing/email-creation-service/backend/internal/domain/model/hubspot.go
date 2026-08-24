@@ -42,6 +42,7 @@ type EmailSummary struct {
 	UpdatedAt    string          `json:"updatedAt,omitempty"`
 	Campaign     string          `json:"campaign,omitempty"`
 	CampaignName string          `json:"campaignName,omitempty"`
+	From         EmailFrom       `json:"from,omitempty"`
 	To           EmailRecipients `json:"to,omitempty"`
 }
 

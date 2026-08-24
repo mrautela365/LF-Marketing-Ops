@@ -16,6 +16,10 @@ import (
 type Config struct {
 	AnthropicAPIKey string
 	ClaudeModel     string
+	// ClaudeCLIPath overrides the `claude` CLI binary lookup used by
+	// dispatch/llm_claude_cli.go. Empty means PATH lookup / hardcoded
+	// fallback (mirrors Python's _cli_path()).
+	ClaudeCLIPath string
 
 	HubSpotAccessToken string
 	HubSpotPortalID    string
@@ -83,6 +87,7 @@ func Load(projectRoot string) (*Config, error) {
 	cfg := &Config{
 		AnthropicAPIKey:          fileValues["ANTHROPIC_API_KEY"],
 		ClaudeModel:              envOr("CLAUDE_MODEL", "claude-sonnet-4-6"),
+		ClaudeCLIPath:            envOr("CLAUDE_CLI_PATH", ""),
 		HubSpotAccessToken:       envOr("HUBSPOT_ACCESS_TOKEN", ""),
 		HubSpotPortalID:          envOr("HUBSPOT_PORTAL_ID", "8112310"),
 		GoogleServiceAccountFile: envOr("GOOGLE_SERVICE_ACCOUNT_FILE", ""),
