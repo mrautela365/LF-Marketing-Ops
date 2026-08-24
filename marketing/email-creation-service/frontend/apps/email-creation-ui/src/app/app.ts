@@ -1,17 +1,20 @@
 import { Component, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import type { AudienceListInfo, StatusResponse } from '@email-creation/shared';
+import { AudienceBuilder } from './audience-builder/audience-builder';
+import { EmailCreation } from './email-creation/email-creation';
 import { ListsService } from './lists.service';
 import { StatusService } from './status.service';
 
 @Component({
   selector: 'app-root',
-  imports: [FormsModule],
+  imports: [FormsModule, AudienceBuilder, EmailCreation],
   templateUrl: './app.html',
   styleUrl: './app.scss',
 })
 export class App {
   protected readonly title = signal('Email Creation UI');
+  protected readonly activeTab = signal<'status' | 'audience-builder' | 'email-creation'>('email-creation');
 
   protected readonly status = signal<StatusResponse | null>(null);
   protected readonly statusError = signal<string | null>(null);

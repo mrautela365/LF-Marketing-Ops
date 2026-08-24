@@ -1,0 +1,249 @@
+<div class="steps">
+  <div class="step step-clickable" [class.active]="step() === 1" [class.done]="step() > 1" (click)="step.set(1)">
+    <span class="step-circle">1</span>
+    <span class="step-label">Campaign Brief</span>
+  </div>
+  <div class="step step-clickable" [class.active]="step() === 2" [class.done]="step() > 2" (click)="sessionId() && step.set(2)">
+    <span class="step-circle">2</span>
+    <span class="step-label">Email Preview</span>
+  </div>
+  <div class="step step-clickable" [class.active]="step() === 3" [class.done]="step() > 3" (click)="sessionId() && step.set(3)">
+    <span class="step-circle">3</span>
+    <span class="step-label">Audience</span>
+  </div>
+  <div class="step" [class.active]="step() === 4">
+    <span class="step-circle">4</span>
+    <span class="step-label">Implementation</span>
+  </div>
+</div>
+
+@if (step() === 1) {
+  <div class="card">
+    <div class="card-title">Start Campaign Request</div>
+    <div class="card-desc">Paste the event/campaign URL — Claude extracts details and drafts a plan.</div>
+
+    <div class="field">
+      <label>Event URL</label>
+      <input
+        type="text"
+        placeholder="https://..."
+        [ngModel]="eventUrl()"
+        (ngModelChange)="eventUrl.set($event)"
+        (keyup.enter)="generatePlan()"
+      />
+    </div>
+    <div class="field-row">
+      <div class="field">
+        <label>Email type (optional)</label>
+        <input
+          type="text"
+          placeholder="e.g. BATCH_EMAIL"
+          [ngModel]="emailType()"
+          (ngModelChange)="emailType.set($event)"
+        />
+      </div>
+      <div class="field">
+        <label>Extra context (optional)</label>
+        <input
+          type="text"
+          placeholder="Anything else Claude should know"
+          [ngModel]="extraContext()"
+          (ngModelChange)="extraContext.set($event)"
+        />
+      </div>
+    </div>
+
+    @if (planError()) {
+      <div class="error-box">Error: {{ planError() }}</div>
+    }
+    <button class="btn btn-primary" [disabled]="!eventUrl().trim()" (click)="generatePlan()">Generate Campaign Brief →</button>
+  </div>
+}
+
+@if (step() === 2) {
+  <div class="card">
+    <div class="card-title">Live brief</div>
+    <div class="card-desc">
+      Status:
+      <span
+        class="badge"
+        [class.badge-blue]="briefStatus() === 'live'"
+        [class.badge-green]="briefStatus() === 'done'"
+        [class.badge-yellow]="briefStatus() === 'error'"
+      >
+        {{ briefStatus() }}
+      </span>
+    </div>
+    @if (briefLines().length > 0) {
+      <div class="brief-log">
+        @for (line of briefLines(); track $index) {
+          <div class="brief-line">{{ line }}</div>
+        }
+      </div>
+    }
+  </div>
+
+  @if (planResult()) {
+    <div class="card">
+      <div class="card-title">Campaign Plan</div>
+      <div class="claude-message">
+        <div class="claude-label">Claude</div>
+        <p>{{ planResult()!.message }}</p>
+      </div>
+      @if (planResult()!.source_email) {
+        <span class="badge badge-blue">Source: {{ planResult()!.source_email!.name }}</span>
+      }
+    </div>
+  }
+
+  <div class="card">
+    <div class="card-title">Email Content</div>
+
+    @if (contentLoading()) {
+      <div class="loading"><span class="spinner"></span> Drafting content...</div>
+    } @else if (contentError()) {
+      <div class="error-box">Error: {{ contentError() }}</div>
+    } @else if (generatedHtml()) {
+      <div class="field">
+        <label>Subject</label>
+        <input type="text" [ngModel]="generatedSubject()" (ngModelChange)="generatedSubject.set($event)" />
+      </div>
+      <div class="field">
+        <label>Preview text</label>
+        <input type="text" [ngModel]="generatedPreview()" (ngModelChange)="generatedPreview.set($event)" />
+      </div>
+
+      @if (sections().length > 0) {
+        <div class="section-subhead">Content sections</div>
+        <div class="sections-editor">
+          @for (s of sections(); track $index) {
+            <div class="section-row">
+              <div class="section-meta"><span class="section-tag">{{ s.type }}</span></div>
+              <div class="section-body">{{ s.text || s.html }}</div>
+              <div class="section-remove" title="Remove" (click)="removeSection($index)">✕</div>
+            </div>
+          }
+        </div>
+      }
+    }
+  </div>
+
+  @if (generatedHtml()) {
+    <div class="card">
+      <div class="card-title">Refine Content</div>
+      <div class="field">
+        <textarea
+          placeholder="e.g. make the subject shorter, more urgent tone..."
+          [ngModel]="refineText()"
+          (ngModelChange)="refineText.set($event)"
+        ></textarea>
+      </div>
+      <button class="btn btn-outline" [disabled]="!refineText().trim() || contentLoading()" (click)="requestContentChanges()">
+        🔄 Refine Content
+      </button>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Chat</div>
+      @for (entry of chat2(); track $index) {
+        <div class="claude-message">
+          <div class="claude-label">{{ entry.who === 'you' ? 'You' : 'Claude' }}</div>
+          <p>{{ entry.text }}</p>
+        </div>
+      }
+      <div class="chat-row">
+        <input
+          type="text"
+          placeholder="Ask a follow-up..."
+          [ngModel]="chat2Input()"
+          (ngModelChange)="chat2Input.set($event)"
+          (keyup.enter)="sendChat(2)"
+        />
+        <button class="btn btn-outline" (click)="sendChat(2)">Send</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="btn-row" style="margin-top: 0">
+        <button class="btn btn-outline" (click)="editPlan()">← Edit Campaign Brief</button>
+        <button class="btn btn-primary" (click)="goToAudience()">Continue to Audience Preview →</button>
+      </div>
+    </div>
+  }
+}
+
+@if (step() === 3) {
+  <div class="card">
+    <div class="card-title">Audience Preview</div>
+    <div class="card-desc">
+      Paste one or more HubSpot list IDs to send to (comma-separated), or use the Audience Builder tab to compose a
+      master list first and paste its ID here. Leave blank to skip attaching a send list for now.
+    </div>
+    <div class="field">
+      <label>Send list ID(s)</label>
+      <input
+        type="text"
+        placeholder="e.g. 12345, 12346"
+        [ngModel]="sendListIdsText()"
+        (ngModelChange)="sendListIdsText.set($event)"
+      />
+    </div>
+    <div class="btn-row" style="margin-top: 0">
+      <button class="btn btn-outline" (click)="step.set(2)">← Back</button>
+      <button class="btn btn-success" (click)="startImplementation()">Create Campaign Draft →</button>
+    </div>
+  </div>
+}
+
+@if (step() === 4) {
+  <div class="card">
+    <div class="card-title">Implementation</div>
+
+    @if (cloneLoading()) {
+      <div class="loading"><span class="spinner"></span> Creating campaign draft...</div>
+    } @else if (cloneError()) {
+      <div class="error-box">Error: {{ cloneError() }}</div>
+    } @else {
+      @if (draftUrl()) {
+        <div class="draft-link-box">
+          <span class="icon">✅</span>
+          <a [href]="variantADraftUrl() || draftUrl()!" target="_blank">Variant A draft →</a>
+        </div>
+      }
+      @if (variantBDraftUrl()) {
+        <div class="draft-link-box">
+          <span class="icon">✅</span>
+          <a [href]="variantBDraftUrl()!" target="_blank">Variant B draft →</a>
+        </div>
+      }
+      @if (sendListStatus()) {
+        <div class="success-box">{{ sendListStatus() }}</div>
+      }
+      @if (sendListError()) {
+        <div class="error-box">Error: {{ sendListError() }}</div>
+      }
+    }
+
+    <div class="section-subhead" style="margin-top: 20px">Chat</div>
+    @for (entry of chat4(); track $index) {
+      <div class="claude-message">
+        <div class="claude-label">{{ entry.who === 'you' ? 'You' : 'Claude' }}</div>
+        <p>{{ entry.text }}</p>
+      </div>
+    }
+    <div class="chat-row">
+      <input
+        type="text"
+        placeholder="Ask a follow-up..."
+        [ngModel]="chat4Input()"
+        (ngModelChange)="chat4Input.set($event)"
+        (keyup.enter)="sendChat(4)"
+      />
+      <button class="btn btn-outline" (click)="sendChat(4)">Send</button>
+    </div>
+
+    <div class="btn-row">
+      <button class="btn btn-outline" (click)="startOver()">+ Stage Another Campaign</button>
+    </div>
+  </div>
+}

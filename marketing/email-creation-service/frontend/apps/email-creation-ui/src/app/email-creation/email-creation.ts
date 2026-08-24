@@ -1,0 +1,271 @@
+import { Component, signal } from '@angular/core';
+import { FormsModule } from '@angular/forms';
+import type { ContentSection, PlanResult } from '@email-creation/shared';
+import { EmailCreationService } from './email-creation.service';
+
+interface ChatEntry {
+  who: 'you' | 'assistant';
+  text: string;
+}
+
+/**
+ * Ports the legacy 4-step email-creation wizard (frontend/app.js Steps 1-2-4;
+ * Step 3 "Audience Preview" is intentionally simplified here to a plain
+ * send-list-id field — the full audience-selection UX already lives in the
+ * ported Audience Builder tab). Talks to the legacy Python backend's LLM
+ * routes directly (proxied at /api/plan-start, /api/generate-content, etc. —
+ * see proxy.conf.json) since the Go LLM gateway (migration phase 4) doesn't
+ * exist yet.
+ */
+@Component({
+  selector: 'app-email-creation',
+  imports: [FormsModule],
+  templateUrl: './email-creation.html',
+  styleUrl: './email-creation.scss',
+})
+export class EmailCreation {
+  protected readonly step = signal<1 | 2 | 3 | 4>(1);
+
+  // Step 1 — campaign brief.
+  protected readonly eventUrl = signal('');
+  protected readonly emailType = signal('');
+  protected readonly extraContext = signal('');
+  protected readonly planError = signal<string | null>(null);
+
+  // Live brief (shared across steps 1-2 via one SSE token).
+  protected readonly briefLines = signal<string[]>([]);
+  protected readonly briefStatus = signal<'idle' | 'live' | 'done' | 'error'>('idle');
+  private briefSource: EventSource | null = null;
+  private progressToken = '';
+
+  protected readonly sessionId = signal<string | null>(null);
+  protected readonly planResult = signal<PlanResult | null>(null);
+
+  // Step 2 — generated content.
+  protected readonly contentLoading = signal(false);
+  protected readonly contentError = signal<string | null>(null);
+  protected readonly generatedSubject = signal('');
+  protected readonly generatedPreview = signal('');
+  protected readonly generatedHtml = signal('');
+  protected readonly sections = signal<ContentSection[]>([]);
+  protected readonly variantASubject = signal('');
+  protected readonly variantAPreview = signal('');
+  protected readonly variantAHtml = signal('');
+  protected readonly refineText = signal('');
+  protected readonly chat2 = signal<ChatEntry[]>([]);
+  protected readonly chat2Input = signal('');
+
+  // Step 3 — send list (simplified; full picker lives in the Audience Builder tab).
+  protected readonly sendListIdsText = signal('');
+
+  // Step 4 — implementation.
+  protected readonly cloneLoading = signal(false);
+  protected readonly cloneError = signal<string | null>(null);
+  protected readonly emailId = signal<string | null>(null);
+  protected readonly draftUrl = signal<string | null>(null);
+  protected readonly variantADraftUrl = signal<string | null>(null);
+  protected readonly variantBDraftUrl = signal<string | null>(null);
+  protected readonly sendListStatus = signal<string | null>(null);
+  protected readonly sendListError = signal<string | null>(null);
+  protected readonly chat4 = signal<ChatEntry[]>([]);
+  protected readonly chat4Input = signal('');
+
+  constructor(private readonly service: EmailCreationService) {}
+
+  private newToken(): string {
+    return `tok-${Math.random().toString(36).slice(2)}${Date.now()}`;
+  }
+
+  private openBrief(token: string, onPlanDone: (result: PlanResult) => void): void {
+    this.briefSource?.close();
+    this.briefLines.set([]);
+    this.briefStatus.set('live');
+    this.briefSource = this.service.openProgressStream(token, (ev) => {
+      if (ev.type === 'heartbeat') return;
+      if (ev.type === 'brief') {
+        this.briefLines.update((lines) => [...lines, ev.text]);
+        if (ev.error) this.briefStatus.set('error');
+      } else if (ev.type === 'plan_done') {
+        this.briefStatus.set('done');
+        onPlanDone(ev.result);
+      } else if (ev.type === 'error') {
+        this.briefLines.update((lines) => [...lines, `⚠️ ${ev.text}`]);
+        this.briefStatus.set('error');
+      }
+    });
+  }
+
+  generatePlan(): void {
+    const url = this.eventUrl().trim();
+    if (!url) return;
+    this.planError.set(null);
+    const token = this.newToken();
+    this.progressToken = token;
+    this.step.set(2);
+    this.openBrief(token, (result) => {
+      this.sessionId.set(result.session_id);
+      this.planResult.set(result);
+      this.generateContent('', token);
+    });
+
+    this.service
+      .planStart({
+        url,
+        extra_context: this.extraContext().trim() || undefined,
+        email_type: this.emailType().trim() || undefined,
+        progress_token: token,
+      })
+      .subscribe({
+        error: (err) => {
+          this.planError.set(err?.message ?? 'Failed to start plan');
+          this.briefStatus.set('error');
+        },
+      });
+  }
+
+  private generateContent(changeRequest: string, token: string): void {
+    const sessionId = this.sessionId();
+    if (!sessionId) return;
+    this.contentLoading.set(true);
+    this.contentError.set(null);
+    this.service
+      .generateContent({ session_id: sessionId, change_request: changeRequest || undefined, progress_token: token })
+      .subscribe({
+        next: (res) => {
+          this.generatedSubject.set(res.generated_subject);
+          this.generatedPreview.set(res.generated_preview);
+          this.generatedHtml.set(res.generated_html);
+          this.sections.set(res.sections ?? []);
+          this.variantASubject.set(res.variant_a_subject);
+          this.variantAPreview.set(res.variant_a_preview);
+          this.variantAHtml.set(res.variant_a_html);
+          this.contentLoading.set(false);
+        },
+        error: (err) => {
+          this.contentError.set(err?.message ?? 'Content generation failed');
+          this.contentLoading.set(false);
+        },
+      });
+  }
+
+  removeSection(index: number): void {
+    const sessionId = this.sessionId();
+    if (!sessionId) return;
+    const next = this.sections().filter((_, i) => i !== index);
+    this.sections.set(next);
+    this.service.updateSections({ session_id: sessionId, sections: next }).subscribe({
+      next: (res) => this.generatedHtml.set(res.generated_html),
+    });
+  }
+
+  requestContentChanges(): void {
+    const text = this.refineText().trim();
+    if (!text) return;
+    const token = this.newToken();
+    this.progressToken = token;
+    this.openBrief(token, () => {});
+    this.generateContent(text, token);
+    this.refineText.set('');
+  }
+
+  goToAudience(): void {
+    this.step.set(3);
+  }
+
+  editPlan(): void {
+    this.step.set(1);
+  }
+
+  private parseSendListIds(): string[] {
+    return this.sendListIdsText()
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }
+
+  startImplementation(): void {
+    const sessionId = this.sessionId();
+    if (!sessionId) return;
+    this.step.set(4);
+    this.cloneLoading.set(true);
+    this.cloneError.set(null);
+    this.sendListStatus.set(null);
+    this.sendListError.set(null);
+    this.service
+      .clone({
+        session_id: sessionId,
+        approved: true,
+        subject: this.generatedSubject(),
+        preview_text: this.generatedPreview(),
+      })
+      .subscribe({
+        next: (res) => {
+          this.emailId.set(res.email_id ?? null);
+          this.draftUrl.set(res.draft_url ?? null);
+          this.variantADraftUrl.set(res.variant_a_draft_url ?? res.draft_url ?? null);
+          this.variantBDraftUrl.set(res.variant_b_draft_url ?? null);
+          this.cloneLoading.set(false);
+
+          const listIds = this.parseSendListIds();
+          if (listIds.length === 0 || !res.email_id) {
+            this.sendListStatus.set(listIds.length === 0 ? 'No audience list attached.' : null);
+            return;
+          }
+          this.service.setSendList({ session_id: sessionId, email_id: res.email_id, send_list_ids: listIds }).subscribe({
+            next: (sl) => this.sendListStatus.set(`Send list applied: ${sl.send_list_id} (${sl.list_type ?? 'list'})`),
+            error: (err) => this.sendListError.set(err?.message ?? 'Failed to apply send list'),
+          });
+        },
+        error: (err) => {
+          this.cloneError.set(err?.message ?? 'Clone failed');
+          this.cloneLoading.set(false);
+          this.step.set(3);
+        },
+      });
+  }
+
+  sendChat(which: 2 | 4): void {
+    const sessionId = this.sessionId();
+    const inputSignal = which === 2 ? this.chat2Input : this.chat4Input;
+    const logSignal = which === 2 ? this.chat2 : this.chat4;
+    const message = inputSignal().trim();
+    if (!sessionId || !message) return;
+    logSignal.update((log) => [...log, { who: 'you', text: message }]);
+    inputSignal.set('');
+    this.service.chat({ session_id: sessionId, message }).subscribe({
+      next: (res) => logSignal.update((log) => [...log, { who: 'assistant', text: res.message }]),
+      error: (err) => logSignal.update((log) => [...log, { who: 'assistant', text: `⚠️ ${err?.message ?? 'Chat failed'}` }]),
+    });
+  }
+
+  startOver(): void {
+    this.briefSource?.close();
+    this.briefSource = null;
+    this.step.set(1);
+    this.eventUrl.set('');
+    this.emailType.set('');
+    this.extraContext.set('');
+    this.planError.set(null);
+    this.briefLines.set([]);
+    this.briefStatus.set('idle');
+    this.sessionId.set(null);
+    this.planResult.set(null);
+    this.generatedSubject.set('');
+    this.generatedPreview.set('');
+    this.generatedHtml.set('');
+    this.sections.set([]);
+    this.variantASubject.set('');
+    this.variantAPreview.set('');
+    this.variantAHtml.set('');
+    this.refineText.set('');
+    this.chat2.set([]);
+    this.sendListIdsText.set('');
+    this.emailId.set(null);
+    this.draftUrl.set(null);
+    this.variantADraftUrl.set(null);
+    this.variantBDraftUrl.set(null);
+    this.sendListStatus.set(null);
+    this.sendListError.set(null);
+    this.chat4.set([]);
+  }
+}

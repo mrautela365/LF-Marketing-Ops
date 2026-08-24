@@ -1,71 +1,87 @@
-<div class="mx-auto max-w-2xl p-8 font-sans">
-  <h1 class="mb-6 text-2xl font-semibold text-gray-900">{{ title() }}</h1>
+<header>
+  <span class="logo">{{ title() }}</span>
+  <span class="subtitle">Marketing email tooling</span>
+</header>
 
-  <section class="mb-8 rounded-lg border border-gray-200 p-4">
-    <h2 class="mb-2 text-lg font-medium text-gray-800">Backend status</h2>
+<div class="container">
+  <div class="top-tabs">
+    <div class="top-tab" [class.active]="activeTab() === 'email-creation'" (click)="activeTab.set('email-creation')">
+      Email Creation
+    </div>
+    <div class="top-tab" [class.active]="activeTab() === 'audience-builder'" (click)="activeTab.set('audience-builder')">
+      Audience Builder
+    </div>
+    <div class="top-tab" [class.active]="activeTab() === 'status'" (click)="activeTab.set('status')">
+      Status &amp; search
+    </div>
+  </div>
 
-    @if (statusError()) {
-      <p class="text-sm text-red-600">Error: {{ statusError() }}</p>
-      <button
-        class="mt-2 rounded bg-gray-100 px-3 py-1 text-sm hover:bg-gray-200"
-        (click)="loadStatus()"
-      >
-        Retry
-      </button>
-    } @else if (status()) {
-      <p class="text-sm text-gray-700">
-        HubSpot configured:
-        <span [class]="status()!.hubspot_configured ? 'text-green-600' : 'text-red-600'">
-          {{ status()!.hubspot_configured ? 'yes' : 'no' }}
-        </span>
-      </p>
-      <p class="text-sm text-gray-700">
-        AI mode:
-        <span [class]="status()!.ai_mode ? 'text-green-600' : 'text-red-600'">
-          {{ status()!.ai_mode ? 'yes' : 'no' }}
-        </span>
-      </p>
-    } @else {
-      <p class="text-sm text-gray-500">Loading status...</p>
-    }
-  </section>
+  @if (activeTab() === 'email-creation') {
+    <app-email-creation />
+  }
 
-  <section class="rounded-lg border border-gray-200 p-4">
-    <h2 class="mb-2 text-lg font-medium text-gray-800">Search HubSpot lists</h2>
+  @if (activeTab() === 'audience-builder') {
+    <app-audience-builder />
+  }
 
-    <div class="flex gap-2">
-      <input
-        type="text"
-        class="flex-1 rounded border border-gray-300 px-3 py-1.5 text-sm"
-        placeholder="Search list name..."
-        [ngModel]="query()"
-        (ngModelChange)="query.set($event)"
-        (keyup.enter)="search()"
-      />
-      <button
-        class="rounded bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
-        [disabled]="searching()"
-        (click)="search()"
-      >
-        {{ searching() ? 'Searching...' : 'Search' }}
-      </button>
+  @if (activeTab() === 'status') {
+    <div class="card">
+      <div class="card-title">Backend status</div>
+
+      @if (statusError()) {
+        <div class="error-box">Error: {{ statusError() }}</div>
+        <button class="btn btn-outline" (click)="loadStatus()">Retry</button>
+      } @else if (status()) {
+        <p style="font-size: 13.5px; color: var(--gray-700); margin-bottom: 4px">
+          HubSpot configured:
+          <span class="badge" [class.badge-green]="status()!.hubspot_configured" [class.badge-yellow]="!status()!.hubspot_configured">
+            {{ status()!.hubspot_configured ? 'yes' : 'no' }}
+          </span>
+        </p>
+        <p style="font-size: 13.5px; color: var(--gray-700)">
+          AI mode:
+          <span class="badge" [class.badge-green]="status()!.ai_mode" [class.badge-yellow]="!status()!.ai_mode">
+            {{ status()!.ai_mode ? 'yes' : 'no' }}
+          </span>
+        </p>
+      } @else {
+        <div class="loading"><span class="spinner"></span> Loading status...</div>
+      }
     </div>
 
-    @if (searchError()) {
-      <p class="mt-2 text-sm text-red-600">Error: {{ searchError() }}</p>
-    }
+    <div class="card">
+      <div class="card-title">Search HubSpot lists</div>
 
-    @if (lists().length > 0) {
-      <ul class="mt-4 divide-y divide-gray-100 text-sm">
-        @for (list of lists(); track list.id) {
-          <li class="flex justify-between py-2">
-            <span class="text-gray-800">{{ list.name }}</span>
-            <span class="text-gray-400">{{ list.size }}</span>
-          </li>
-        }
-      </ul>
-    } @else if (!searching() && query()) {
-      <p class="mt-4 text-sm text-gray-500">No results.</p>
-    }
-  </section>
+      <div style="display: flex; gap: 10px">
+        <input
+          type="text"
+          style="flex: 1; border: 1px solid var(--gray-200); border-radius: var(--radius-sm); padding: 11px 14px; font-size: 14px"
+          placeholder="Search list name..."
+          [ngModel]="query()"
+          (ngModelChange)="query.set($event)"
+          (keyup.enter)="search()"
+        />
+        <button class="btn btn-primary" [disabled]="searching()" (click)="search()">
+          {{ searching() ? 'Searching...' : 'Search' }}
+        </button>
+      </div>
+
+      @if (searchError()) {
+        <div class="error-box" style="margin-top: 12px">Error: {{ searchError() }}</div>
+      }
+
+      @if (lists().length > 0) {
+        <div class="ab-card-grid" style="margin-top: 16px">
+          @for (list of lists(); track list.id) {
+            <div class="ab-card" style="cursor: default">
+              <div class="ab-card-name">{{ list.name }}</div>
+              <div class="ab-card-meta">{{ list.size }} contacts</div>
+            </div>
+          }
+        </div>
+      } @else if (!searching() && query()) {
+        <p style="margin-top: 16px; font-size: 13.5px; color: var(--gray-400)">No results.</p>
+      }
+    </div>
+  }
 </div>

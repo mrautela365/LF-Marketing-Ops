@@ -1,4 +1,11 @@
 {
+  "/api/plan-start": { "target": "http://localhost:8001", "secure": false, "changeOrigin": true },
+  "/api/progress": { "target": "http://localhost:8001", "secure": false, "changeOrigin": true },
+  "/api/generate-content": { "target": "http://localhost:8001", "secure": false, "changeOrigin": true },
+  "/api/update-sections": { "target": "http://localhost:8001", "secure": false, "changeOrigin": true },
+  "/api/clone": { "target": "http://localhost:8001", "secure": false, "changeOrigin": true },
+  "/api/set-send-list": { "target": "http://localhost:8001", "secure": false, "changeOrigin": true },
+  "/api/chat": { "target": "http://localhost:8001", "secure": false, "changeOrigin": true },
   "/api": {
     "target": "http://localhost:8000",
     "secure": false,
