@@ -1,0 +1,14 @@
+# Node / npm
+node_modules/
+npm-debug.log*
+
+# Build outputs
+dist/
+.angular/
+
+# Turborepo
+.turbo/
+
+# Package manager artifacts (see README "Deviations" — npm substituted for yarn)
+.yarn/
+.pnp.*

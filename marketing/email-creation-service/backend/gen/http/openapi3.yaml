@@ -1,0 +1,46 @@
+openapi: 3.0.3
+info:
+    title: LFX Email Creation Service
+    description: Marketing email planning, cloning, and audience-list tooling for HubSpot.
+    version: 0.0.1
+servers:
+    - url: http://localhost:8000
+paths:
+    /api/status:
+        get:
+            tags:
+                - status
+            summary: get status
+            operationId: status#get
+            responses:
+                "200":
+                    description: OK response.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/StatusResult'
+                            example:
+                                ai_mode: true
+                                hubspot_configured: true
+components:
+    schemas:
+        StatusResult:
+            type: object
+            properties:
+                ai_mode:
+                    type: boolean
+                    description: Whether an LLM backend is configured.
+                    example: false
+                hubspot_configured:
+                    type: boolean
+                    description: Whether a HubSpot access token is configured.
+                    example: false
+            example:
+                ai_mode: false
+                hubspot_configured: true
+            required:
+                - ai_mode
+                - hubspot_configured
+tags:
+    - name: status
+      description: Service health/status.

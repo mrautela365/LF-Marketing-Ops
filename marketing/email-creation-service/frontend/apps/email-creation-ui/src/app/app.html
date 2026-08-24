@@ -1,0 +1,71 @@
+<div class="mx-auto max-w-2xl p-8 font-sans">
+  <h1 class="mb-6 text-2xl font-semibold text-gray-900">{{ title() }}</h1>
+
+  <section class="mb-8 rounded-lg border border-gray-200 p-4">
+    <h2 class="mb-2 text-lg font-medium text-gray-800">Backend status</h2>
+
+    @if (statusError()) {
+      <p class="text-sm text-red-600">Error: {{ statusError() }}</p>
+      <button
+        class="mt-2 rounded bg-gray-100 px-3 py-1 text-sm hover:bg-gray-200"
+        (click)="loadStatus()"
+      >
+        Retry
+      </button>
+    } @else if (status()) {
+      <p class="text-sm text-gray-700">
+        HubSpot configured:
+        <span [class]="status()!.hubspot_configured ? 'text-green-600' : 'text-red-600'">
+          {{ status()!.hubspot_configured ? 'yes' : 'no' }}
+        </span>
+      </p>
+      <p class="text-sm text-gray-700">
+        AI mode:
+        <span [class]="status()!.ai_mode ? 'text-green-600' : 'text-red-600'">
+          {{ status()!.ai_mode ? 'yes' : 'no' }}
+        </span>
+      </p>
+    } @else {
+      <p class="text-sm text-gray-500">Loading status...</p>
+    }
+  </section>
+
+  <section class="rounded-lg border border-gray-200 p-4">
+    <h2 class="mb-2 text-lg font-medium text-gray-800">Search HubSpot lists</h2>
+
+    <div class="flex gap-2">
+      <input
+        type="text"
+        class="flex-1 rounded border border-gray-300 px-3 py-1.5 text-sm"
+        placeholder="Search list name..."
+        [ngModel]="query()"
+        (ngModelChange)="query.set($event)"
+        (keyup.enter)="search()"
+      />
+      <button
+        class="rounded bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
+        [disabled]="searching()"
+        (click)="search()"
+      >
+        {{ searching() ? 'Searching...' : 'Search' }}
+      </button>
+    </div>
+
+    @if (searchError()) {
+      <p class="mt-2 text-sm text-red-600">Error: {{ searchError() }}</p>
+    }
+
+    @if (lists().length > 0) {
+      <ul class="mt-4 divide-y divide-gray-100 text-sm">
+        @for (list of lists(); track list.id) {
+          <li class="flex justify-between py-2">
+            <span class="text-gray-800">{{ list.name }}</span>
+            <span class="text-gray-400">{{ list.size }}</span>
+          </li>
+        }
+      </ul>
+    } @else if (!searching() && query()) {
+      <p class="mt-4 text-sm text-gray-500">No results.</p>
+    }
+  </section>
+</div>
