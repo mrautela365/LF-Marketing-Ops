@@ -1,4 +1,124 @@
 <div class="card">
+  <div class="card-title">Discover existing lists</div>
+  <div class="card-desc">
+    Paste an event/campaign URL to automatically find existing HubSpot lists for it, grouped by signal (event
+    registration, opt-ins, past sends, speakers, etc).
+  </div>
+
+  <div class="field">
+    <label>Event / Campaign URL</label>
+    <input
+      type="text"
+      placeholder="https://kubecon.io/..."
+      [ngModel]="eventUrl()"
+      (ngModelChange)="eventUrl.set($event)"
+      (keyup.enter)="discoverLists()"
+    />
+  </div>
+  <button class="btn btn-primary" [disabled]="discovering()" (click)="discoverLists()">
+    {{ discovering() ? 'Discovering...' : 'Discover Existing Lists' }}
+  </button>
+
+  @if (discoverUrlError()) {
+    <div class="error-box" style="margin-top: 12px">{{ discoverUrlError() }}</div>
+  }
+  @if (discoverError()) {
+    <div class="error-box" style="margin-top: 12px">{{ discoverError() }}</div>
+  }
+  @if (discovering() || discoverTicker().length > 0) {
+    <div class="ab-discover-ticker" #discoverTickerEl>
+      @for (line of discoverTicker(); track $index) {
+        <div class="ab-log-line">{{ line }}</div>
+      }
+    </div>
+  }
+</div>
+
+@if (discoveryRan()) {
+  <div class="card">
+    <div class="card-title">Discovered lists</div>
+    <div class="card-desc">Click a card to include/exclude it — selections are shared with "Add lists to audience" below.</div>
+
+    @if (discoveredCards().length > 0) {
+      <div class="btn-row" style="margin-top: 0">
+        <button class="btn btn-outline btn-sm" type="button" (click)="selectAllDiscovered()">Select all</button>
+        <button class="btn btn-outline btn-sm" type="button" (click)="selectNoneDiscovered()">Select none</button>
+      </div>
+    }
+
+    @for (section of discoverySections(); track section.signal) {
+      <div class="ab-section" style="margin-top: 18px">
+        <div class="ab-section-header">
+          <span class="ab-section-title">{{ section.label }}</span>
+          <span class="ab-section-count">{{ section.cards.length }} list{{ section.cards.length === 1 ? '' : 's' }}</span>
+          <span class="ab-section-desc">{{ section.description }}</span>
+        </div>
+        <div class="ab-card-grid">
+          @for (c of section.cards; track c.list_id) {
+            <div class="ab-card" [class.selected]="isSelectedId(c.list_id)" (click)="toggleDiscoveredCard(c)">
+              <div class="ab-card-top">
+                <span class="ab-card-check"></span>
+                @if (lastSentIncludedIds().has(c.list_id)) {
+                  <span class="ab-lastsent-badge" title="Used in a past send for this event">📧 Used last time</span>
+                }
+              </div>
+              <div class="ab-card-name">{{ c.name || '(untitled list)' }}</div>
+              <div class="ab-card-meta">
+                <span>ID {{ c.list_id }}</span>
+                @if (c.list_type) {
+                  <span>{{ c.list_type }}</span>
+                }
+              </div>
+              <div class="ab-stat-row">
+                <div class="ab-stat-box">
+                  <div class="ab-stat-label">Contacts</div>
+                  <div class="ab-stat-value">{{ c.size != null ? c.size : '—' }}</div>
+                </div>
+              </div>
+              @if (c.reason) {
+                <div class="ab-card-reason">{{ c.reason }}</div>
+              }
+            </div>
+          }
+        </div>
+      </div>
+    }
+
+    <div class="ab-card ab-card-missing ab-card-speaker-scope" style="margin-top: 18px">
+      <div class="ab-card-top">
+        <span class="ab-signal-badge ab-signal-event_speakers">Event Speakers</span>
+      </div>
+      <div class="ab-card-reason">
+        Speakers are scoped by event edition — status shown per scope below (read-only; no build action available
+        from this tab).
+      </div>
+      <div class="ab-speaker-scope-rows">
+        @for (s of SPEAKER_SCOPES; track s.key) {
+          @if (speakerScopeStatus(s.key); as found) {
+            <div class="ab-speaker-scope-row">✓ {{ s.label }} — {{ found.name }}</div>
+          } @else {
+            <div class="ab-speaker-scope-row">{{ s.label }} — not found</div>
+          }
+        }
+      </div>
+    </div>
+
+    @if (missingSignalEntries().length > 0) {
+      <div class="ab-section" style="margin-top: 18px">
+        <div class="ab-section-header">
+          <span class="ab-section-title">Qualifying lists not found</span>
+        </div>
+        <div style="display: flex; flex-wrap: wrap; gap: 10px">
+          @for (m of missingSignalEntries(); track m.key) {
+            <div class="ab-missing-badge" [title]="m.description">{{ m.label }}</div>
+          }
+        </div>
+      </div>
+    }
+  </div>
+}
+
+<div class="card">
   <div class="card-title">Event context</div>
   <div class="card-desc">Looks up suppression lists, last-sent emails, and existing master lists for this event.</div>
 

@@ -4,6 +4,7 @@ import { Observable } from 'rxjs';
 import type {
   ComposeMasterListRequest,
   ComposeMasterListResponse,
+  DiscoverStartResponse,
   ExistingMasterListsResponse,
   LastSentResponse,
   PreviewCountRequest,
@@ -15,8 +16,12 @@ import type {
 
 /**
  * Wraps the 8 deterministic /api/audience-builder/* routes (ported from
- * audience_builder/routes.py). Discovery (/discover, /discover-stream) is
- * deferred to migration phase 5 (LLM gateway) and has no client here yet.
+ * audience_builder/routes.py), plus the URL-based discovery flow
+ * (/discover, /discover-stream), which is proxied straight to the Python
+ * backend on :8001 via proxy.conf.json rather than the Go backend on :8000.
+ * Discovery's SSE stream is opened directly against `discoverStreamUrl()`
+ * with the raw `EventSource` API in the component — HttpClient doesn't
+ * model SSE's mixed frame shapes well.
  */
 @Injectable({ providedIn: 'root' })
 export class AudienceBuilderService {
@@ -59,5 +64,16 @@ export class AudienceBuilderService {
       targets_ca: String(targetsCA),
     });
     return `/api/audience-builder/qa/report.xlsx?${params.toString()}`;
+  }
+
+  startDiscovery(eventUrl: string, qa = ''): Observable<DiscoverStartResponse> {
+    return this.http.post<DiscoverStartResponse>('/api/audience-builder/discover', {
+      event_url: eventUrl,
+      qa,
+    });
+  }
+
+  discoverStreamUrl(jobId: string): string {
+    return `/api/audience-builder/discover-stream/${jobId}`;
   }
 }

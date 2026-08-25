@@ -127,6 +127,56 @@ export interface ComposeMasterListResponse {
   suppression_size?: string;
 }
 
+// ─── Audience Builder discovery (Python backend, proxied via the
+// `/api/audience-builder/discover*` proxy.conf.json override — see
+// backend/audience_builder/models.py DiscoverListsRequest/DiscoveredList) ───
+
+/** Request body for `POST /api/audience-builder/discover`. */
+export interface DiscoverListsRequest {
+  event_url: string;
+  qa?: string;
+}
+
+/** Response body for `POST /api/audience-builder/discover`. */
+export interface DiscoverStartResponse {
+  job_id: string;
+  event_url: string;
+}
+
+/**
+ * One list surfaced by the discovery agent (see
+ * backend/audience_builder/models.py DiscoveredList). `signal` is one of
+ * project_opt_in | lf_newsletter_opt_in | event_registration |
+ * education_enrollment | page_view | event_speakers | uncertain, plus the
+ * client-synthesized last_sent/added values (never sent by the backend).
+ * `scope` (current | past | current_past) is only meaningful when
+ * `signal === 'event_speakers'`.
+ */
+export interface DiscoveredList {
+  list_id: string;
+  name: string;
+  signal: string;
+  size?: number | null;
+  reason?: string;
+  list_type?: string;
+  scope?: string;
+}
+
+/** One event surfaced over `GET /api/audience-builder/discover-stream/{job_id}` (SSE, `data:` payload). */
+export type DiscoveryStreamEvent =
+  | { type: 'heartbeat'; done?: boolean }
+  | { type: 'output'; text: string; done?: boolean }
+  | {
+      type: 'discovered';
+      lists: DiscoveredList[];
+      uncertain: DiscoveredList[];
+      brand_short: string;
+      event_name: string;
+      missing_signals: string[];
+      done?: boolean;
+      success?: boolean;
+    };
+
 /** Request body for `POST /api/audience-builder/qa/run`. */
 export interface QaRunRequest {
   list_ref: string;

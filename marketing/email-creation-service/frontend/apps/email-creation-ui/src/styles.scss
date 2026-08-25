@@ -502,6 +502,103 @@ header .subtitle {
   color: var(--gray-500);
 }
 
+.ab-discover-ticker {
+  margin-top: 12px;
+  max-height: 160px;
+  overflow-y: auto;
+  background: var(--gray-900, #111827);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  font-family: ui-monospace, monospace;
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+.ab-log-line {
+  color: #d1fae5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.ab-lastsent-badge {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--blue-dark);
+  white-space: nowrap;
+}
+
+.ab-stat-row {
+  display: flex;
+  gap: 10px;
+  margin-top: 8px;
+}
+.ab-stat-box {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.ab-stat-label {
+  font-size: 10.5px;
+  color: var(--gray-400);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+.ab-stat-value {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--gray-800);
+}
+.ab-card-reason {
+  font-size: 12px;
+  color: var(--gray-500);
+  margin-top: 8px;
+  border-top: 1px solid var(--gray-100);
+  padding-top: 8px;
+}
+
+.ab-card-missing {
+  border-style: dashed;
+  cursor: default;
+}
+.ab-card-speaker-scope .ab-card-reason {
+  border-top: none;
+  padding-top: 0;
+  margin-top: 6px;
+}
+.ab-speaker-scope-rows {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ab-speaker-scope-row {
+  font-size: 12.5px;
+  color: var(--gray-700);
+}
+
+.ab-missing-badge {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--gray-600);
+  background: var(--gray-100);
+  border: 1px solid var(--gray-200);
+  border-radius: 999px;
+  padding: 6px 12px;
+  cursor: default;
+}
+
+.ab-signal-project_opt_in,
+.ab-signal-lf_newsletter_opt_in,
+.ab-signal-event_registration,
+.ab-signal-education_enrollment,
+.ab-signal-page_view,
+.ab-signal-event_speakers,
+.ab-signal-uncertain,
+.ab-signal-added,
+.ab-signal-last_sent {
+  background: var(--gray-100);
+  color: var(--gray-700);
+}
+
 /* ── Wizard step indicator (ported from style.css) ── */
 .steps {
   display: inline-flex;
