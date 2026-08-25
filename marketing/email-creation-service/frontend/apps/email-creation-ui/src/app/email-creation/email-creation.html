@@ -550,7 +550,7 @@
     }
 
     @if (audienceSubTab() === 'reuse') {
-      <app-audience-builder />
+      <app-audience-builder (createListRequested)="onAudienceBuilderCreateListRequested($event)" />
     }
 
     @if (subLists().length > 0) {

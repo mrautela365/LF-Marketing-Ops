@@ -300,6 +300,12 @@ export class EmailCreation {
     this.audienceSubTab.set(tab);
   }
 
+  /** Pre-fills the Custom Audience tab's request box from a "Create list" click in the Reuse/Discover tab, then switches to it. */
+  onAudienceBuilderCreateListRequested(promptText: string): void {
+    this.customAudienceRequest.set(promptText);
+    this.switchAudienceTab('custom');
+  }
+
   private openAudienceStream(
     jobId: string,
     ticker: WritableSignal<string[]>,

@@ -1,4 +1,4 @@
-import { Component, ElementRef, OnDestroy, ViewChild, effect, signal } from '@angular/core';
+import { Component, ElementRef, EventEmitter, OnDestroy, Output, ViewChild, effect, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import type {
   AudienceListInfo,
@@ -58,29 +58,46 @@ const SIGNAL_DESC: Record<string, string> = {
   added: 'Manually added via search',
 };
 
-// Missing-signal descriptions for the "Qualifying lists not found" section
-// (event_speakers is excluded — it gets its own always-on 3-row status
-// widget below instead, see speakerScopeStatus()).
-const MISSING_SIGNAL_INFO: Record<string, { label: string; description: string }> = {
+// Every generated prompt ends with the same explicit no-suppression note:
+// these are single-signal inclusion lists built one at a time from the
+// "Qualifying lists not found" panel, not the final send audience.
+// Suppressions must be applied exactly once, later, on the master list that
+// combines these — never baked into an individual signal list here.
+const NO_SUPPRESSION_NOTE =
+  ' This is a single inclusion list for one signal only — it will be combined into a master audience later. Do not add any suppression filters or a Combined Suppression list to it; suppressions apply only at the master-list level.';
+
+// Missing-signal descriptions + prompt builders for the "Qualifying lists not
+// found" section (event_speakers is excluded — it gets its own always-on
+// 3-row status widget below instead, see speakerScopeStatus() /
+// speakerScopePrompt()). Mirrors legacy audience-builder.js's SIGNAL_INFO.
+const MISSING_SIGNAL_INFO: Record<string, { label: string; description: string; prompt: (eventUrl: string) => string }> = {
   project_opt_in: {
     label: 'Project Opt-In',
     description: "Contacts opted into this project's own email subscription type (not the general LF newsletter).",
+    prompt: (eventUrl) =>
+      `Build a list of contacts opted into this project's own email subscription type (project-specific opt-in, not the general Linux Foundation newsletter) for the event at ${eventUrl}.${NO_SUPPRESSION_NOTE}`,
   },
   lf_newsletter_opt_in: {
     label: 'LF Newsletter Opt-In',
     description: 'Contacts opted into the Linux Foundation Newsletter subscription type.',
+    prompt: (eventUrl) =>
+      `Build a list of contacts opted into the Linux Foundation Newsletter subscription type, relevant to the event at ${eventUrl}.${NO_SUPPRESSION_NOTE}`,
   },
   event_registration: {
     label: 'Event Registration',
     description: 'All-time registrants for this event, across all past editions.',
+    prompt: (eventUrl) => `Build a list of all-time registrants (all editions) for the event at ${eventUrl}.${NO_SUPPRESSION_NOTE}`,
   },
   education_enrollment: {
     label: 'Education Enrollment',
     description: "Contacts enrolled in LFX Education courses related to this event's topic area.",
+    prompt: (eventUrl) =>
+      `Build a list of contacts enrolled in LFX Education courses related to the topic area of the event at ${eventUrl}.${NO_SUPPRESSION_NOTE}`,
   },
   page_view: {
     label: 'Page View',
     description: "Contacts who viewed this event's page (page-view based segment).",
+    prompt: (eventUrl) => `Build a page-view based list of contacts who viewed the event page at ${eventUrl}.${NO_SUPPRESSION_NOTE}`,
   },
 };
 
@@ -89,6 +106,36 @@ const SPEAKER_SCOPES: { key: string; label: string }[] = [
   { key: 'past', label: 'Past event speakers' },
   { key: 'current_past', label: 'Current + Past event speakers' },
 ];
+const SPEAKER_SCOPE_LABELS: Record<string, string> = { current: 'Current', past: 'Past', current_past: 'Current + Past' };
+
+/** Prompt builder for the event_speakers signal — the only one that's scope-aware. */
+function speakerScopePrompt(eventUrl: string, scopeKey: string): string {
+  const label = SPEAKER_SCOPE_LABELS[scopeKey] ?? SPEAKER_SCOPE_LABELS['current_past'];
+  const scopeNote =
+    scopeKey === 'current'
+      ? ' Only include speakers from the CURRENT/upcoming edition of this event — exclude speakers from any past edition.'
+      : scopeKey === 'past'
+        ? ' Only include speakers from PAST editions of this event — exclude speakers from the current/upcoming edition.'
+        : ' Include speakers from both the current/upcoming edition and every past edition of this event.';
+  return `Build a list of contacts who are speakers (not general registrants) for the event at ${eventUrl}.${scopeNote} SPEAKER SCOPE: ${label}.${NO_SUPPRESSION_NOTE}`;
+}
+
+// Suppression-category display metadata — section label + rank order for the
+// grid grouping (mirrors legacy loadSuppressionLists' rank object: an
+// existing per-event suppression list is the strongest signal, then
+// brand-scoped opt-outs, then current registrants, then generic terms).
+const SUPPRESSION_CATEGORY_RANK: Record<string, number> = {
+  event_specific: 0,
+  brand: 1,
+  current_registrants: 2,
+  standard: 3,
+};
+const SUPPRESSION_CATEGORY_LABELS: Record<string, string> = {
+  event_specific: 'Existing suppression for this event',
+  brand: 'LF Global Opt-Out',
+  current_registrants: 'Current Registrants',
+  standard: 'Standard',
+};
 
 // A card's scope satisfies a requested scope if they match exactly, or if
 // the card covers both editions (current_past is a superset of either). A
@@ -106,6 +153,9 @@ function speakerCardCoversScope(card: DiscoveredList, scopeKey: string): boolean
   styleUrl: './audience-builder.scss',
 })
 export class AudienceBuilder implements OnDestroy {
+  /** Emits a pre-filled Custom Audience request string when "Create list" is clicked for a missing signal. */
+  @Output() readonly createListRequested = new EventEmitter<string>();
+
   // ── URL-based discovery ──────────────────────────────────────────────
   // The main entry point: paste an event/campaign URL, discovery finds
   // existing HubSpot lists per signal via the Python backend's SSE job,
@@ -159,6 +209,12 @@ export class AudienceBuilder implements OnDestroy {
   protected readonly previewResult = signal<PreviewCountResponse | null>(null);
   protected readonly previewLoading = signal(false);
   protected readonly previewError = signal<string | null>(null);
+
+  // Exact-count for the Suppression & Exclusions stat row — mirrors
+  // previewResult/previewLoading above but scoped to excludedListIds().
+  protected readonly suppressionExactResult = signal<PreviewCountResponse | null>(null);
+  protected readonly suppressionExactLoading = signal(false);
+  protected readonly suppressionExactError = signal<string | null>(null);
 
   protected readonly masterListName = signal('');
   protected readonly composeResult = signal<ComposeMasterListResponse | null>(null);
@@ -288,12 +344,72 @@ export class AudienceBuilder implements OnDestroy {
   missingSignalEntries(): { key: string; label: string; description: string }[] {
     return this.missingSignals()
       .filter((sig) => sig !== 'event_speakers')
-      .map((sig) => ({ key: sig, ...(MISSING_SIGNAL_INFO[sig] ?? { label: sig, description: '' }) }));
+      .map((sig) => ({ key: sig, ...(MISSING_SIGNAL_INFO[sig] ?? { label: sig, description: '', prompt: () => '' }) }));
   }
 
   /** The discovered event_speakers card (if any) covering the given scope, for the read-only speaker-scope status widget. */
   speakerScopeStatus(scopeKey: string): DiscoveredList | undefined {
     return this.discoveredCards().find((c) => c.signal === 'event_speakers' && speakerCardCoversScope(c, scopeKey));
+  }
+
+  /**
+   * Builds a natural-language request for the given missing signal and
+   * emits it upward so the parent (EmailCreation) can pre-fill the Custom
+   * Audience tab's request box and switch to it. Not a full inline build —
+   * per the legacy screenshot's own copy, this only pre-fills the request.
+   */
+  requestCreateList(sig: string): void {
+    const info = MISSING_SIGNAL_INFO[sig];
+    if (!info) return;
+    this.createListRequested.emit(info.prompt(this.eventUrl().trim()));
+  }
+
+  /** Same as requestCreateList, but for one of the 3 scoped event_speakers rows. */
+  requestCreateSpeakerList(scopeKey: string): void {
+    this.createListRequested.emit(speakerScopePrompt(this.eventUrl().trim(), scopeKey));
+  }
+
+  /**
+   * Auto-selects discovered cards that were used in a past send, and
+   * synthesizes a "Used In Past Sends" card for any past-send inclusion
+   * list that didn't match one of the discovery signals at all (e.g. a
+   * regional/demographic segment) — mirrors legacy's loadLastSent, so these
+   * "common" lists don't require a manual "Use same selection" click.
+   */
+  private autoSelectLastSentLists(): void {
+    const includedIds = this.lastSentIncludedIds();
+    if (includedIds.size === 0) return;
+
+    const cards = this.discoveredCards();
+    const cardIds = new Set(cards.map((c) => String(c.list_id)));
+    const additions: DiscoveredList[] = [];
+    const briefById = new Map<string, LastSentEmail['included_lists'][number]>();
+    for (const e of this.lastSentEmails()) {
+      for (const l of e.included_lists ?? []) {
+        if (!briefById.has(l.list_id)) briefById.set(l.list_id, l);
+      }
+    }
+    for (const [id, l] of briefById) {
+      if (l.missing || cardIds.has(id)) continue;
+      additions.push({
+        list_id: id,
+        name: l.name,
+        signal: 'last_sent',
+        size: l.size,
+        reason: 'Used in a past send for this event; not classified under the signals above.',
+      });
+    }
+    if (additions.length > 0) this.discoveredCards.set([...cards, ...additions]);
+
+    const toSelect = [...cardIds, ...additions.map((a) => String(a.list_id))].filter((id) => includedIds.has(id));
+    const nameById = new Map(
+      [...cards, ...additions].map((c) => [String(c.list_id), c.name] as const),
+    );
+    this.selected.update((sel) => {
+      const existing = new Set(sel.map((s) => s.id));
+      const more = toSelect.filter((id) => !existing.has(id)).map((id) => ({ id, name: nameById.get(id) ?? id }));
+      return more.length > 0 ? [...sel, ...more] : sel;
+    });
   }
 
   /** Every list_id used by any past send for this event — drives the "Used last time" card badge. */
@@ -323,9 +439,25 @@ export class AudienceBuilder implements OnDestroy {
     this.selected.update((s) => [...s, ...additions]);
   }
 
-  selectNoneDiscovered(): void {
+  clearDiscovered(): void {
     const ids = new Set(this.discoveredCards().map((c) => String(c.list_id)));
     this.selected.update((s) => s.filter((l) => !ids.has(l.id)));
+  }
+
+  // ── Discovered-lists stat row ────────────────────────────────────────
+
+  /** Number of discovered segments (cards) — mirrors legacy's ab-stat-segments. */
+  discoveredSegmentsCount(): number {
+    return this.discoveredCards().length;
+  }
+
+  /** Sum of .size across currently-selected discovered cards — an estimate since sizes can overlap across lists. */
+  discoveredContactsEstimate(): number {
+    const selectedIds = new Set(this.selected().map((s) => s.id));
+    return this.discoveredCards().reduce(
+      (sum, c) => (selectedIds.has(String(c.list_id)) && typeof c.size === 'number' ? sum + c.size : sum),
+      0,
+    );
   }
 
   loadContext(): void {
@@ -352,6 +484,7 @@ export class AudienceBuilder implements OnDestroy {
       next: (res) => {
         this.lastSentEmails.set(res.results ?? []);
         this.lastSentLoading.set(false);
+        this.autoSelectLastSentLists();
       },
       error: (err) => {
         this.lastSentError.set(err?.message ?? 'Failed to load last-sent emails');
@@ -406,20 +539,13 @@ export class AudienceBuilder implements OnDestroy {
     this.selected.update((s) => s.filter((l) => l.id !== id));
   }
 
-  /** Populates the audience from a previously-sent email's included lists. */
-  reuseIncludedLists(email: LastSentEmail): void {
+  /** Reuses a previously-sent email's exact selection — both its inclusion lists AND its suppression lists, in one action. */
+  useLastSentSelection(email: LastSentEmail): void {
     const additions = (email.included_lists ?? [])
       .filter((l) => !this.selected().some((s) => s.id === l.list_id))
       .map((l) => ({ id: l.list_id, name: l.name }));
     this.selected.update((s) => [...s, ...additions]);
-  }
 
-  /**
-   * Explicit, separate action to check the suppression boxes this email
-   * used last time — kept distinct from reuseIncludedLists so nothing gets
-   * suppressed without the user seeing and choosing it here.
-   */
-  applyPastSuppressionSelection(email: LastSentEmail): void {
     const ids = new Set(this.excludedListIds());
     for (const l of email.suppression_lists ?? []) ids.add(l.list_id);
     this.excludedListIds.set(ids);
@@ -434,6 +560,52 @@ export class AudienceBuilder implements OnDestroy {
 
   isSuppressionChecked(list: SuppressionList): boolean {
     return this.excludedListIds().has(list.list_id);
+  }
+
+  // ── Suppression & Exclusions grouping + stat row ─────────────────────
+
+  /** Groups suppressionLists() by category, in rank order, with a section label per category. */
+  suppressionSections(): { category: string; label: string; lists: SuppressionList[] }[] {
+    const byCategory = new Map<string, SuppressionList[]>();
+    for (const s of this.suppressionLists()) {
+      const cat = s.category || 'standard';
+      const group = byCategory.get(cat);
+      if (group) group.push(s);
+      else byCategory.set(cat, [s]);
+    }
+    return [...byCategory.keys()]
+      .sort((a, b) => (SUPPRESSION_CATEGORY_RANK[a] ?? 9) - (SUPPRESSION_CATEGORY_RANK[b] ?? 9))
+      .map((cat) => ({
+        category: cat,
+        label: SUPPRESSION_CATEGORY_LABELS[cat] ?? cat,
+        lists: byCategory.get(cat)!,
+      }));
+  }
+
+  /** Sum of .size across currently-checked suppression lists — an estimate since sizes can overlap across lists. */
+  suppressionContactsEstimate(): number {
+    const excluded = this.excludedListIds();
+    return this.suppressionLists().reduce(
+      (sum, s) => (excluded.has(s.list_id) && typeof s.size === 'number' ? sum + s.size : sum),
+      0,
+    );
+  }
+
+  previewSuppressionCount(): void {
+    const ids = [...this.excludedListIds()];
+    if (ids.length === 0) return;
+    this.suppressionExactLoading.set(true);
+    this.suppressionExactError.set(null);
+    this.audienceService.previewCount({ list_ids: ids }).subscribe({
+      next: (res) => {
+        this.suppressionExactResult.set(res);
+        this.suppressionExactLoading.set(false);
+      },
+      error: (err) => {
+        this.suppressionExactError.set(err?.message ?? 'Preview failed');
+        this.suppressionExactLoading.set(false);
+      },
+    });
   }
 
   previewCount(): void {

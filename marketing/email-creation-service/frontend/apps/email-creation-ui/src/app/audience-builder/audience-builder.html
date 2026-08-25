@@ -40,10 +40,33 @@
     <div class="card-desc">Click a card to include/exclude it — selections are shared with "Add lists to audience" below.</div>
 
     @if (discoveredCards().length > 0) {
-      <div class="btn-row" style="margin-top: 0">
-        <button class="btn btn-outline btn-sm" type="button" (click)="selectAllDiscovered()">Select all</button>
-        <button class="btn btn-outline btn-sm" type="button" (click)="selectNoneDiscovered()">Select none</button>
+      <div class="ab-summary-bar">
+        <div class="ab-stat-box">
+          <div class="ab-stat-label">Segments</div>
+          <div class="ab-stat-value">{{ discoveredSegmentsCount() }}</div>
+        </div>
+        <div class="ab-stat-box">
+          <div class="ab-stat-label">Total contacts</div>
+          <div class="ab-stat-value">
+            {{ previewResult() ? previewResult()!.count.toLocaleString() : discoveredContactsEstimate().toLocaleString() }}
+            <span class="ab-stat-tag">{{ previewResult() ? (previewResult()!.exact ? '(exact)' : '(estimate)') : (selected().length ? '(estimate, may overlap)' : '') }}</span>
+          </div>
+        </div>
+        <div class="ab-stat-box">
+          <div class="ab-stat-label">Selected</div>
+          <div class="ab-stat-value">{{ selected().length }}</div>
+        </div>
+        <div class="btn-row" style="margin-top: 0; margin-left: auto">
+          <button class="btn btn-outline btn-sm" type="button" [disabled]="selected().length === 0 || previewLoading()" (click)="previewCount()">
+            {{ previewLoading() ? 'Calculating…' : 'Get exact count' }}
+          </button>
+          <button class="btn btn-outline btn-sm" type="button" (click)="selectAllDiscovered()">Select all</button>
+          <button class="btn btn-outline btn-sm" type="button" (click)="clearDiscovered()">Clear</button>
+        </div>
       </div>
+      @if (previewError()) {
+        <div class="error-box" style="margin-top: 10px">Error: {{ previewError() }}</div>
+      }
     }
 
     @for (section of discoverySections(); track section.signal) {
@@ -89,32 +112,23 @@
         <span class="ab-signal-badge ab-signal-event_speakers">Event Speakers</span>
       </div>
       <div class="ab-card-reason">
-        Speakers are scoped by event edition — status shown per scope below (read-only; no build action available
-        from this tab).
+        Speakers are scoped by event edition — reuse whichever already exists below, or use "Create list" to
+        pre-fill a request for it in the Custom Audience tab.
       </div>
       <div class="ab-speaker-scope-rows">
         @for (s of SPEAKER_SCOPES; track s.key) {
           @if (speakerScopeStatus(s.key); as found) {
             <div class="ab-speaker-scope-row">✓ {{ s.label }} — {{ found.name }}</div>
           } @else {
-            <div class="ab-speaker-scope-row">{{ s.label }} — not found</div>
+            <div class="ab-speaker-scope-row">
+              <span>{{ s.label }} — not found</span>
+              <button class="btn btn-outline btn-sm" type="button" (click)="requestCreateSpeakerList(s.key)">Create list</button>
+            </div>
           }
         }
       </div>
     </div>
 
-    @if (missingSignalEntries().length > 0) {
-      <div class="ab-section" style="margin-top: 18px">
-        <div class="ab-section-header">
-          <span class="ab-section-title">Qualifying lists not found</span>
-        </div>
-        <div style="display: flex; flex-wrap: wrap; gap: 10px">
-          @for (m of missingSignalEntries(); track m.key) {
-            <div class="ab-missing-badge" [title]="m.description">{{ m.label }}</div>
-          }
-        </div>
-      </div>
-    }
   </div>
 }
 
@@ -199,10 +213,7 @@
               <span class="ab-last-sent-label">Suppressed:</span> {{ email.suppression_lists.length }} list(s)
             </div>
             <div class="btn-row" style="margin-top: 10px">
-              <button class="btn btn-outline btn-sm" (click)="reuseIncludedLists(email)">Reuse included lists</button>
-              <button class="btn btn-outline btn-sm" (click)="applyPastSuppressionSelection(email)">
-                Apply its suppression selection
-              </button>
+              <button class="btn btn-outline btn-sm" (click)="useLastSentSelection(email)">Use same selection</button>
             </div>
           </div>
         }
@@ -260,7 +271,7 @@
   </div>
 
   <div class="card">
-    <div class="card-title">Suppression lists</div>
+    <div class="card-title">Suppression &amp; Exclusions</div>
     <div class="card-desc">Nothing is suppressed by default — select each list you want excluded from the master list.</div>
 
     @if (suppressionLoading()) {
@@ -270,18 +281,60 @@
     } @else if (suppressionLists().length === 0) {
       <p style="font-size: 13px; color: var(--gray-400)">No suppression lists found.</p>
     } @else {
-      <div class="ab-card-grid">
-        @for (s of suppressionLists(); track s.list_id) {
-          <div class="ab-card" [class.selected]="isSuppressionChecked(s)" (click)="toggleSuppression(s)">
-            <div class="ab-card-top">
-              <span class="ab-signal-badge" [class]="'ab-signal-' + s.category">{{ s.category }}</span>
-              <span class="ab-card-check"></span>
-            </div>
-            <div class="ab-card-name">{{ s.label }}</div>
-            <div class="ab-card-meta">{{ s.size ?? '—' }} contacts</div>
+      <div class="ab-summary-bar">
+        <div class="ab-stat-box">
+          <div class="ab-stat-label">Excluded contacts</div>
+          <div class="ab-stat-value">
+            {{ suppressionExactResult() ? suppressionExactResult()!.count.toLocaleString() : suppressionContactsEstimate().toLocaleString() }}
+            <span class="ab-stat-tag">
+              {{
+                suppressionExactResult()
+                  ? (suppressionExactResult()!.exact ? '(exact)' : '(estimate)')
+                  : (excludedListIds().size ? '(estimate, may overlap)' : '')
+              }}
+            </span>
           </div>
-        }
+        </div>
+        <div class="btn-row" style="margin-top: 0; margin-left: auto">
+          <button
+            class="btn btn-outline btn-sm"
+            type="button"
+            [disabled]="excludedListIds().size === 0 || suppressionExactLoading()"
+            (click)="previewSuppressionCount()"
+          >
+            {{ suppressionExactLoading() ? 'Calculating…' : 'Get exact count' }}
+          </button>
+        </div>
       </div>
+      @if (suppressionExactError()) {
+        <div class="error-box" style="margin-top: 10px">Error: {{ suppressionExactError() }}</div>
+      }
+
+      @for (section of suppressionSections(); track section.category) {
+        <div class="ab-section" style="margin-top: 18px">
+          <div class="ab-section-header">
+            <span class="ab-signal-badge" [class]="'ab-signal-' + section.category">{{ section.label }}</span>
+            <span class="ab-section-count">{{ section.lists.length }} list{{ section.lists.length === 1 ? '' : 's' }}</span>
+          </div>
+          <div class="ab-card-grid">
+            @for (s of section.lists; track s.list_id) {
+              <div class="ab-card" [class.selected]="isSuppressionChecked(s)" (click)="toggleSuppression(s)">
+                <div class="ab-card-top">
+                  <span class="ab-signal-badge" [class]="'ab-signal-' + s.category">{{ s.category }}</span>
+                  <span class="ab-card-check"></span>
+                </div>
+                <div class="ab-card-name">{{ s.label }}</div>
+                <div class="ab-card-meta">
+                  <span>{{ s.size ?? '—' }} contacts</span>
+                  @if (s.category === 'event_specific') {
+                    <span class="ab-recommended-tag">★ Recommended</span>
+                  }
+                </div>
+              </div>
+            }
+          </div>
+        </div>
+      }
     }
   </div>
 
@@ -332,6 +385,23 @@
       </div>
     }
   </div>
+
+  @if (missingSignalEntries().length > 0) {
+    <div class="card">
+      <div class="card-title">Qualifying lists not found</div>
+      <div class="card-desc">
+        Use "Create list" to pre-fill a request for it in the Custom Audience tab, or skip if you don't need it.
+      </div>
+      <div style="display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px">
+        @for (m of missingSignalEntries(); track m.key) {
+          <div class="ab-missing-badge" [title]="m.description">
+            <span>{{ m.label }}</span>
+            <button class="btn btn-outline btn-sm" type="button" (click)="requestCreateList(m.key)">Create list</button>
+          </div>
+        }
+      </div>
+    </div>
+  }
 
   @if (composeResult()) {
     <div class="card">
