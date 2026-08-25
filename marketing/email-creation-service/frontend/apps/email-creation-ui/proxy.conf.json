@@ -6,6 +6,13 @@
   "/api/clone": { "target": "http://localhost:8001", "secure": false, "changeOrigin": true },
   "/api/set-send-list": { "target": "http://localhost:8001", "secure": false, "changeOrigin": true },
   "/api/chat": { "target": "http://localhost:8001", "secure": false, "changeOrigin": true },
+  "/api/audience-plan": { "target": "http://localhost:8001", "secure": false, "changeOrigin": true },
+  "/api/build-audience": { "target": "http://localhost:8001", "secure": false, "changeOrigin": true },
+  "/api/audience-stream": { "target": "http://localhost:8001", "secure": false, "changeOrigin": true },
+  "/api/audience/plan": { "target": "http://localhost:8001", "secure": false, "changeOrigin": true },
+  "/api/audience/run": { "target": "http://localhost:8001", "secure": false, "changeOrigin": true },
+  "/api/audience/custom-plan": { "target": "http://localhost:8001", "secure": false, "changeOrigin": true },
+  "/api/audience/custom-run": { "target": "http://localhost:8001", "secure": false, "changeOrigin": true },
   "/api": {
     "target": "http://localhost:8000",
     "secure": false,

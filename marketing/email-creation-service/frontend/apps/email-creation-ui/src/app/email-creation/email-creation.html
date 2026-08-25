@@ -204,10 +204,106 @@
   <div class="card">
     <div class="card-title">Audience Preview</div>
     <div class="card-desc">
-      Paste one or more HubSpot list IDs to send to (comma-separated), or use the Audience Builder tab to compose a
-      master list first and paste its ID here. Leave blank to skip attaching a send list for now.
+      Analyze the event page, describe a custom audience in plain text, or reuse/discover an existing HubSpot list —
+      or skip and attach a send list later.
     </div>
-    <div class="field">
+
+    <div class="top-tabs" style="margin: 0 0 16px 0">
+      <div class="top-tab" [class.active]="audienceSubTab() === 'event'" (click)="switchAudienceTab('event')">Event Audience</div>
+      <div class="top-tab" [class.active]="audienceSubTab() === 'custom'" (click)="switchAudienceTab('custom')">Custom Audience</div>
+      <div class="top-tab" [class.active]="audienceSubTab() === 'reuse'" (click)="switchAudienceTab('reuse')">
+        Reuse or Discover Existing Audience
+      </div>
+    </div>
+
+    @if (audienceSubTab() === 'event') {
+      <div class="field">
+        <label>Event URL</label>
+        <input
+          type="text"
+          placeholder="https://..."
+          [ngModel]="eventAudienceUrl()"
+          (ngModelChange)="eventAudienceUrl.set($event)"
+        />
+      </div>
+      @if (eventAudienceError()) {
+        <div class="error-box">Error: {{ eventAudienceError() }}</div>
+      }
+      @if (eventAudienceStatus() === 'idle') {
+        <button class="btn btn-primary" [disabled]="!eventAudienceUrl().trim()" (click)="runEventAudiencePlan()">
+          Generate Audience Plan
+        </button>
+      }
+      @if (eventAudienceStatus() === 'planning' || eventAudienceStatus() === 'building') {
+        <div class="loading"><span class="spinner"></span> {{ eventAudienceStatus() === 'planning' ? 'Analyzing event page...' : 'Building HubSpot lists...' }}</div>
+      }
+      @if (eventAudienceTicker().length > 0) {
+        <div class="brief-log" style="margin-top: 12px">
+          @for (line of eventAudienceTicker(); track $index) {
+            <div class="brief-line">{{ line }}</div>
+          }
+        </div>
+      }
+      @if (eventAudienceStatus() === 'plan_ready') {
+        <div class="btn-row" style="margin-top: 12px">
+          <button class="btn btn-outline" (click)="discardEventAudiencePlan()">Discard</button>
+          <button class="btn btn-success" (click)="approveEventAudiencePlan()">Approve &amp; Build List</button>
+        </div>
+      }
+      @if (eventAudienceStatus() === 'built' && masterListId()) {
+        <div class="success-box" style="margin-top: 12px">
+          Master list built:
+          <a [href]="masterListUrl() ?? '#'" target="_blank">{{ masterListId() }}</a>
+        </div>
+      }
+    }
+
+    @if (audienceSubTab() === 'custom') {
+      <div class="field">
+        <label>Describe the audience</label>
+        <textarea
+          placeholder="e.g. Everyone who attended KubeCon EU 2025 and works at a member company"
+          [ngModel]="customAudienceRequest()"
+          (ngModelChange)="customAudienceRequest.set($event)"
+        ></textarea>
+      </div>
+      @if (customAudienceError()) {
+        <div class="error-box">Error: {{ customAudienceError() }}</div>
+      }
+      @if (customAudienceStatus() === 'idle') {
+        <button class="btn btn-primary" [disabled]="!customAudienceRequest().trim()" (click)="runCustomAudiencePlan()">
+          Generate Audience Plan
+        </button>
+      }
+      @if (customAudienceStatus() === 'planning' || customAudienceStatus() === 'building') {
+        <div class="loading"><span class="spinner"></span> {{ customAudienceStatus() === 'planning' ? 'Drafting audience plan...' : 'Building HubSpot lists...' }}</div>
+      }
+      @if (customAudienceTicker().length > 0) {
+        <div class="brief-log" style="margin-top: 12px">
+          @for (line of customAudienceTicker(); track $index) {
+            <div class="brief-line">{{ line }}</div>
+          }
+        </div>
+      }
+      @if (customAudienceStatus() === 'plan_ready') {
+        <div class="btn-row" style="margin-top: 12px">
+          <button class="btn btn-outline" (click)="discardCustomAudiencePlan()">Discard</button>
+          <button class="btn btn-success" (click)="approveCustomAudiencePlan()">Approve &amp; Build List</button>
+        </div>
+      }
+      @if (customAudienceStatus() === 'built' && masterListId()) {
+        <div class="success-box" style="margin-top: 12px">
+          Master list built:
+          <a [href]="masterListUrl() ?? '#'" target="_blank">{{ masterListId() }}</a>
+        </div>
+      }
+    }
+
+    @if (audienceSubTab() === 'reuse') {
+      <app-audience-builder />
+    }
+
+    <div class="field" style="margin-top: 20px">
       <label>Send list ID(s)</label>
       <input
         type="text"
@@ -216,8 +312,10 @@
         (ngModelChange)="sendListIdsText.set($event)"
       />
     </div>
+
     <div class="btn-row" style="margin-top: 0">
       <button class="btn btn-outline" (click)="step.set(2)">← Back</button>
+      <button class="btn btn-outline" (click)="skipAudience()">Skip — Create Email Only</button>
       <button class="btn btn-success" (click)="startImplementation()">Create Campaign Draft →</button>
     </div>
   </div>

@@ -302,3 +302,60 @@ export interface ChatResponse {
   phase: string;
   draft_url?: string;
 }
+
+// ─── Audience Preview (Step 3) plan/build flows — session-scoped
+// (`/api/audience-plan`, `/api/build-audience`) and standalone
+// (`/api/audience/plan`, `/api/audience/run`, `/api/audience/custom-plan`,
+// `/api/audience/custom-run`) variants, streamed via
+// `/api/audience-stream/{job_id}` (see main.py stream_audience_build) ───
+
+/** Request body for `POST /api/audience-plan` (or `/api/audience/plan` when session_id is omitted). */
+export interface AudiencePlanRequest {
+  session_id?: string;
+  event_url: string;
+  qa?: boolean;
+}
+
+/** Request body for `POST /api/build-audience` (or `/api/audience/run` when session_id is omitted). */
+export interface BuildAudienceRequest {
+  session_id?: string;
+  event_url: string;
+  plan: string;
+  qa?: boolean;
+}
+
+/** Request body for `POST /api/audience/custom-plan`. */
+export interface CustomAudiencePlanRequest {
+  request: string;
+  qa?: boolean;
+}
+
+/** Request body for `POST /api/audience/custom-run`. */
+export interface CustomAudienceRunRequest {
+  request: string;
+  plan: string;
+  qa?: boolean;
+}
+
+/** Response body shared by all audience plan/build start routes. */
+export interface AudienceJobResponse {
+  job_id: string;
+  event_url?: string;
+}
+
+/** One event surfaced over `GET /api/audience-stream/{job_id}` (SSE, `data:` payload). */
+export type AudienceStreamEvent =
+  | { type: 'heartbeat' }
+  | { type: 'output'; text: string }
+  | { type: 'delta'; text: string }
+  | { type: 'question'; questions: string[] }
+  | {
+      type: 'complete';
+      done: true;
+      master_list_id?: string;
+      master_list_url?: string;
+      suppression_lists?: SuppressionList[];
+      posthoc_applied?: boolean;
+      success?: boolean;
+    }
+  | { type: 'error'; text: string };

@@ -1,8 +1,11 @@
-import { Component, signal } from '@angular/core';
+import { Component, signal, type WritableSignal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { DomSanitizer, type SafeHtml } from '@angular/platform-browser';
-import type { ContentSection, PlanResult } from '@email-creation/shared';
+import type { AudienceStreamEvent, ContentSection, PlanResult } from '@email-creation/shared';
+import { AudienceBuilder } from '../audience-builder/audience-builder';
 import { EmailCreationService } from './email-creation.service';
+
+type AudienceJobStatus = 'idle' | 'planning' | 'plan_ready' | 'building' | 'built' | 'error';
 
 interface ChatEntry {
   who: 'you' | 'assistant';
@@ -20,7 +23,7 @@ interface ChatEntry {
  */
 @Component({
   selector: 'app-email-creation',
-  imports: [FormsModule],
+  imports: [FormsModule, AudienceBuilder],
   templateUrl: './email-creation.html',
   styleUrl: './email-creation.scss',
 })
@@ -56,8 +59,27 @@ export class EmailCreation {
   protected readonly chat2 = signal<ChatEntry[]>([]);
   protected readonly chat2Input = signal('');
 
-  // Step 3 — send list (simplified; full picker lives in the Audience Builder tab).
+  // Step 3 — Audience Preview.
+  protected readonly audienceSubTab = signal<'event' | 'custom' | 'reuse'>('event');
   protected readonly sendListIdsText = signal('');
+  protected readonly masterListId = signal<string | null>(null);
+  protected readonly masterListUrl = signal<string | null>(null);
+
+  // Step 3, "Event Audience" sub-tab.
+  protected readonly eventAudienceUrl = signal('');
+  protected readonly eventAudienceTicker = signal<string[]>([]);
+  protected readonly eventAudienceStatus = signal<AudienceJobStatus>('idle');
+  protected readonly eventAudiencePlanText = signal('');
+  protected readonly eventAudienceError = signal<string | null>(null);
+  private eventAudienceSource: EventSource | null = null;
+
+  // Step 3, "Custom Audience" sub-tab.
+  protected readonly customAudienceRequest = signal('');
+  protected readonly customAudienceTicker = signal<string[]>([]);
+  protected readonly customAudienceStatus = signal<AudienceJobStatus>('idle');
+  protected readonly customAudiencePlanText = signal('');
+  protected readonly customAudienceError = signal<string | null>(null);
+  private customAudienceSource: EventSource | null = null;
 
   // Step 4 — implementation.
   protected readonly cloneLoading = signal(false);
@@ -182,6 +204,9 @@ export class EmailCreation {
 
   goToAudience(): void {
     this.step.set(3);
+    if (!this.eventAudienceUrl().trim()) {
+      this.eventAudienceUrl.set(this.eventUrl());
+    }
   }
 
   editPlan(): void {
@@ -193,6 +218,149 @@ export class EmailCreation {
       .split(',')
       .map((s) => s.trim())
       .filter(Boolean);
+  }
+
+  switchAudienceTab(tab: 'event' | 'custom' | 'reuse'): void {
+    this.audienceSubTab.set(tab);
+  }
+
+  private openAudienceStream(
+    jobId: string,
+    ticker: WritableSignal<string[]>,
+    status: WritableSignal<AudienceJobStatus>,
+    onComplete: (ev: Extract<AudienceStreamEvent, { type: 'complete' }>) => void,
+  ): EventSource {
+    return this.service.openAudienceStream(jobId, this.sessionId(), (ev) => {
+      if (ev.type === 'output' || ev.type === 'delta') {
+        ticker.update((lines) => [...lines, ev.text]);
+      } else if (ev.type === 'complete') {
+        onComplete(ev);
+      } else if (ev.type === 'error') {
+        ticker.update((lines) => [...lines, `⚠️ ${ev.text}`]);
+        status.set('error');
+      }
+    });
+  }
+
+  runEventAudiencePlan(): void {
+    const url = this.eventAudienceUrl().trim();
+    if (!url) return;
+    this.eventAudienceSource?.close();
+    this.eventAudienceTicker.set([]);
+    this.eventAudiencePlanText.set('');
+    this.eventAudienceError.set(null);
+    this.eventAudienceStatus.set('planning');
+    this.service.audiencePlan({ session_id: this.sessionId() ?? undefined, event_url: url }).subscribe({
+      next: (res) => {
+        this.eventAudienceSource = this.openAudienceStream(res.job_id, this.eventAudienceTicker, this.eventAudienceStatus, () => {
+          this.eventAudiencePlanText.set(this.eventAudienceTicker().join('\n'));
+          this.eventAudienceStatus.set('plan_ready');
+        });
+      },
+      error: (err) => {
+        this.eventAudienceError.set(err?.message ?? 'Failed to start audience plan');
+        this.eventAudienceStatus.set('error');
+      },
+    });
+  }
+
+  approveEventAudiencePlan(): void {
+    const url = this.eventAudienceUrl().trim();
+    const plan = this.eventAudiencePlanText().trim();
+    if (!url || !plan) return;
+    this.eventAudienceSource?.close();
+    this.eventAudienceTicker.set([]);
+    this.eventAudienceError.set(null);
+    this.eventAudienceStatus.set('building');
+    this.service.buildAudience({ session_id: this.sessionId() ?? undefined, event_url: url, plan }).subscribe({
+      next: (res) => {
+        this.eventAudienceSource = this.openAudienceStream(res.job_id, this.eventAudienceTicker, this.eventAudienceStatus, (ev) => {
+          this.eventAudienceStatus.set('built');
+          if (ev.master_list_id) {
+            this.masterListId.set(ev.master_list_id);
+            this.masterListUrl.set(ev.master_list_url ?? null);
+            this.sendListIdsText.set(ev.master_list_id);
+          }
+        });
+      },
+      error: (err) => {
+        this.eventAudienceError.set(err?.message ?? 'Failed to start audience build');
+        this.eventAudienceStatus.set('error');
+      },
+    });
+  }
+
+  discardEventAudiencePlan(): void {
+    this.eventAudienceSource?.close();
+    this.eventAudienceSource = null;
+    this.eventAudienceTicker.set([]);
+    this.eventAudiencePlanText.set('');
+    this.eventAudienceError.set(null);
+    this.eventAudienceStatus.set('idle');
+  }
+
+  runCustomAudiencePlan(): void {
+    const request = this.customAudienceRequest().trim();
+    if (!request) return;
+    this.customAudienceSource?.close();
+    this.customAudienceTicker.set([]);
+    this.customAudiencePlanText.set('');
+    this.customAudienceError.set(null);
+    this.customAudienceStatus.set('planning');
+    this.service.customAudiencePlan({ request }).subscribe({
+      next: (res) => {
+        this.customAudienceSource = this.openAudienceStream(res.job_id, this.customAudienceTicker, this.customAudienceStatus, () => {
+          this.customAudiencePlanText.set(this.customAudienceTicker().join('\n'));
+          this.customAudienceStatus.set('plan_ready');
+        });
+      },
+      error: (err) => {
+        this.customAudienceError.set(err?.message ?? 'Failed to start audience plan');
+        this.customAudienceStatus.set('error');
+      },
+    });
+  }
+
+  approveCustomAudiencePlan(): void {
+    const request = this.customAudienceRequest().trim();
+    const plan = this.customAudiencePlanText().trim();
+    if (!request || !plan) return;
+    this.customAudienceSource?.close();
+    this.customAudienceTicker.set([]);
+    this.customAudienceError.set(null);
+    this.customAudienceStatus.set('building');
+    this.service.customAudienceRun({ request, plan }).subscribe({
+      next: (res) => {
+        this.customAudienceSource = this.openAudienceStream(res.job_id, this.customAudienceTicker, this.customAudienceStatus, (ev) => {
+          this.customAudienceStatus.set('built');
+          if (ev.master_list_id) {
+            this.masterListId.set(ev.master_list_id);
+            this.masterListUrl.set(ev.master_list_url ?? null);
+            this.sendListIdsText.set(ev.master_list_id);
+          }
+        });
+      },
+      error: (err) => {
+        this.customAudienceError.set(err?.message ?? 'Failed to start audience build');
+        this.customAudienceStatus.set('error');
+      },
+    });
+  }
+
+  discardCustomAudiencePlan(): void {
+    this.customAudienceSource?.close();
+    this.customAudienceSource = null;
+    this.customAudienceTicker.set([]);
+    this.customAudiencePlanText.set('');
+    this.customAudienceError.set(null);
+    this.customAudienceStatus.set('idle');
+  }
+
+  skipAudience(): void {
+    this.sendListIdsText.set('');
+    this.masterListId.set(null);
+    this.masterListUrl.set(null);
+    this.startImplementation();
   }
 
   startImplementation(): void {
@@ -253,6 +421,10 @@ export class EmailCreation {
   startOver(): void {
     this.briefSource?.close();
     this.briefSource = null;
+    this.eventAudienceSource?.close();
+    this.eventAudienceSource = null;
+    this.customAudienceSource?.close();
+    this.customAudienceSource = null;
     this.step.set(1);
     this.eventUrl.set('');
     this.emailType.set('');
@@ -271,7 +443,20 @@ export class EmailCreation {
     this.variantAHtml.set('');
     this.refineText.set('');
     this.chat2.set([]);
+    this.audienceSubTab.set('event');
     this.sendListIdsText.set('');
+    this.masterListId.set(null);
+    this.masterListUrl.set(null);
+    this.eventAudienceUrl.set('');
+    this.eventAudienceTicker.set([]);
+    this.eventAudienceStatus.set('idle');
+    this.eventAudiencePlanText.set('');
+    this.eventAudienceError.set(null);
+    this.customAudienceRequest.set('');
+    this.customAudienceTicker.set([]);
+    this.customAudienceStatus.set('idle');
+    this.customAudiencePlanText.set('');
+    this.customAudienceError.set(null);
     this.emailId.set(null);
     this.draftUrl.set(null);
     this.variantADraftUrl.set(null);
