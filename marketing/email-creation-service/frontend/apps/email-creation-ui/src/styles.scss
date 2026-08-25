@@ -739,3 +739,124 @@ header .subtitle {
   color: var(--red);
   border-color: #fca5a5;
 }
+
+/* ── Searchable list picker ── */
+.list-picker {
+  position: relative;
+}
+.list-picker input {
+  width: 100%;
+  border: 1px solid var(--gray-200);
+  border-radius: var(--radius-sm);
+  padding: 11px 14px;
+  font-size: 14px;
+}
+.list-picker input:focus {
+  outline: none;
+  border-color: var(--blue);
+  box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.12);
+}
+.list-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  background: white;
+  border: 1px solid var(--gray-200);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-md);
+  max-height: 220px;
+  overflow-y: auto;
+  z-index: 100;
+}
+.list-dropdown-item {
+  padding: 10px 12px;
+  cursor: pointer;
+  font-size: 14px;
+  border-bottom: 1px solid var(--gray-100);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.list-dropdown-item:last-child {
+  border-bottom: none;
+}
+.list-dropdown-item:hover {
+  background: var(--blue-light);
+}
+.list-dropdown-item .list-count {
+  font-size: 12px;
+  color: var(--gray-400);
+  white-space: nowrap;
+  margin-left: 8px;
+}
+.list-selected {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  background: var(--green-light);
+  border: 1px solid #86efac;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  margin-top: 6px;
+}
+.list-selected .list-clear {
+  margin-left: auto;
+  cursor: pointer;
+  color: var(--gray-400);
+  font-size: 16px;
+  line-height: 1;
+}
+.list-selected .list-clear:hover {
+  color: var(--red);
+}
+
+/* ── Sub-lists rolled into the master audience ── */
+.sublist-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--gray-200);
+  border-radius: var(--radius-sm);
+  background: white;
+  padding: 9px 12px;
+  font-size: 13px;
+}
+.sublist-ico {
+  color: var(--gray-500);
+  display: flex;
+  flex-shrink: 0;
+}
+.sublist-name {
+  color: var(--gray-900);
+  font-weight: 500;
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sublist-id {
+  color: var(--gray-400);
+  font-size: 12px;
+  font-family: ui-monospace, monospace;
+  white-space: nowrap;
+}
+.sublist-tag {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  white-space: nowrap;
+}
+.sublist-tag.master {
+  background: var(--gray-900);
+  color: white;
+}
+.sublist-tag.selected {
+  background: var(--green-light);
+  color: #166534;
+}

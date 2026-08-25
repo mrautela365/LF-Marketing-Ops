@@ -1,16 +1,45 @@
 import { Component, signal, type WritableSignal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { DomSanitizer, type SafeHtml } from '@angular/platform-browser';
-import type { AudienceStreamEvent, ContentSection, PlanResult } from '@email-creation/shared';
+import type {
+  AudienceListInfo,
+  AudienceQuestion,
+  AudienceStreamEvent,
+  ContentSection,
+  PlanResult,
+} from '@email-creation/shared';
 import { AudienceBuilder } from '../audience-builder/audience-builder';
+import { ListsService } from '../lists.service';
 import { EmailCreationService } from './email-creation.service';
 
 type AudienceJobStatus = 'idle' | 'planning' | 'plan_ready' | 'building' | 'built' | 'error';
+type RoleSpeakerScope = 'current' | 'past' | 'current_past';
 
 interface ChatEntry {
   who: 'you' | 'assistant';
   text: string;
 }
+
+interface ExtraFilter {
+  property: string;
+  operator: string;
+  value: string;
+}
+
+interface SubListEntry {
+  name: string;
+  id: string;
+  url: string;
+  kind: 'created' | 'master' | 'selected';
+}
+
+const ROLE_SPEAKER_SCOPE_TAGS: Record<RoleSpeakerScope, string> = {
+  current: 'Current',
+  past: 'Past',
+  current_past: 'Current + Past',
+};
+
+const EXTRA_FILTER_NO_VALUE_OPS = new Set(['is known', 'is unknown']);
 
 /**
  * Ports the legacy 4-step email-creation wizard (frontend/app.js Steps 1-2-4;
@@ -81,6 +110,42 @@ export class EmailCreation {
   protected readonly customAudienceError = signal<string | null>(null);
   private customAudienceSource: EventSource | null = null;
 
+  // Step 3 — lists rolled into whichever audience is currently being planned/built
+  // (event or custom — only one flow is "live" at a time, matching legacy _subLists).
+  protected readonly subLists = signal<SubListEntry[]>([]);
+
+  // Step 3 — accumulated "Q: ...\nA: ..." text from answered clarifying questions,
+  // folded into the next plan request so the agent doesn't ask again.
+  protected readonly audienceQA = signal('');
+  protected readonly pendingQuestions = signal<AudienceQuestion[] | null>(null);
+  protected readonly pendingQuestionsFlow = signal<'event' | 'custom'>('event');
+  protected readonly questionAnswers = signal<string[]>([]);
+
+  // Step 3, Event tab — "add more filters" + "restrict to a role" plan-review panels.
+  protected readonly eventExtraFilters = signal<ExtraFilter[]>([]);
+  protected readonly eventExtraFilterProperty = signal('');
+  protected readonly eventExtraFilterOperator = signal('is equal to');
+  protected readonly eventExtraFilterValue = signal('');
+  protected readonly eventRoleSpeakers = signal(false);
+  protected readonly eventRoleSpeakerScope = signal<RoleSpeakerScope>('current_past');
+  protected readonly eventRoleAmbassadors = signal(false);
+
+  // Step 3, Custom tab — same panels, independent state.
+  protected readonly customExtraFilters = signal<ExtraFilter[]>([]);
+  protected readonly customExtraFilterProperty = signal('');
+  protected readonly customExtraFilterOperator = signal('is equal to');
+  protected readonly customExtraFilterValue = signal('');
+  protected readonly customRoleSpeakers = signal(false);
+  protected readonly customRoleSpeakerScope = signal<RoleSpeakerScope>('current_past');
+  protected readonly customRoleAmbassadors = signal(false);
+
+  // Step 3 — "Or use an existing list" manual picker (distinct from the Reuse tab's
+  // full AudienceBuilder search): picks an existing HubSpot list as the send list directly.
+  protected readonly listSearchQuery = signal('');
+  protected readonly listSearchResults = signal<AudienceListInfo[]>([]);
+  protected readonly selectedExistingList = signal<{ id: string; name: string; size?: number } | null>(null);
+  private listSearchTimer: ReturnType<typeof setTimeout> | null = null;
+
   // Step 4 — implementation.
   protected readonly cloneLoading = signal(false);
   protected readonly cloneError = signal<string | null>(null);
@@ -95,6 +160,7 @@ export class EmailCreation {
 
   constructor(
     private readonly service: EmailCreationService,
+    private readonly listsService: ListsService,
     private readonly sanitizer: DomSanitizer,
   ) {}
 
@@ -220,6 +286,16 @@ export class EmailCreation {
       .filter(Boolean);
   }
 
+  // Mirrors legacy startImplementation's `_masterListIds.length ? _masterListIds
+  // : _masterListId ? [_masterListId] : []` — the manual field is an override,
+  // the built/selected master list is the fallback.
+  private resolveSendListIds(): string[] {
+    const manual = this.parseSendListIds();
+    if (manual.length) return manual;
+    const masterId = this.masterListId();
+    return masterId ? [masterId] : [];
+  }
+
   switchAudienceTab(tab: 'event' | 'custom' | 'reuse'): void {
     this.audienceSubTab.set(tab);
   }
@@ -228,18 +304,182 @@ export class EmailCreation {
     jobId: string,
     ticker: WritableSignal<string[]>,
     status: WritableSignal<AudienceJobStatus>,
+    onQuestion: (questions: AudienceQuestion[]) => void,
     onComplete: (ev: Extract<AudienceStreamEvent, { type: 'complete' }>) => void,
   ): EventSource {
+    // Deltas arrive as arbitrary text fragments, not whole lines — buffer them so
+    // parseSubList's regex only ever sees complete lines (mirrors legacy _openAudienceStream).
+    let lineBuf = '';
+    const flushLine = (line: string) => {
+      if (line.trim()) this.parseSubList(line);
+    };
     return this.service.openAudienceStream(jobId, this.sessionId(), (ev) => {
-      if (ev.type === 'output' || ev.type === 'delta') {
+      if (ev.type === 'output') {
         ticker.update((lines) => [...lines, ev.text]);
+        if (ev.delta) {
+          lineBuf += ev.text;
+          let idx: number;
+          while ((idx = lineBuf.indexOf('\n')) !== -1) {
+            flushLine(lineBuf.slice(0, idx));
+            lineBuf = lineBuf.slice(idx + 1);
+          }
+        } else {
+          flushLine(ev.text);
+        }
+      } else if (ev.type === 'question') {
+        onQuestion(ev.questions);
       } else if (ev.type === 'complete') {
+        if (lineBuf.trim()) flushLine(lineBuf);
         onComplete(ev);
       } else if (ev.type === 'error') {
         ticker.update((lines) => [...lines, `⚠️ ${ev.text}`]);
         status.set('error');
       }
     });
+  }
+
+  private parseSubList(text: string): void {
+    const match = text.match(/(?:✅|🔁)\s*(.+?)\s+(?:created|updated in place)\s*[—\-:]+\s*ID:?\s*(\d{3,})(?:\s*[—\-]+\s*(\S+))?/i);
+    if (!match) return;
+    const name = match[1].trim().replace(/^\[|\]$/g, '');
+    const id = match[2];
+    const url = match[3] ?? '';
+    const existing = this.subLists().find((s) => s.id === id);
+    if (existing) {
+      if (url) this.subLists.update((list) => list.map((s) => (s.id === id ? { ...s, url } : s)));
+      return;
+    }
+    this.subLists.update((list) => [...list, { name, id, url, kind: 'created' }]);
+  }
+
+  private markMaster(id: string, url: string | undefined): void {
+    const idStr = String(id);
+    const found = this.subLists().some((s) => s.id === idStr);
+    if (found) {
+      this.subLists.update((list) => list.map((s) => (s.id === idStr ? { ...s, kind: 'master', url: url || s.url } : s)));
+    } else {
+      this.subLists.update((list) => [...list, { name: 'Master Audience', id: idStr, url: url ?? '', kind: 'master' }]);
+    }
+  }
+
+  private extraFiltersPlanText(filters: ExtraFilter[]): string {
+    if (!filters.length) return '';
+    const lines = filters.map((f) => `- Property "${f.property}" ${f.operator}${f.value ? ` "${f.value}"` : ''}`);
+    return `\n\n## USER-ADDED FILTERS\n${lines.join('\n')}\n`;
+  }
+
+  private roleFiltersPlanText(speakers: boolean, speakerScope: RoleSpeakerScope, ambassadors: boolean): string {
+    const lines: string[] = [];
+    if (speakers) lines.push(`- Event speakers only (SPEAKER SCOPE: ${ROLE_SPEAKER_SCOPE_TAGS[speakerScope]})`);
+    if (ambassadors) lines.push('- Community ambassadors only');
+    return lines.length ? `\n\n## ROLE FILTERS\n${lines.join('\n')}\n` : '';
+  }
+
+  extraFilterValueDisabled(tab: 'event' | 'custom'): boolean {
+    const operator = tab === 'event' ? this.eventExtraFilterOperator() : this.customExtraFilterOperator();
+    return EXTRA_FILTER_NO_VALUE_OPS.has(operator);
+  }
+
+  addExtraFilter(tab: 'event' | 'custom'): void {
+    const propertySignal = tab === 'event' ? this.eventExtraFilterProperty : this.customExtraFilterProperty;
+    const operatorSignal = tab === 'event' ? this.eventExtraFilterOperator : this.customExtraFilterOperator;
+    const valueSignal = tab === 'event' ? this.eventExtraFilterValue : this.customExtraFilterValue;
+    const filtersSignal = tab === 'event' ? this.eventExtraFilters : this.customExtraFilters;
+    const errorSignal = tab === 'event' ? this.eventAudienceError : this.customAudienceError;
+
+    const property = propertySignal().trim();
+    const operator = operatorSignal();
+    const needsValue = !EXTRA_FILTER_NO_VALUE_OPS.has(operator);
+    const value = needsValue ? valueSignal().trim() : '';
+
+    if (!property) {
+      errorSignal.set('Enter a property name for the filter.');
+      return;
+    }
+    if (needsValue && !value) {
+      errorSignal.set("Enter a value for this filter, or pick 'is known'/'is unknown'.");
+      return;
+    }
+    errorSignal.set(null);
+    filtersSignal.update((filters) => [...filters, { property, operator, value }]);
+    propertySignal.set('');
+    valueSignal.set('');
+  }
+
+  removeExtraFilter(tab: 'event' | 'custom', index: number): void {
+    const filtersSignal = tab === 'event' ? this.eventExtraFilters : this.customExtraFilters;
+    filtersSignal.update((filters) => filters.filter((_, i) => i !== index));
+  }
+
+  answerQuestion(index: number, value: string): void {
+    this.questionAnswers.update((answers) => {
+      const next = [...answers];
+      next[index] = value;
+      return next;
+    });
+  }
+
+  allQuestionsAnswered(): boolean {
+    const questions = this.pendingQuestions();
+    if (!questions) return false;
+    const answers = this.questionAnswers();
+    return questions.every((_, i) => !!answers[i]?.trim());
+  }
+
+  submitQuestionAnswers(): void {
+    const questions = this.pendingQuestions();
+    if (!questions || !this.allQuestionsAnswered()) return;
+    const answers = this.questionAnswers();
+    const qaBlock = questions.map((q, i) => `Q: ${q.question}\nA: ${answers[i]}`).join('\n');
+    this.audienceQA.set(this.audienceQA() ? `${this.audienceQA()}\n${qaBlock}` : qaBlock);
+    const flow = this.pendingQuestionsFlow();
+    this.pendingQuestions.set(null);
+    this.questionAnswers.set([]);
+    if (flow === 'custom') this.runCustomAudiencePlan();
+    else this.runEventAudiencePlan();
+  }
+
+  discardQuestions(): void {
+    this.pendingQuestions.set(null);
+    this.questionAnswers.set([]);
+  }
+
+  onListSearch(query: string): void {
+    this.listSearchQuery.set(query);
+    if (this.listSearchTimer) clearTimeout(this.listSearchTimer);
+    if (!query || query.length < 2) {
+      this.listSearchResults.set([]);
+      return;
+    }
+    this.listSearchTimer = setTimeout(() => {
+      this.listsService.searchLists(query).subscribe({
+        next: (res) => this.listSearchResults.set(res.results ?? []),
+        error: () => this.listSearchResults.set([]),
+      });
+    }, 300);
+  }
+
+  selectExistingList(list: AudienceListInfo): void {
+    this.listSearchQuery.set('');
+    this.listSearchResults.set([]);
+    this.selectedExistingList.set({ id: list.id, name: list.name, size: list.size });
+    this.masterListId.set(list.id);
+    this.masterListUrl.set(null);
+    this.sendListIdsText.set(list.id);
+    this.subLists.set([{ name: list.name, id: list.id, url: '', kind: 'selected' }]);
+  }
+
+  clearExistingList(): void {
+    const subs = this.subLists();
+    this.selectedExistingList.set(null);
+    this.listSearchQuery.set('');
+    this.listSearchResults.set([]);
+    if (subs.length === 1 && subs[0].kind === 'selected') {
+      this.masterListId.set(null);
+      this.masterListUrl.set(null);
+      this.sendListIdsText.set('');
+      this.subLists.set([]);
+    }
   }
 
   runEventAudiencePlan(): void {
@@ -250,18 +490,36 @@ export class EmailCreation {
     this.eventAudiencePlanText.set('');
     this.eventAudienceError.set(null);
     this.eventAudienceStatus.set('planning');
-    this.service.audiencePlan({ session_id: this.sessionId() ?? undefined, event_url: url }).subscribe({
-      next: (res) => {
-        this.eventAudienceSource = this.openAudienceStream(res.job_id, this.eventAudienceTicker, this.eventAudienceStatus, () => {
-          this.eventAudiencePlanText.set(this.eventAudienceTicker().join('\n'));
-          this.eventAudienceStatus.set('plan_ready');
-        });
-      },
-      error: (err) => {
-        this.eventAudienceError.set(err?.message ?? 'Failed to start audience plan');
-        this.eventAudienceStatus.set('error');
-      },
-    });
+    this.subLists.set([]);
+    this.selectedExistingList.set(null);
+    this.masterListId.set(null);
+    this.masterListUrl.set(null);
+    this.pendingQuestions.set(null);
+    this.questionAnswers.set([]);
+    this.service
+      .audiencePlan({ session_id: this.sessionId() ?? undefined, event_url: url, qa: this.audienceQA() || undefined })
+      .subscribe({
+        next: (res) => {
+          this.eventAudienceSource = this.openAudienceStream(
+            res.job_id,
+            this.eventAudienceTicker,
+            this.eventAudienceStatus,
+            (questions) => {
+              this.pendingQuestionsFlow.set('event');
+              this.pendingQuestions.set(questions);
+              this.questionAnswers.set(questions.map(() => ''));
+            },
+            () => {
+              this.eventAudiencePlanText.set(this.eventAudienceTicker().join('\n'));
+              this.eventAudienceStatus.set('plan_ready');
+            },
+          );
+        },
+        error: (err) => {
+          this.eventAudienceError.set(err?.message ?? 'Failed to start audience plan');
+          this.eventAudienceStatus.set('error');
+        },
+      });
   }
 
   approveEventAudiencePlan(): void {
@@ -272,22 +530,44 @@ export class EmailCreation {
     this.eventAudienceTicker.set([]);
     this.eventAudienceError.set(null);
     this.eventAudienceStatus.set('building');
-    this.service.buildAudience({ session_id: this.sessionId() ?? undefined, event_url: url, plan }).subscribe({
-      next: (res) => {
-        this.eventAudienceSource = this.openAudienceStream(res.job_id, this.eventAudienceTicker, this.eventAudienceStatus, (ev) => {
-          this.eventAudienceStatus.set('built');
-          if (ev.master_list_id) {
-            this.masterListId.set(ev.master_list_id);
-            this.masterListUrl.set(ev.master_list_url ?? null);
-            this.sendListIdsText.set(ev.master_list_id);
-          }
-        });
-      },
-      error: (err) => {
-        this.eventAudienceError.set(err?.message ?? 'Failed to start audience build');
-        this.eventAudienceStatus.set('error');
-      },
-    });
+    const planWithExtras =
+      plan +
+      this.extraFiltersPlanText(this.eventExtraFilters()) +
+      this.roleFiltersPlanText(this.eventRoleSpeakers(), this.eventRoleSpeakerScope(), this.eventRoleAmbassadors());
+    this.service
+      .buildAudience({
+        session_id: this.sessionId() ?? undefined,
+        event_url: url,
+        plan: planWithExtras,
+        qa: this.audienceQA() || undefined,
+      })
+      .subscribe({
+        next: (res) => {
+          this.eventAudienceSource = this.openAudienceStream(
+            res.job_id,
+            this.eventAudienceTicker,
+            this.eventAudienceStatus,
+            (questions) => {
+              this.pendingQuestionsFlow.set('event');
+              this.pendingQuestions.set(questions);
+              this.questionAnswers.set(questions.map(() => ''));
+            },
+            (ev) => {
+              this.eventAudienceStatus.set('built');
+              if (ev.master_list_id) {
+                this.masterListId.set(ev.master_list_id);
+                this.masterListUrl.set(ev.master_list_url ?? null);
+                this.sendListIdsText.set(ev.master_list_id);
+                this.markMaster(ev.master_list_id, ev.master_list_url);
+              }
+            },
+          );
+        },
+        error: (err) => {
+          this.eventAudienceError.set(err?.message ?? 'Failed to start audience build');
+          this.eventAudienceStatus.set('error');
+        },
+      });
   }
 
   discardEventAudiencePlan(): void {
@@ -297,6 +577,13 @@ export class EmailCreation {
     this.eventAudiencePlanText.set('');
     this.eventAudienceError.set(null);
     this.eventAudienceStatus.set('idle');
+    this.eventExtraFilters.set([]);
+    this.eventRoleSpeakers.set(false);
+    this.eventRoleSpeakerScope.set('current_past');
+    this.eventRoleAmbassadors.set(false);
+    this.pendingQuestions.set(null);
+    this.questionAnswers.set([]);
+    this.subLists.set([]);
   }
 
   runCustomAudiencePlan(): void {
@@ -307,12 +594,28 @@ export class EmailCreation {
     this.customAudiencePlanText.set('');
     this.customAudienceError.set(null);
     this.customAudienceStatus.set('planning');
-    this.service.customAudiencePlan({ request }).subscribe({
+    this.subLists.set([]);
+    this.selectedExistingList.set(null);
+    this.masterListId.set(null);
+    this.masterListUrl.set(null);
+    this.pendingQuestions.set(null);
+    this.questionAnswers.set([]);
+    this.service.customAudiencePlan({ request, qa: this.audienceQA() || undefined }).subscribe({
       next: (res) => {
-        this.customAudienceSource = this.openAudienceStream(res.job_id, this.customAudienceTicker, this.customAudienceStatus, () => {
-          this.customAudiencePlanText.set(this.customAudienceTicker().join('\n'));
-          this.customAudienceStatus.set('plan_ready');
-        });
+        this.customAudienceSource = this.openAudienceStream(
+          res.job_id,
+          this.customAudienceTicker,
+          this.customAudienceStatus,
+          (questions) => {
+            this.pendingQuestionsFlow.set('custom');
+            this.pendingQuestions.set(questions);
+            this.questionAnswers.set(questions.map(() => ''));
+          },
+          () => {
+            this.customAudiencePlanText.set(this.customAudienceTicker().join('\n'));
+            this.customAudienceStatus.set('plan_ready');
+          },
+        );
       },
       error: (err) => {
         this.customAudienceError.set(err?.message ?? 'Failed to start audience plan');
@@ -329,16 +632,31 @@ export class EmailCreation {
     this.customAudienceTicker.set([]);
     this.customAudienceError.set(null);
     this.customAudienceStatus.set('building');
-    this.service.customAudienceRun({ request, plan }).subscribe({
+    const planWithExtras =
+      plan +
+      this.extraFiltersPlanText(this.customExtraFilters()) +
+      this.roleFiltersPlanText(this.customRoleSpeakers(), this.customRoleSpeakerScope(), this.customRoleAmbassadors());
+    this.service.customAudienceRun({ request, plan: planWithExtras, qa: this.audienceQA() || undefined }).subscribe({
       next: (res) => {
-        this.customAudienceSource = this.openAudienceStream(res.job_id, this.customAudienceTicker, this.customAudienceStatus, (ev) => {
-          this.customAudienceStatus.set('built');
-          if (ev.master_list_id) {
-            this.masterListId.set(ev.master_list_id);
-            this.masterListUrl.set(ev.master_list_url ?? null);
-            this.sendListIdsText.set(ev.master_list_id);
-          }
-        });
+        this.customAudienceSource = this.openAudienceStream(
+          res.job_id,
+          this.customAudienceTicker,
+          this.customAudienceStatus,
+          (questions) => {
+            this.pendingQuestionsFlow.set('custom');
+            this.pendingQuestions.set(questions);
+            this.questionAnswers.set(questions.map(() => ''));
+          },
+          (ev) => {
+            this.customAudienceStatus.set('built');
+            if (ev.master_list_id) {
+              this.masterListId.set(ev.master_list_id);
+              this.masterListUrl.set(ev.master_list_url ?? null);
+              this.sendListIdsText.set(ev.master_list_id);
+              this.markMaster(ev.master_list_id, ev.master_list_url);
+            }
+          },
+        );
       },
       error: (err) => {
         this.customAudienceError.set(err?.message ?? 'Failed to start audience build');
@@ -354,6 +672,13 @@ export class EmailCreation {
     this.customAudiencePlanText.set('');
     this.customAudienceError.set(null);
     this.customAudienceStatus.set('idle');
+    this.customExtraFilters.set([]);
+    this.customRoleSpeakers.set(false);
+    this.customRoleSpeakerScope.set('current_past');
+    this.customRoleAmbassadors.set(false);
+    this.pendingQuestions.set(null);
+    this.questionAnswers.set([]);
+    this.subLists.set([]);
   }
 
   skipAudience(): void {
@@ -386,7 +711,7 @@ export class EmailCreation {
           this.variantBDraftUrl.set(res.variant_b_draft_url ?? null);
           this.cloneLoading.set(false);
 
-          const listIds = this.parseSendListIds();
+          const listIds = this.resolveSendListIds();
           if (listIds.length === 0 || !res.email_id) {
             this.sendListStatus.set(listIds.length === 0 ? 'No audience list attached.' : null);
             return;
@@ -452,6 +777,28 @@ export class EmailCreation {
     this.eventAudienceStatus.set('idle');
     this.eventAudiencePlanText.set('');
     this.eventAudienceError.set(null);
+    this.subLists.set([]);
+    this.audienceQA.set('');
+    this.pendingQuestions.set(null);
+    this.pendingQuestionsFlow.set('event');
+    this.questionAnswers.set([]);
+    this.eventExtraFilters.set([]);
+    this.eventExtraFilterProperty.set('');
+    this.eventExtraFilterOperator.set('is equal to');
+    this.eventExtraFilterValue.set('');
+    this.eventRoleSpeakers.set(false);
+    this.eventRoleSpeakerScope.set('current_past');
+    this.eventRoleAmbassadors.set(false);
+    this.customExtraFilters.set([]);
+    this.customExtraFilterProperty.set('');
+    this.customExtraFilterOperator.set('is equal to');
+    this.customExtraFilterValue.set('');
+    this.customRoleSpeakers.set(false);
+    this.customRoleSpeakerScope.set('current_past');
+    this.customRoleAmbassadors.set(false);
+    this.listSearchQuery.set('');
+    this.listSearchResults.set([]);
+    this.selectedExistingList.set(null);
     this.customAudienceRequest.set('');
     this.customAudienceTicker.set([]);
     this.customAudienceStatus.set('idle');

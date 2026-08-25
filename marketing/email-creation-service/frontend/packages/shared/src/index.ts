@@ -313,7 +313,8 @@ export interface ChatResponse {
 export interface AudiencePlanRequest {
   session_id?: string;
   event_url: string;
-  qa?: boolean;
+  /** Accumulated "Q: ...\nA: ..." text from answered clarifying questions (see AudienceQuestion). */
+  qa?: string;
 }
 
 /** Request body for `POST /api/build-audience` (or `/api/audience/run` when session_id is omitted). */
@@ -321,20 +322,20 @@ export interface BuildAudienceRequest {
   session_id?: string;
   event_url: string;
   plan: string;
-  qa?: boolean;
+  qa?: string;
 }
 
 /** Request body for `POST /api/audience/custom-plan`. */
 export interface CustomAudiencePlanRequest {
   request: string;
-  qa?: boolean;
+  qa?: string;
 }
 
 /** Request body for `POST /api/audience/custom-run`. */
 export interface CustomAudienceRunRequest {
   request: string;
   plan: string;
-  qa?: boolean;
+  qa?: string;
 }
 
 /** Response body shared by all audience plan/build start routes. */
@@ -343,12 +344,23 @@ export interface AudienceJobResponse {
   event_url?: string;
 }
 
+/**
+ * One disambiguation/clarifying question surfaced by the planning agent's
+ * `present_open_questions` tool call (see backend/audience_tools.py).
+ */
+export interface AudienceQuestion {
+  question: string;
+  why_it_blocks?: string;
+  options: string[];
+  /** Whether a free-text "Other" answer is allowed (defaults true when omitted). */
+  allow_custom?: boolean;
+}
+
 /** One event surfaced over `GET /api/audience-stream/{job_id}` (SSE, `data:` payload). */
 export type AudienceStreamEvent =
   | { type: 'heartbeat' }
-  | { type: 'output'; text: string }
-  | { type: 'delta'; text: string }
-  | { type: 'question'; questions: string[] }
+  | { type: 'output'; text: string; delta?: boolean }
+  | { type: 'question'; questions: AudienceQuestion[] }
   | {
       type: 'complete';
       done: true;

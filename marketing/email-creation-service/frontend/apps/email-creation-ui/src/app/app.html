@@ -13,9 +13,6 @@
     <div class="top-tab" [class.active]="activeTab() === 'email-creation'" (click)="activeTab.set('email-creation')">
       Campaign Builder
     </div>
-    <div class="top-tab" [class.active]="activeTab() === 'audience-builder'" (click)="activeTab.set('audience-builder')">
-      Audience Builder
-    </div>
     <div class="top-tab" [class.active]="activeTab() === 'status'" (click)="activeTab.set('status')">
       Status &amp; search
     </div>
@@ -23,10 +20,6 @@
 
   @if (activeTab() === 'email-creation') {
     <app-email-creation />
-  }
-
-  @if (activeTab() === 'audience-builder') {
-    <app-audience-builder />
   }
 
   @if (activeTab() === 'status') {

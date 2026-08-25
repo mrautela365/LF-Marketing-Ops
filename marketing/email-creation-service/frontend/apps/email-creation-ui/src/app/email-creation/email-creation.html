@@ -17,7 +17,7 @@
     </span>
     <span class="step-label">Email Preview</span>
   </div>
-  <div class="step step-clickable" [class.active]="step() === 3" [class.done]="step() > 3" (click)="sessionId() && step.set(3)">
+  <div class="step step-clickable" [class.active]="step() === 3" [class.done]="step() > 3" (click)="step.set(3)">
     <span class="step-circle">
       <svg viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
@@ -244,7 +244,132 @@
           }
         </div>
       }
+
+      @if (pendingQuestions() && pendingQuestionsFlow() === 'event') {
+        <div class="card" style="margin-top: 12px; background: #fffbeb; border-color: #fcd34d">
+          @for (q of pendingQuestions()!; track $index; let qi = $index) {
+            <div style="margin-bottom: 14px">
+              <div style="font-weight: 600; font-size: 13px">{{ qi + 1 }}. {{ q.question }}</div>
+              @if (q.why_it_blocks) {
+                <div style="font-size: 12px; color: var(--gray-500); margin-top: 2px">{{ q.why_it_blocks }}</div>
+              }
+              <div style="margin-top: 8px">
+                @for (opt of q.options; track opt) {
+                  <button
+                    type="button"
+                    class="btn btn-sm"
+                    [class.btn-primary]="questionAnswers()[qi] === opt"
+                    [class.btn-outline]="questionAnswers()[qi] !== opt"
+                    style="margin: 3px 6px 3px 0"
+                    (click)="answerQuestion(qi, opt)"
+                  >
+                    {{ opt }}
+                  </button>
+                }
+              </div>
+              @if (q.allow_custom !== false) {
+                <input
+                  type="text"
+                  placeholder="Other — type your own answer"
+                  style="margin-top: 6px; max-width: 360px"
+                  [ngModel]="questionAnswers()[qi]"
+                  (ngModelChange)="answerQuestion(qi, $event)"
+                />
+              }
+            </div>
+          }
+          <div class="btn-row" style="margin-top: 4px">
+            <button class="btn btn-primary" [disabled]="!allQuestionsAnswered()" (click)="submitQuestionAnswers()">
+              Submit Answers &amp; Regenerate Plan
+            </button>
+            <button class="btn btn-outline" (click)="discardQuestions()">Cancel</button>
+          </div>
+        </div>
+      }
+
       @if (eventAudienceStatus() === 'plan_ready') {
+        <div style="margin-top: 14px; padding: 10px; border: 1px solid var(--gray-200); border-radius: var(--radius-sm)">
+          <div class="section-subhead" style="font-size: 12px; margin-bottom: 2px">Add more filters (optional)</div>
+          <div class="card-desc" style="margin-top: 0; font-size: 12px">
+            Each one is added as an extra condition to every group in the audience being built — e.g. narrow to a job
+            title, industry, or any other contact property.
+          </div>
+          <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px">
+            <input
+              type="text"
+              placeholder="Property (e.g. jobtitle)"
+              style="flex: 1; min-width: 140px"
+              [ngModel]="eventExtraFilterProperty()"
+              (ngModelChange)="eventExtraFilterProperty.set($event)"
+            />
+            <select
+              style="min-width: 150px"
+              [ngModel]="eventExtraFilterOperator()"
+              (ngModelChange)="eventExtraFilterOperator.set($event)"
+            >
+              <option value="is equal to">is equal to</option>
+              <option value="contains">contains</option>
+              <option value="is any of">is any of</option>
+              <option value="is not any of">is not any of</option>
+              <option value="is known">is known</option>
+              <option value="is unknown">is unknown</option>
+            </select>
+            <input
+              type="text"
+              placeholder="Value (comma-separate for multiple)"
+              style="flex: 1; min-width: 160px"
+              [disabled]="extraFilterValueDisabled('event')"
+              [ngModel]="eventExtraFilterValue()"
+              (ngModelChange)="eventExtraFilterValue.set($event)"
+            />
+            <button class="btn btn-outline" type="button" (click)="addExtraFilter('event')">+ Add Filter</button>
+          </div>
+          <div style="margin-top: 8px; display: flex; gap: 6px; flex-wrap: wrap">
+            @for (f of eventExtraFilters(); track $index) {
+              <span
+                class="sublist-tag"
+                style="background: var(--gray-100); color: var(--gray-700); display: inline-flex; align-items: center; gap: 6px; padding: 5px 8px"
+              >
+                {{ f.property }} {{ f.operator }}{{ f.value ? ' "' + f.value + '"' : '' }}
+                <a
+                  href="#"
+                  (click)="removeExtraFilter('event', $index); $event.preventDefault()"
+                  style="color: var(--gray-500); text-decoration: none; font-weight: 700"
+                  >✕</a
+                >
+              </span>
+            }
+          </div>
+        </div>
+
+        <div style="margin-top: 14px; padding: 10px; border: 1px solid var(--gray-200); border-radius: var(--radius-sm)">
+          <div class="section-subhead" style="font-size: 12px; margin-bottom: 2px">Restrict to a role (optional)</div>
+          <div class="card-desc" style="margin-top: 0; font-size: 12px">
+            Best-effort — uses whatever speaker/ambassador data HubSpot actually has for this event.
+          </div>
+          <label style="display: flex; align-items: center; gap: 6px; margin-top: 8px; font-size: 13px">
+            <input type="checkbox" [ngModel]="eventRoleSpeakers()" (ngModelChange)="eventRoleSpeakers.set($event)" />
+            Event speakers only
+            <select
+              style="font-size: 12px; padding: 2px 6px"
+              [ngModel]="eventRoleSpeakerScope()"
+              (ngModelChange)="eventRoleSpeakerScope.set($event)"
+            >
+              <option value="current">Current event speakers</option>
+              <option value="past">Past event speakers</option>
+              <option value="current_past">Current + Past event speakers</option>
+            </select>
+          </label>
+          <label style="display: flex; align-items: center; gap: 6px; margin-top: 6px; font-size: 13px">
+            <input
+              type="checkbox"
+              [ngModel]="eventRoleAmbassadors()"
+              (ngModelChange)="eventRoleAmbassadors.set($event)"
+            />
+            Community ambassadors only
+          </label>
+        </div>
+
         <div class="btn-row" style="margin-top: 12px">
           <button class="btn btn-outline" (click)="discardEventAudiencePlan()">Discard</button>
           <button class="btn btn-success" (click)="approveEventAudiencePlan()">Approve &amp; Build List</button>
@@ -285,7 +410,132 @@
           }
         </div>
       }
+
+      @if (pendingQuestions() && pendingQuestionsFlow() === 'custom') {
+        <div class="card" style="margin-top: 12px; background: #fffbeb; border-color: #fcd34d">
+          @for (q of pendingQuestions()!; track $index; let qi = $index) {
+            <div style="margin-bottom: 14px">
+              <div style="font-weight: 600; font-size: 13px">{{ qi + 1 }}. {{ q.question }}</div>
+              @if (q.why_it_blocks) {
+                <div style="font-size: 12px; color: var(--gray-500); margin-top: 2px">{{ q.why_it_blocks }}</div>
+              }
+              <div style="margin-top: 8px">
+                @for (opt of q.options; track opt) {
+                  <button
+                    type="button"
+                    class="btn btn-sm"
+                    [class.btn-primary]="questionAnswers()[qi] === opt"
+                    [class.btn-outline]="questionAnswers()[qi] !== opt"
+                    style="margin: 3px 6px 3px 0"
+                    (click)="answerQuestion(qi, opt)"
+                  >
+                    {{ opt }}
+                  </button>
+                }
+              </div>
+              @if (q.allow_custom !== false) {
+                <input
+                  type="text"
+                  placeholder="Other — type your own answer"
+                  style="margin-top: 6px; max-width: 360px"
+                  [ngModel]="questionAnswers()[qi]"
+                  (ngModelChange)="answerQuestion(qi, $event)"
+                />
+              }
+            </div>
+          }
+          <div class="btn-row" style="margin-top: 4px">
+            <button class="btn btn-primary" [disabled]="!allQuestionsAnswered()" (click)="submitQuestionAnswers()">
+              Submit Answers &amp; Regenerate Plan
+            </button>
+            <button class="btn btn-outline" (click)="discardQuestions()">Cancel</button>
+          </div>
+        </div>
+      }
+
       @if (customAudienceStatus() === 'plan_ready') {
+        <div style="margin-top: 14px; padding: 10px; border: 1px solid var(--gray-200); border-radius: var(--radius-sm)">
+          <div class="section-subhead" style="font-size: 12px; margin-bottom: 2px">Add more filters (optional)</div>
+          <div class="card-desc" style="margin-top: 0; font-size: 12px">
+            Each one is added as an extra condition to every group in the audience being built — e.g. narrow to a job
+            title, industry, or any other contact property.
+          </div>
+          <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px">
+            <input
+              type="text"
+              placeholder="Property (e.g. jobtitle)"
+              style="flex: 1; min-width: 140px"
+              [ngModel]="customExtraFilterProperty()"
+              (ngModelChange)="customExtraFilterProperty.set($event)"
+            />
+            <select
+              style="min-width: 150px"
+              [ngModel]="customExtraFilterOperator()"
+              (ngModelChange)="customExtraFilterOperator.set($event)"
+            >
+              <option value="is equal to">is equal to</option>
+              <option value="contains">contains</option>
+              <option value="is any of">is any of</option>
+              <option value="is not any of">is not any of</option>
+              <option value="is known">is known</option>
+              <option value="is unknown">is unknown</option>
+            </select>
+            <input
+              type="text"
+              placeholder="Value (comma-separate for multiple)"
+              style="flex: 1; min-width: 160px"
+              [disabled]="extraFilterValueDisabled('custom')"
+              [ngModel]="customExtraFilterValue()"
+              (ngModelChange)="customExtraFilterValue.set($event)"
+            />
+            <button class="btn btn-outline" type="button" (click)="addExtraFilter('custom')">+ Add Filter</button>
+          </div>
+          <div style="margin-top: 8px; display: flex; gap: 6px; flex-wrap: wrap">
+            @for (f of customExtraFilters(); track $index) {
+              <span
+                class="sublist-tag"
+                style="background: var(--gray-100); color: var(--gray-700); display: inline-flex; align-items: center; gap: 6px; padding: 5px 8px"
+              >
+                {{ f.property }} {{ f.operator }}{{ f.value ? ' "' + f.value + '"' : '' }}
+                <a
+                  href="#"
+                  (click)="removeExtraFilter('custom', $index); $event.preventDefault()"
+                  style="color: var(--gray-500); text-decoration: none; font-weight: 700"
+                  >✕</a
+                >
+              </span>
+            }
+          </div>
+        </div>
+
+        <div style="margin-top: 14px; padding: 10px; border: 1px solid var(--gray-200); border-radius: var(--radius-sm)">
+          <div class="section-subhead" style="font-size: 12px; margin-bottom: 2px">Restrict to a role (optional)</div>
+          <div class="card-desc" style="margin-top: 0; font-size: 12px">
+            Best-effort — uses whatever speaker/ambassador data HubSpot actually has for this event.
+          </div>
+          <label style="display: flex; align-items: center; gap: 6px; margin-top: 8px; font-size: 13px">
+            <input type="checkbox" [ngModel]="customRoleSpeakers()" (ngModelChange)="customRoleSpeakers.set($event)" />
+            Event speakers only
+            <select
+              style="font-size: 12px; padding: 2px 6px"
+              [ngModel]="customRoleSpeakerScope()"
+              (ngModelChange)="customRoleSpeakerScope.set($event)"
+            >
+              <option value="current">Current event speakers</option>
+              <option value="past">Past event speakers</option>
+              <option value="current_past">Current + Past event speakers</option>
+            </select>
+          </label>
+          <label style="display: flex; align-items: center; gap: 6px; margin-top: 6px; font-size: 13px">
+            <input
+              type="checkbox"
+              [ngModel]="customRoleAmbassadors()"
+              (ngModelChange)="customRoleAmbassadors.set($event)"
+            />
+            Community ambassadors only
+          </label>
+        </div>
+
         <div class="btn-row" style="margin-top: 12px">
           <button class="btn btn-outline" (click)="discardCustomAudiencePlan()">Discard</button>
           <button class="btn btn-success" (click)="approveCustomAudiencePlan()">Approve &amp; Build List</button>
@@ -302,6 +552,65 @@
     @if (audienceSubTab() === 'reuse') {
       <app-audience-builder />
     }
+
+    @if (subLists().length > 0) {
+      <div style="margin-top: 20px">
+        <div class="section-subhead">Lists in the master audience</div>
+        <div style="display: flex; flex-direction: column; gap: 6px">
+          @for (s of subLists(); track s.id) {
+            <div class="sublist-row">
+              <span class="sublist-name">{{ s.name }}</span>
+              @if (s.url) {
+                <a class="sublist-id" [href]="s.url" target="_blank" rel="noopener">ID {{ s.id }}</a>
+              } @else {
+                <span class="sublist-id">ID {{ s.id }}</span>
+              }
+              @if (s.kind === 'master') {
+                <span class="sublist-tag master">Master</span>
+              } @else if (s.kind === 'selected') {
+                <span class="sublist-tag selected">Selected</span>
+              }
+            </div>
+          }
+        </div>
+      </div>
+    }
+
+    <div style="margin-top: 20px">
+      <div class="section-subhead">Or use an existing list</div>
+      <div class="card-desc" style="margin-top: 0">
+        Already have a segment built in HubSpot? Search for it below to use it as the send list instead of building a
+        new one.
+      </div>
+      <div class="list-picker" style="margin-top: 8px">
+        <input
+          type="text"
+          placeholder="Search HubSpot lists…"
+          [ngModel]="listSearchQuery()"
+          (ngModelChange)="onListSearch($event)"
+          autocomplete="off"
+        />
+        @if (listSearchResults().length > 0) {
+          <div class="list-dropdown">
+            @for (l of listSearchResults(); track l.id) {
+              <div class="list-dropdown-item" (click)="selectExistingList(l)">
+                <span>{{ l.name }}</span>
+                <span class="list-count">{{ l.size ? l.size + ' contacts' : '' }}</span>
+              </div>
+            }
+          </div>
+        }
+      </div>
+      @if (selectedExistingList()) {
+        <div class="list-selected">
+          <span>✓ <strong>{{ selectedExistingList()!.name }}</strong></span>
+          <span style="color: var(--gray-600); font-size: 12px">{{
+            selectedExistingList()!.size ? selectedExistingList()!.size + ' contacts' : ''
+          }}</span>
+          <span class="list-clear" (click)="clearExistingList()" title="Remove">×</span>
+        </div>
+      }
+    </div>
 
     <div class="field" style="margin-top: 20px">
       <label>Send list ID(s)</label>
