@@ -118,9 +118,15 @@
         <div class="sections-editor">
           @for (s of sections(); track $index) {
             <div class="section-row">
-              <div class="section-meta"><span class="section-tag">{{ s.type }}</span></div>
-              <div class="section-body">{{ s.text || s.html }}</div>
-              <div class="section-remove" title="Remove" (click)="removeSection($index)">✕</div>
+              <div class="section-meta"><span class="section-tag">{{ sectionLabel(s) }}</span></div>
+              <div class="section-body">
+                @if (s.type === 'button') {
+                  <div class="section-btn-chip">{{ s.text || 'Button' }}</div>
+                } @else {
+                  <div class="section-html" [innerHTML]="sanitizedSectionHtml(s)"></div>
+                }
+              </div>
+              <div class="section-remove" title="Remove this section" (click)="removeSection($index)">✕</div>
             </div>
           }
         </div>

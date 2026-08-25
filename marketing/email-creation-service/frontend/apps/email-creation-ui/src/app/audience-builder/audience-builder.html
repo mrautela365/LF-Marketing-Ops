@@ -1,0 +1,259 @@
+<div class="card">
+  <div class="card-title">Event context</div>
+  <div class="card-desc">Looks up suppression lists, last-sent emails, and existing master lists for this event.</div>
+
+  <div class="field-row">
+    <div class="field">
+      <label>Brand short</label>
+      <input
+        type="text"
+        placeholder="e.g. kubecon"
+        [ngModel]="brandShort()"
+        (ngModelChange)="brandShort.set($event)"
+        (keyup.enter)="loadContext()"
+      />
+    </div>
+    <div class="field">
+      <label>Event name</label>
+      <input
+        type="text"
+        placeholder="e.g. KubeCon + CloudNativeCon Europe 2027"
+        [ngModel]="eventName()"
+        (ngModelChange)="eventName.set($event)"
+        (keyup.enter)="loadContext()"
+      />
+    </div>
+  </div>
+  <button class="btn btn-primary" (click)="loadContext()">Load</button>
+</div>
+
+@if (contextLoaded()) {
+  <div class="card">
+    <div class="ab-section-header">
+      <span class="ab-section-title">Existing master lists</span>
+      <span class="ab-section-count">{{ existingMasterLists().length }}</span>
+    </div>
+
+    @if (existingLoading()) {
+      <div class="loading"><span class="spinner"></span> Loading...</div>
+    } @else if (existingError()) {
+      <div class="error-box">Error: {{ existingError() }}</div>
+    } @else if (existingMasterLists().length === 0) {
+      <p style="font-size: 13px; color: var(--gray-400)">None found — nothing to reuse for this event yet.</p>
+    } @else {
+      <div class="ab-card-grid">
+        @for (l of existingMasterLists(); track l.list_id) {
+          <div class="ab-card" style="cursor: default">
+            <div class="ab-card-name">{{ l.name }}</div>
+            <div class="ab-card-meta">{{ l.size ?? '—' }} contacts</div>
+            <a class="ab-hubspot-link" [href]="l.hubspot_url" target="_blank">View in HubSpot →</a>
+          </div>
+        }
+      </div>
+    }
+  </div>
+
+  <div class="card">
+    <div class="ab-section-header">
+      <span class="ab-section-title">Last-sent emails</span>
+      <span class="ab-section-count">{{ lastSentEmails().length }}</span>
+      <span class="ab-section-desc">Reuse a previous send's audience instead of rebuilding from scratch</span>
+    </div>
+
+    @if (lastSentLoading()) {
+      <div class="loading"><span class="spinner"></span> Loading...</div>
+    } @else if (lastSentError()) {
+      <div class="error-box">Error: {{ lastSentError() }}</div>
+    } @else if (lastSentEmails().length === 0) {
+      <p style="font-size: 13px; color: var(--gray-400)">No previous sends found for this event.</p>
+    } @else {
+      <div style="display: flex; flex-direction: column; gap: 10px">
+        @for (email of lastSentEmails(); track email.email_id) {
+          <div class="ab-last-sent-card">
+            <div class="ab-last-sent-top">
+              <a class="ab-last-sent-name" [href]="email.hubspot_url" target="_blank">{{ email.email_name }}</a>
+              <span class="ab-last-sent-date">{{ email.sent_at }}</span>
+            </div>
+            <div class="ab-last-sent-row">
+              <span class="ab-last-sent-label">Included:</span> {{ email.included_lists.length }} list(s) ·
+              <span class="ab-last-sent-label">Suppressed:</span> {{ email.suppression_lists.length }} list(s)
+            </div>
+            <div class="btn-row" style="margin-top: 10px">
+              <button class="btn btn-outline btn-sm" (click)="reuseIncludedLists(email)">Reuse included lists</button>
+              <button class="btn btn-outline btn-sm" (click)="applyPastSuppressionSelection(email)">
+                Apply its suppression selection
+              </button>
+            </div>
+          </div>
+        }
+      </div>
+    }
+  </div>
+
+  <div class="card">
+    <div class="card-title">Add lists to audience</div>
+    <div style="display: flex; gap: 10px">
+      <input
+        type="text"
+        style="flex: 1; border: 1px solid var(--gray-200); border-radius: var(--radius-sm); padding: 11px 14px; font-size: 14px"
+        placeholder="Search list name..."
+        [ngModel]="searchQuery()"
+        (ngModelChange)="searchQuery.set($event)"
+        (keyup.enter)="search()"
+      />
+      <button class="btn btn-primary" [disabled]="searching()" (click)="search()">
+        {{ searching() ? 'Searching...' : 'Search' }}
+      </button>
+    </div>
+    @if (searchError()) {
+      <div class="error-box" style="margin-top: 12px">Error: {{ searchError() }}</div>
+    }
+    @if (searchResults().length > 0) {
+      <div class="ab-card-grid" style="margin-top: 14px">
+        @for (list of searchResults(); track list.id) {
+          <div class="ab-card" [class.selected]="isSelected(list)" (click)="toggleAudience(list)">
+            <div class="ab-card-top">
+              <span class="ab-card-check"></span>
+            </div>
+            <div class="ab-card-name">{{ list.name }}</div>
+            <div class="ab-card-meta">{{ list.size }} contacts</div>
+          </div>
+        }
+      </div>
+    }
+
+    <div class="section-subhead" style="margin-top: 20px">Audience ({{ selected().length }})</div>
+    @if (selected().length === 0) {
+      <p style="font-size: 13px; color: var(--gray-400)">No lists added yet.</p>
+    } @else {
+      <div class="ab-card-grid">
+        @for (l of selected(); track l.id) {
+          <div class="ab-card selected" (click)="removeFromAudience(l.id)" title="Click to remove">
+            <div class="ab-card-top">
+              <span class="ab-card-check"></span>
+            </div>
+            <div class="ab-card-name">{{ l.name }}</div>
+          </div>
+        }
+      </div>
+    }
+  </div>
+
+  <div class="card">
+    <div class="card-title">Suppression lists</div>
+    <div class="card-desc">Nothing is suppressed by default — select each list you want excluded from the master list.</div>
+
+    @if (suppressionLoading()) {
+      <div class="loading"><span class="spinner"></span> Loading...</div>
+    } @else if (suppressionError()) {
+      <div class="error-box">Error: {{ suppressionError() }}</div>
+    } @else if (suppressionLists().length === 0) {
+      <p style="font-size: 13px; color: var(--gray-400)">No suppression lists found.</p>
+    } @else {
+      <div class="ab-card-grid">
+        @for (s of suppressionLists(); track s.list_id) {
+          <div class="ab-card" [class.selected]="isSuppressionChecked(s)" (click)="toggleSuppression(s)">
+            <div class="ab-card-top">
+              <span class="ab-signal-badge" [class]="'ab-signal-' + s.category">{{ s.category }}</span>
+              <span class="ab-card-check"></span>
+            </div>
+            <div class="ab-card-name">{{ s.label }}</div>
+            <div class="ab-card-meta">{{ s.size ?? '—' }} contacts</div>
+          </div>
+        }
+      </div>
+    }
+  </div>
+
+  <div class="card">
+    <div class="card-title">Preview &amp; build</div>
+
+    <div class="btn-row" style="margin-top: 0">
+      <button class="btn btn-outline" [disabled]="selected().length === 0 || previewLoading()" (click)="previewCount()">
+        {{ previewLoading() ? 'Counting...' : 'Preview count' }}
+      </button>
+      @if (previewResult()) {
+        <span class="badge badge-blue" style="align-self: center">
+          {{ previewResult()!.count }} contacts @if (!previewResult()!.exact) { (estimate) }
+        </span>
+      }
+    </div>
+    @if (previewError()) {
+      <div class="error-box" style="margin-top: 12px">Error: {{ previewError() }}</div>
+    }
+
+    <div class="field" style="margin-top: 20px">
+      <label>Master list name (optional)</label>
+      <input
+        type="text"
+        placeholder="e.g. KubeCon Europe 2027 — Master Send List"
+        [ngModel]="masterListName()"
+        (ngModelChange)="masterListName.set($event)"
+      />
+    </div>
+    <button class="btn btn-success" [disabled]="selected().length === 0 || composeLoading()" (click)="composeMaster()">
+      {{ composeLoading() ? 'Building...' : '✅ Build master list' }}
+    </button>
+
+    @if (composeError()) {
+      <div class="error-box" style="margin-top: 12px">Error: {{ composeError() }}</div>
+    }
+    @if (composeResult()) {
+      <div class="success-box" style="margin-top: 14px">
+        <a [href]="composeResult()!.hubspot_url" target="_blank">{{ composeResult()!.name }}</a>
+        — {{ composeResult()!.size }} contacts
+        @if (composeResult()!.suppression_list_id) {
+          <div style="margin-top: 4px">
+            Suppression list:
+            <a [href]="composeResult()!.suppression_hubspot_url" target="_blank">{{ composeResult()!.suppression_name }}</a>
+            ({{ composeResult()!.suppression_size }})
+          </div>
+        }
+      </div>
+    }
+  </div>
+
+  @if (composeResult()) {
+    <div class="card">
+      <div class="card-title">QA</div>
+      <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 16px; margin-bottom: 14px">
+        <label style="display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; color: var(--gray-700)">
+          <input type="checkbox" [checked]="targetsEU()" (change)="targetsEU.set(!targetsEU())" />
+          Targets EU (GDPR)
+        </label>
+        <label style="display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; color: var(--gray-700)">
+          <input type="checkbox" [checked]="targetsCA()" (change)="targetsCA.set(!targetsCA())" />
+          Targets Canada (CASL)
+        </label>
+        <button class="btn btn-outline" [disabled]="qaLoading()" (click)="runQa()">
+          {{ qaLoading() ? 'Running...' : 'Run QA' }}
+        </button>
+        @if (qaResult()) {
+          <a class="ab-hubspot-link" [href]="qaReportUrl()" target="_blank">Download report (.xlsx) →</a>
+        }
+      </div>
+
+      @if (qaError()) {
+        <div class="error-box">Error: {{ qaError() }}</div>
+      }
+      @if (qaResult()) {
+        <div [class]="qaResult()!.overall === 'pass' ? 'success-box' : 'error-box'" style="margin-bottom: 14px">
+          Overall: {{ qaResult()!.overall }}
+        </div>
+        @for (entry of qaCheckEntries(); track entry.key) {
+          <div style="border-top: 1px solid var(--gray-200); padding-top: 10px; margin-top: 10px">
+            <div style="font-size: 13px; font-weight: 700; color: var(--gray-800)">
+              {{ entry.key }} —
+              <span class="badge" [class.badge-green]="entry.value.verdict === 'pass'" [class.badge-yellow]="entry.value.verdict !== 'pass'">
+                {{ entry.value.verdict }}
+              </span>
+            </div>
+            @for (f of entry.value.findings; track f.message) {
+              <p style="font-size: 12px; color: var(--gray-500); margin-top: 4px">[{{ f.severity }}] {{ f.message }} — {{ f.fix }}</p>
+            }
+          </div>
+        }
+      }
+    </div>
+  }
+}

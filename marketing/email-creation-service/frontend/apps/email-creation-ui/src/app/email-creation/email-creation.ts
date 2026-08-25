@@ -1,5 +1,6 @@
 import { Component, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
+import { DomSanitizer, type SafeHtml } from '@angular/platform-browser';
 import type { ContentSection, PlanResult } from '@email-creation/shared';
 import { EmailCreationService } from './email-creation.service';
 
@@ -70,7 +71,18 @@ export class EmailCreation {
   protected readonly chat4 = signal<ChatEntry[]>([]);
   protected readonly chat4Input = signal('');
 
-  constructor(private readonly service: EmailCreationService) {}
+  constructor(
+    private readonly service: EmailCreationService,
+    private readonly sanitizer: DomSanitizer,
+  ) {}
+
+  sectionLabel(section: ContentSection): string {
+    return section.type === 'button' ? 'Button' : 'Text block';
+  }
+
+  sanitizedSectionHtml(section: ContentSection): SafeHtml {
+    return this.sanitizer.bypassSecurityTrustHtml(section.html || '');
+  }
 
   private newToken(): string {
     return `tok-${Math.random().toString(36).slice(2)}${Date.now()}`;
