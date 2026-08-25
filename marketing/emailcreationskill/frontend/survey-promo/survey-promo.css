@@ -1,0 +1,67 @@
+/*
+ * Survey / Report Promo tab.
+ *
+ * Only the classes the standalone Survey_Workflow_automation frontend had that
+ * this app's style.css doesn't already provide. Everything else (.card, .btn,
+ * .field, .steps/.step, .list-picker, .list-dropdown, .hint, .section-subhead)
+ * is reused as-is from style.css so the tab matches the rest of the app.
+ *
+ * Every rule is scoped under #flow-survey-promo — the survey app's stylesheet
+ * had bare `*`, `body`, and `header` selectors that would have restyled the
+ * whole page, so those are deliberately not ported.
+ */
+
+#flow-survey-promo .panel.hidden { display: none; }
+
+/* Steps that can't be reached yet — the tab bar refuses to jump ahead. */
+#flow-survey-promo .step.locked { opacity: 0.45; cursor: not-allowed; }
+#flow-survey-promo .step:not(.locked) { cursor: pointer; }
+#flow-survey-promo .step:not(.locked):hover:not(.active) { background: var(--gray-200); }
+
+/* ── Inline status lines ── */
+#flow-survey-promo .status-info,
+#flow-survey-promo .status-success,
+#flow-survey-promo .status-error,
+#sp-tab-lock-status.status-error {
+  margin-top: 10px;
+  padding: 9px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  line-height: 1.5;
+}
+#flow-survey-promo .status-info    { background: var(--gray-100); color: var(--gray-700); }
+#flow-survey-promo .status-success { background: #ecfdf5; color: #166534; }
+#flow-survey-promo .status-error,
+#sp-tab-lock-status.status-error   { background: #fef2f2; color: #b91c1c; }
+
+/* ── Result links (HubSpot drafts, workflows, lists) ── */
+#flow-survey-promo .approve-result-link {
+  display: block;
+  margin-top: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--gray-900);
+}
+
+/* ── Planning: single-email vs. 3-email sequence picker ── */
+#flow-survey-promo .plan-choice { display: flex; gap: 10px; flex-wrap: wrap; }
+#flow-survey-promo .plan-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  flex: 1 1 240px;
+  padding: 12px;
+  border: 1px solid var(--gray-200);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+#flow-survey-promo .plan-option:hover { background: var(--gray-100); }
+#flow-survey-promo .plan-option input { width: auto; margin-top: 2px; flex-shrink: 0; }
+#flow-survey-promo .plan-option-title { font-size: 13.5px; font-weight: 600; color: var(--gray-900); }
+#flow-survey-promo .plan-option-desc  { font-size: 12px; color: var(--gray-500); margin-top: 2px; }
+
+/* ── Email Preview ── */
+#flow-survey-promo .variant-card iframe { background: white; }
+
+#flow-survey-promo .req      { color: #b91c1c; }
+#flow-survey-promo .optional { color: var(--gray-400); font-weight: 400; }

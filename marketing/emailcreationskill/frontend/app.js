@@ -60,19 +60,40 @@ const _AUD_UI_SCOPES = {
     sublistsWrap:     "ab-custom-sublists-wrap",
     sublists:         "ab-custom-sublists",
   },
+  // Survey / Report Promo tab -> Audience step -> "Custom Audience" sub-tab.
+  // Same flow again; that tab never clones an email, so startImplBtn is "".
+  survey: {
+    requestInput:     "spab-custom-request",
+    urlStatus:        "spab-custom-status",
+    buildBtn:         "spab-custom-build-btn",
+    statusBadge:      "spab-custom-status-badge",
+    ticker:           "spab-custom-ticker",
+    statusEl:         "spab-custom-result",
+    planActions:      "spab-custom-plan-actions",
+    approveBtn:       "spab-custom-approve-btn",
+    startImplBtn:     "",
+    questionsWrap:    "spab-custom-questions",
+    submitAnswersBtn: "spab-submit-answers-btn",
+    sublistsWrap:     "spab-custom-sublists-wrap",
+    sublists:         "spab-custom-sublists",
+  },
 };
 
-// ── Top-level screen switcher: Campaign Builder wizard vs. Audience Builder tab ──
+// ── Top-level screen switcher: Campaign Builder / Audience Builder / Survey Promo ──
+
+const TOP_TABS = {
+  "campaign":         { screen: "flow-event",             pill: "top-tab-campaign" },
+  "audience-builder": { screen: "flow-audience-builder",  pill: "top-tab-audience-builder" },
+  "survey-promo":     { screen: "flow-survey-promo",      pill: "top-tab-survey-promo" },
+};
 
 function switchTopTab(tab) {
-  const campaignScreen = document.getElementById("flow-event");
-  const builderScreen  = document.getElementById("flow-audience-builder");
-  const campaignPill   = document.getElementById("top-tab-campaign");
-  const builderPill    = document.getElementById("top-tab-audience-builder");
-  if (campaignScreen) campaignScreen.classList.toggle("hidden", tab !== "campaign");
-  if (builderScreen)  builderScreen.classList.toggle("hidden", tab !== "audience-builder");
-  if (campaignPill) campaignPill.classList.toggle("active", tab === "campaign");
-  if (builderPill)  builderPill.classList.toggle("active", tab === "audience-builder");
+  for (const [name, ids] of Object.entries(TOP_TABS)) {
+    const screen = document.getElementById(ids.screen);
+    const pill   = document.getElementById(ids.pill);
+    if (screen) screen.classList.toggle("hidden", name !== tab);
+    if (pill)   pill.classList.toggle("active", name === tab);
+  }
 }
 
 // ── Step navigation ──────────────────────────────────────────────────────────
@@ -1075,6 +1096,7 @@ function _extraFiltersPlanText() {
 const _ROLE_FILTER_IDS = {
   step3:   { speakers: "role-filter-speakers",    speakerScope: "role-filter-speaker-scope",    ambassadors: "role-filter-ambassadors" },
   builder: { speakers: "ab-role-filter-speakers", speakerScope: "ab-role-filter-speaker-scope", ambassadors: "ab-role-filter-ambassadors" },
+  survey:  { speakers: "spab-role-filter-speakers", speakerScope: "spab-role-filter-speaker-scope", ambassadors: "spab-role-filter-ambassadors" },
 };
 
 const _SPEAKER_SCOPE_TAGS = { current: "Current", past: "Past", current_past: "Current + Past" };
@@ -1576,6 +1598,12 @@ async function approveCustomAudiencePlan(scope = "step3") {
         if (planActions) planActions.classList.add("hidden");
         const link = _masterListLinkHtml(mid, msg.master_list_url);
 
+        // scope="survey" — Survey / Report Promo tab. Record the new list as
+        // that tab's send list and unlock its Implementation step.
+        if (scope === "survey" && typeof SurveyPromo !== "undefined" && SurveyPromo.onAudienceListReady) {
+          SurveyPromo.onAudienceListReady(mid, msg.master_list_url, "Custom Audience");
+        }
+
         // scope="builder"/"step3" only — if this build was kicked off from a
         // missing-signal "Create list" click, fold the new list into that
         // scope's discovery grid (selected, under its signal). Returns null
@@ -1588,7 +1616,9 @@ async function approveCustomAudiencePlan(scope = "step3") {
 
         if (statusEl) {
           statusEl.classList.remove("hidden");
-          statusEl.innerHTML = scope === "builder"
+          statusEl.innerHTML = scope === "survey"
+            ? `<div class="success-box">✅ Master audience ready (${link}). It is now this campaign's send list — continue to Implementation.</div>`
+            : scope === "builder"
             ? `<div class="success-box">✅ Master audience ready (${link})${_abSignal ? " — added to your selection above." : ". Use it as the send list for any campaign."}</div>`
             : standalone
               ? `<span style="color:#166534">✅ Master audience ready (${link}). Start a campaign plan (Step 1) to attach it to an email.</span>`

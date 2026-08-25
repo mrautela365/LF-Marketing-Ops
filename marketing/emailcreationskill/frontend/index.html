@@ -6,6 +6,7 @@
   <title>LF Email Automation — Campaign Builder</title>
   <link rel="stylesheet" href="/static/style.css?v=9" />
   <link rel="stylesheet" href="/static/audience-builder/audience-builder.css?v=2" />
+  <link rel="stylesheet" href="/static/survey-promo/survey-promo.css?v=1" />
 </head>
 <body>
 
@@ -21,6 +22,7 @@
   <div class="top-tabs">
     <div class="top-tab active" id="top-tab-campaign" onclick="switchTopTab('campaign')">Campaign Builder</div>
     <div class="top-tab" id="top-tab-audience-builder" onclick="switchTopTab('audience-builder')">Audience Builder</div>
+    <div class="top-tab" id="top-tab-survey-promo" onclick="switchTopTab('survey-promo')">Survey / Report Promo</div>
   </div>
 
   <!-- ══════════════════════════════════════════════════════════════════
@@ -774,9 +776,249 @@
 
   </div><!-- /flow-audience-builder -->
 
+  <!-- ══════════════════════════════════════════════════════════════════
+       Survey / Report Promo flow
+       Ported from marketing/Survey_Workflow_automation. Step 3 (Audience)
+       replaces that app's own audience planner with a HubSpot list search and
+       the Campaign Builder's Custom Audience flow, the latter driven through
+       app.js's scope="survey" id set (spab-custom-*).
+       ══════════════════════════════════════════════════════════════════ -->
+  <div id="flow-survey-promo" class="hidden">
+
+    <div class="steps">
+      <div class="step active" id="sp-tab-planning" onclick="SurveyPromo.switchTab('planning')">
+        <span class="step-circle">📝</span><span class="step-label">Planning</span>
+      </div>
+      <div class="step" id="sp-tab-email-preview" onclick="SurveyPromo.switchTab('email-preview')">
+        <span class="step-circle">✉️</span><span class="step-label">Email Preview</span>
+      </div>
+      <div class="step" id="sp-tab-audience" onclick="SurveyPromo.switchTab('audience')">
+        <span class="step-circle">👥</span><span class="step-label">Audience</span>
+      </div>
+      <div class="step" id="sp-tab-implementation" onclick="SurveyPromo.switchTab('implementation')">
+        <span class="step-circle">🚀</span><span class="step-label">Implementation</span>
+      </div>
+    </div>
+    <div id="sp-tab-lock-status" class="hidden"></div>
+
+    <!-- ── Step 1: Planning ─────────────────────────────────────────── -->
+    <div class="panel" id="sp-panel-planning">
+      <div class="card">
+        <div class="card-title">What are you promoting?</div>
+        <div class="card-desc" style="margin-top:0">
+          Paste the source material (survey blurb, report summary, announcement copy). The agent
+          writes the email from this — it will not invent facts, deadlines, or statistics that
+          aren't in what you paste.
+        </div>
+
+        <div class="field">
+          <label>Source text <span class="req">*</span></label>
+          <textarea id="sp-source-text" rows="8"
+            placeholder="Paste the survey/report description, key findings, deadline, incentive, audience…"></textarea>
+        </div>
+
+        <div class="field-row">
+          <div class="field">
+            <label>Link being promoted <span class="req">*</span></label>
+            <input id="sp-promoted-url" type="url" placeholder="https://…" autocomplete="off" />
+            <div class="hint">Survey URL, report landing page — whatever the CTA should open.</div>
+          </div>
+          <div class="field">
+            <label>Email type <span class="req">*</span></label>
+            <select id="sp-email-type">
+              <option value="survey">Survey promo — drive responses</option>
+              <option value="report">Report promo — drive downloads/reads</option>
+            </select>
+            <div class="hint">Survey emails get the legal/privacy block; report emails get share buttons.</div>
+          </div>
+        </div>
+
+        <div class="field">
+          <label>How many emails?</label>
+          <div class="plan-choice">
+            <label class="plan-option">
+              <input type="radio" name="sp_email_plan" value="single" checked />
+              <span>
+                <span class="plan-option-title">Single email</span>
+                <span class="plan-option-desc">One draft in HubSpot.</span>
+              </span>
+            </label>
+            <label class="plan-option">
+              <input type="radio" name="sp_email_plan" value="sequence" />
+              <span>
+                <span class="plan-option-title">3-email sequence</span>
+                <span class="plan-option-desc">Invite → Reminder → Deadline, plus a cloned (disabled) workflow.</span>
+              </span>
+            </label>
+          </div>
+        </div>
+
+        <div class="field">
+          <label>Hero image <span class="optional">(optional)</span></label>
+          <input id="sp-hero-image-file" type="file" accept="image/*" onchange="SurveyPromo.uploadHeroImage()" />
+          <div class="hint">Staged locally for preview. Only uploaded to HubSpot when you approve.</div>
+          <div id="sp-hero-image-status" class="hidden"></div>
+          <img id="sp-hero-image-thumb" class="hidden" alt="Hero image preview"
+            style="margin-top:10px;max-width:280px;border-radius:var(--radius-sm);border:1px solid var(--gray-200)" />
+        </div>
+
+        <div id="sp-planning-status" class="hidden"></div>
+        <div class="btn-row" style="margin-top:14px">
+          <button class="btn btn-primary" id="sp-generate-btn" onclick="SurveyPromo.generatePreview()">
+            Generate Email Preview
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Step 2: Email Preview ────────────────────────────────────── -->
+    <div class="panel hidden" id="sp-panel-email-preview">
+      <div class="card">
+        <div class="card-title">Review &amp; edit</div>
+        <div class="card-desc" style="margin-top:0">
+          Edit any field and re-render to see it. Nothing exists in HubSpot until you approve.
+        </div>
+        <div id="sp-preview-meta" class="hint" style="margin-top:8px"></div>
+      </div>
+
+      <div id="sp-variant-cards"></div>
+
+      <div class="card">
+        <div class="card-title">Approve</div>
+        <div class="card-desc" style="margin-top:0">
+          Clones the latest matching LF Research email in HubSpot and applies your copy to the
+          clone as a <strong>draft</strong>. Nothing is sent or scheduled.
+        </div>
+        <div id="sp-approve-status" class="hidden"></div>
+        <div id="sp-approve-results" class="hidden"></div>
+        <div class="btn-row" style="margin-top:12px">
+          <button class="btn btn-success" id="sp-approve-btn" onclick="SurveyPromo.approvePreview()" disabled>
+            Approve &amp; create HubSpot draft
+          </button>
+          <button class="btn btn-primary" id="sp-email-preview-next-btn" onclick="SurveyPromo.goNextFromEmailPreview()" disabled>
+            Next: Audience →
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Step 3: Audience — the Audience Builder, scope="survey" ───── -->
+    <div class="panel hidden" id="sp-panel-audience">
+
+      <div class="ab-card-title-row" style="margin-bottom:6px">
+        <div class="card-title" style="margin:0">Choose the send list</div>
+        <span id="sp-audience-status-badge" style="font-size:12px;color:var(--gray-400)">— no audience selected yet</span>
+      </div>
+      <div class="card-desc" style="margin-top:0">
+        Pick a HubSpot list you already know, or describe the audience in plain English and let the
+        agent build it. Whichever you finish becomes this email&#39;s send list.
+      </div>
+
+      <!-- Sub-tab switcher: pick an existing list vs. free-form custom audience -->
+      <div class="btn-row" id="sp-audience-subtabs" style="margin-top:2px">
+        <button class="btn btn-primary" id="sp-aud-tab-existing" onclick="SurveyPromo.switchAudienceSubTab('existing')">
+          Use Existing List
+        </button>
+        <button class="btn btn-outline" id="sp-aud-tab-custom" onclick="SurveyPromo.switchAudienceSubTab('custom')">
+          Custom Audience
+        </button>
+      </div>
+
+      <div id="sp-aud-flow-existing" style="margin-top:14px">
+
+      <div class="card">
+        <div class="ab-card-title-row">
+          <div class="card-title" style="margin:0">Pick an existing HubSpot list</div>
+          <span class="ab-step-optional">Shortcut</span>
+        </div>
+        <div class="card-desc">
+          Already know the list you want to send to? Search for it here and skip the Custom Audience flow.
+        </div>
+        <div class="list-picker" style="margin-top:8px">
+          <input id="sp-list-search-input" type="text" placeholder="Search HubSpot lists…"
+            oninput="SurveyPromo.onListSearch(this.value)" autocomplete="off" />
+          <div id="sp-list-dropdown" class="list-dropdown hidden"></div>
+        </div>
+        <div id="sp-list-selected" class="list-selected hidden"></div>
+      </div>
+
+      </div><!-- /sp-aud-flow-existing -->
+
+      <!-- Custom Audience: the same free-form flow as the Campaign Builder,
+           driven through app.js&#39;s _AUD_UI_SCOPES["survey"] id set. No role
+           filters here — this tab only needs the plain-English description. -->
+      <div id="sp-aud-flow-custom" class="hidden" style="margin-top:14px">
+        <div class="card">
+          <div class="ab-card-title-row" style="margin-bottom:6px">
+            <div class="card-title" style="margin:0">Describe the audience you need</div>
+            <span id="spab-custom-status-badge" style="font-size:12px;color:var(--gray-400)">— describe an audience in your own words</span>
+          </div>
+          <div class="card-desc" style="margin-top:0">
+            e.g. "All mailable contacts located in Seoul, set up for mailing — this is for
+            OSS Korea and MCP Dev Summit Seoul." Combine a location with one or more named
+            events for context; the agent proposes the segment logic and asks before building.
+          </div>
+          <textarea id="spab-custom-request" rows="3" style="width:100%;margin-top:8px;font-family:inherit;font-size:14px;padding:10px;border-radius:var(--radius-sm);border:1px solid var(--gray-200)"
+            placeholder="All mailable contacts located in Seoul, set up for mailing (this is for OSS Korea and MCP Dev Summit Seoul)"></textarea>
+          <div class="btn-row" style="margin-top:8px">
+            <button class="btn btn-primary" id="spab-custom-build-btn" onclick="runCustomAudienceBuild('survey')">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+              Generate Audience Plan
+            </button>
+          </div>
+          <div id="spab-custom-status" class="hidden" style="margin-top:8px"></div>
+
+          <div id="spab-custom-ticker" class="hidden" style="margin-top:18px;padding:10px;background:#0f172a;border-radius:8px;font-family:ui-monospace,monospace;font-size:11px;color:#e2e8f0;max-height:340px;overflow-y:auto;white-space:pre-wrap;word-break:break-all"></div>
+
+          <div id="spab-custom-questions" class="hidden" style="margin-top:14px"></div>
+
+          <div class="hidden" id="spab-custom-plan-actions" style="margin-top:12px">
+            <div style="font-size:12px;color:var(--gray-500);margin-bottom:8px">
+              Nothing is created in HubSpot yet — review the segment plan in the log above, then approve to build it.
+            </div>
+            <div class="btn-row">
+              <button class="btn btn-success" id="spab-custom-approve-btn" onclick="approveCustomAudiencePlan('survey')">
+                ✅ Approve &amp; Build Audience
+              </button>
+              <button class="btn btn-outline" onclick="AudienceBuilder.discardCustomPlan('survey')">
+                Discard &amp; Start Over
+              </button>
+            </div>
+          </div>
+
+          <div id="spab-custom-sublists-wrap" class="hidden" style="margin-top:14px">
+            <div class="section-subhead">Lists in the master audience</div>
+            <div id="spab-custom-sublists"></div>
+          </div>
+
+          <div id="spab-custom-result" class="hidden" style="margin-top:10px;font-size:13px"></div>
+        </div>
+      </div><!-- /sp-aud-flow-custom -->
+
+      <div class="card">
+        <div class="card-desc" style="margin-top:0">
+          Once a list is selected or built, continue — it is attached as the email&#39;s send list at
+          implementation.
+        </div>
+        <div class="btn-row" style="margin-top:12px">
+          <button class="btn btn-primary" id="sp-audience-next-btn" onclick="SurveyPromo.goNextFromAudience()" disabled>
+            Next: Implementation →
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Step 4: Implementation ───────────────────────────────────── -->
+    <div class="panel hidden" id="sp-panel-implementation">
+      <div id="sp-implementation-content"></div>
+    </div>
+
+  </div><!-- /flow-survey-promo -->
+
 </div><!-- /container -->
 
-<script src="/static/app.js?v=14"></script>
-<script src="/static/audience-builder/audience-builder.js?v=6"></script>
+<script src="/static/app.js?v=16"></script>
+<script src="/static/audience-builder/audience-builder.js?v=9"></script>
+<script src="/static/survey-promo/survey-promo.js?v=4"></script>
 </body>
 </html>

@@ -77,6 +77,35 @@ STANDARD_SUPPRESSION_TERMS = [
 ]
 
 
+def _term_matches(term: str, name: str) -> bool:
+    """True if `name` contains `term`'s words in order, tolerating whatever
+    separators HubSpot's naming convention puts between them.
+
+    A plain `term in name` substring test misses almost every real list, because
+    the names interleave " - " segment separators: "LF Events GDPR Suppression"
+    is stored as "24Q1 - LF Events - GDPR Suppression". Allowing only
+    non-word runs between the term's words keeps this tight — it still rejects
+    "26Q1 - LF Networking - Master Exclusion List" for term "LF Master
+    Exclusion", since "Networking" sits between two term words.
+    """
+    words = re.findall(r"[A-Za-z0-9]+", term or "")
+    if not words:
+        return False
+    pattern = r"[\W_]+".join(re.escape(w) for w in words)
+    return re.search(pattern, name or "", re.IGNORECASE) is not None
+
+
+def _extra_words(term: str, name: str) -> int:
+    """How many words `name` carries beyond the ones in `term` (the quarter code
+    included). Used as the FIRST ranking key so a narrower, project-scoped
+    variant never outranks the portfolio-wide list just for being newer:
+    "26Q1 - LF - Master Exclusion List - AAIF" is not a fresher edition of
+    "23Q1 - LF - Master Exclusion List", it is a different list. Quarter
+    recency still decides between two names of equal breadth."""
+    term_words = {w.lower() for w in re.findall(r"[A-Za-z0-9]+", term or "")}
+    return len([w for w in re.findall(r"[A-Za-z0-9]+", name or "") if w.lower() not in term_words])
+
+
 def _quarter_rank(name: str) -> tuple[int, int]:
     """Extracts a `YYQN` code from a list name for recency ranking (e.g. "25Q2"
     ranks above "24Q1"). Names with no quarter code rank lowest but are still
@@ -182,11 +211,15 @@ def find_standard_suppression_lists(brand_short: str = "", event_name: str = "")
             continue
         candidates = [
             r for r in results.get("results", [])
-            if r.get("listId") and term.lower() in (r.get("name") or "").lower()
+            if r.get("listId") and _term_matches(term, r.get("name") or "")
         ]
         if not candidates:
             continue
-        best = max(candidates, key=lambda r: (_quarter_rank(r.get("name", "")), r.get("size") or 0))
+        best = max(candidates, key=lambda r: (
+            -_extra_words(term, r.get("name", "")),
+            _quarter_rank(r.get("name", "")),
+            r.get("size") or 0,
+        ))
         found.append({
             "key": key,
             "label": label,

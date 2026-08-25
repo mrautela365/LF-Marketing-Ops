@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Survey/Report Promo Automation</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+
+<header>
+  <span class="logo">LF Research</span>
+  <span class="subtitle">Survey/Report Promo Automation</span>
+</header>
+
+<div class="container">
+
+  <div class="steps">
+    <div class="step active" id="tab-planning" onclick="switchTab('planning')">
+      <div class="step-circle">📋</div>
+      <span class="step-label">Planning</span>
+    </div>
+    <div class="step" id="tab-email-preview" onclick="switchTab('email-preview')">
+      <div class="step-circle">✉️</div>
+      <span class="step-label">Email Preview</span>
+    </div>
+    <div class="step" id="tab-audience-preview" onclick="switchTab('audience-preview')">
+      <div class="step-circle">👥</div>
+      <span class="step-label">Audience Preview</span>
+    </div>
+    <div class="step" id="tab-implementation" onclick="switchTab('implementation')">
+      <div class="step-circle">📤</div>
+      <span class="step-label">Implementation</span>
+    </div>
+  </div>
+  <div id="tab-lock-status" class="hidden"></div>
+
+  <!-- Planning -->
+  <div id="panel-planning" class="panel">
+    <div class="card">
+      <div class="card-title">Survey / Report Promo Request</div>
+      <div class="card-desc">
+        Paste the source document text and the link being promoted. The tool detects
+        whether this is a survey or report promo, drafts subject/body copy, and renders
+        a full branded email preview for you to review before it's created in HubSpot.
+      </div>
+
+      <div class="field">
+        <label>Source document text <span class="req">*</span></label>
+        <textarea id="source_text" rows="10"
+          placeholder="Paste the full survey instrument (questions) or report text/findings here."></textarea>
+      </div>
+
+      <div class="field">
+        <label>Link being promoted <span class="req">*</span></label>
+        <input id="promoted_url" type="url" placeholder="https://example.org/survey" />
+      </div>
+
+      <div class="field">
+        <label>Email type <span class="req">*</span></label>
+        <select id="email_type">
+          <option value="" disabled selected>— Select —</option>
+          <option value="survey">Survey promo</option>
+          <option value="report">Report promo</option>
+        </select>
+      </div>
+
+      <div class="field">
+        <label>Email plan <span class="req">*</span></label>
+        <div class="plan-choice">
+          <label class="plan-option">
+            <input type="radio" name="email_plan" value="single" checked />
+            <div>
+              <div class="plan-option-title">Single email</div>
+              <div class="plan-option-desc">One promo email, sent once.</div>
+            </div>
+          </label>
+          <label class="plan-option">
+            <input type="radio" name="email_plan" value="sequence" />
+            <div>
+              <div class="plan-option-title">Invite → Reminder → Deadline</div>
+              <div class="plan-option-desc">3 emails building on the same copy, with escalating urgency.</div>
+            </div>
+          </label>
+        </div>
+      </div>
+
+      <div class="field">
+        <label>Hero image <span class="optional">(optional)</span></label>
+        <input id="hero_image_file" type="file" accept="image/png,image/jpeg,image/gif,image/webp"
+               onchange="uploadHeroImage()" />
+        <div class="card-desc" style="margin-top:6px">
+          Staged locally only — it's uploaded to HubSpot only after you click Approve.
+        </div>
+        <img id="hero_image_thumb" class="hidden" style="max-width:200px;margin-top:8px;border-radius:4px" />
+        <div id="hero-image-status" class="hidden"></div>
+      </div>
+
+      <div id="planning-status" class="hidden"></div>
+
+      <div class="btn-row">
+        <button class="btn btn-primary" id="generate-btn" onclick="generatePreview()">
+          Generate Preview →
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Email Preview -->
+  <div id="panel-email-preview" class="panel hidden">
+    <div id="preview-meta" class="card-desc"></div>
+    <div id="variant-cards"></div>
+
+    <div class="card">
+      <div class="btn-row">
+        <button class="btn btn-primary" id="approve-btn" onclick="approvePreview()">Approve &amp; create HubSpot draft</button>
+      </div>
+      <div id="approve-status" class="hidden"></div>
+      <div id="approve-results" class="hidden"></div>
+    </div>
+
+    <div class="card">
+      <div class="btn-row">
+        <button class="btn btn-secondary" onclick="switchTab('planning')">← Back to Planning</button>
+        <button class="btn btn-primary" id="email-preview-next-btn" disabled title="Approve the draft(s) above first" onclick="goNextFromEmailPreview()">Build Audience →</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Audience Preview -->
+  <div id="panel-audience-preview" class="panel hidden">
+
+    <div class="btn-row audience-subtabs">
+      <button class="btn btn-primary" id="audience-subtab-btn-reuse" onclick="switchAudienceTab('reuse')">Use Existing List</button>
+      <button class="btn btn-outline" id="audience-subtab-btn-custom" onclick="switchAudienceTab('custom')">Custom Audience</button>
+    </div>
+
+    <!-- Sub-tab: Use Existing List -->
+    <div id="audience-subpanel-reuse" class="audience-subpanel">
+      <div class="card">
+        <div class="card-title">Use an existing list</div>
+        <div class="card-desc" style="margin-top:0">
+          Already have a segment built in HubSpot? Search for it below to use it as the
+          send list instead of building a new one.
+        </div>
+        <div class="list-picker" style="margin-top:8px">
+          <input id="list-search-input" type="text" placeholder="Search HubSpot lists…"
+            oninput="onListSearch(this.value)" autocomplete="off" />
+          <div id="list-dropdown" class="list-dropdown hidden"></div>
+        </div>
+        <div id="list-selected" class="hidden"></div>
+        <input type="hidden" id="send_list_id" />
+      </div>
+    </div>
+
+    <!-- Sub-tab: Custom Audience -->
+    <div id="audience-subpanel-custom" class="audience-subpanel hidden">
+      <div class="card">
+        <div class="card-title">Custom Audience</div>
+        <div class="card-desc">
+          Describe the audience you need — combine a location with one or more named
+          events for context, e.g. "All mailable contacts located in Seoul, set up for
+          mailing — this is for OSS Korea and MCP Dev Summit Seoul." The agent proposes
+          the segment logic below; nothing is created in HubSpot until you approve it.
+        </div>
+
+        <div class="field">
+          <label>Describe the audience you need <span class="req">*</span></label>
+          <textarea id="audience_description" rows="4"
+            placeholder="All mailable contacts located in Seoul, set up for mailing — this is for OSS Korea and MCP Dev Summit Seoul."></textarea>
+        </div>
+
+        <div id="audience-plan-status" class="hidden"></div>
+
+        <div class="btn-row">
+          <button class="btn btn-primary" id="audience-plan-btn" onclick="planAudience()">Propose segment logic →</button>
+        </div>
+      </div>
+
+      <div id="audience-plan-card" class="card hidden">
+        <div class="card-title">Proposed Segment Plan</div>
+        <div id="audience-plan-summary" class="card-desc"></div>
+
+        <div id="audience-questions" class="hidden"></div>
+
+        <div id="audience-plan-fields">
+          <div class="field">
+            <label>List name</label>
+            <input id="audience_list_name" type="text" />
+          </div>
+          <div class="field">
+            <label>Locations (one "city" or "city, country" per line)</label>
+            <textarea id="audience_locations" rows="3"></textarea>
+          </div>
+          <div class="field">
+            <label>Named events (context only, one per line)</label>
+            <textarea id="audience_named_events" rows="2"></textarea>
+          </div>
+          <div class="field">
+            <label><input id="audience_apply_suppression" type="checkbox" style="width:auto;margin-right:8px" />Apply standard suppression hygiene</label>
+          </div>
+          <div class="field">
+            <label>Suppression list search terms (one per line)</label>
+            <textarea id="audience_suppression_terms" rows="2"></textarea>
+          </div>
+        </div>
+
+        <div id="audience-build-status" class="hidden"></div>
+        <div class="btn-row">
+          <button class="btn btn-secondary" id="audience-replan-btn" onclick="planAudience()">Re-propose with edits</button>
+          <button class="btn btn-primary" id="audience-build-btn" onclick="buildAudience()">Approve &amp; create HubSpot list(s)</button>
+        </div>
+
+        <div id="audience-build-results" class="hidden"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="btn-row">
+        <button class="btn btn-secondary" onclick="switchTab('email-preview')">← Back to Email Preview</button>
+        <button class="btn btn-primary" id="audience-preview-next-btn" disabled onclick="goNextFromAudiencePreview()">Next: Implementation →</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Implementation -->
+  <div id="panel-implementation" class="panel hidden">
+    <div id="implementation-content"></div>
+
+    <div class="card">
+      <div class="btn-row">
+        <button class="btn btn-secondary" onclick="switchTab('audience-preview')">← Back to Audience Preview</button>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

@@ -27,6 +27,7 @@ import agent
 from core import agent as core_agent
 import audience_tools
 from audience_builder.routes import router as audience_builder_router
+from survey_promo.routes import router as survey_promo_router
 from config import ANTHROPIC_API_KEY, HUBSPOT_PORTAL_ID, INTERNAL_API_TOKEN, ASANA_ACCESS_TOKEN, LITELLM_BASE_URL, LITELLM_API_KEY
 import asana_tools
 import json
@@ -1523,6 +1524,13 @@ async def stream_audience_build(job_id: str, session_id: str = ""):
 # Own router/package (backend/audience_builder/) — registered before the static
 # mount/catch-all below so its routes aren't shadowed by the SPA fallback.
 app.include_router(audience_builder_router)
+
+
+# ── Survey / Report Promo tab ────────────────────────────────────────────────
+# Ported from marketing/Survey_Workflow_automation (backend/survey_promo/), minus
+# that app's own audience logic — the Audience step here reuses the Audience
+# Builder above. Same route-ordering requirement: before the catch-all.
+app.include_router(survey_promo_router)
 
 
 # ── Serve frontend ───────────────────────────────────────────────────────────

@@ -244,7 +244,10 @@ const AudienceBuilder = (() => {
       discoveryRan: false,
     };
   }
-  const _states = { builder: _newState(), step3: _newState() };
+  // "survey" has no discovery markup of its own (the Survey / Report Promo tab
+  // offers only "Use Existing List" and "Custom Audience"), so it has no _SCOPES
+  // entry — just a state bucket, which discardCustomPlan("survey") needs.
+  const _states = { builder: _newState(), step3: _newState(), survey: _newState() };
   function _st(scope) { return _states[scope] || _states.builder; }
 
   function _sumSelectedSize(cards, selectedSet) {
@@ -1139,31 +1142,41 @@ const AudienceBuilder = (() => {
     }
   }
 
+  // Every id here comes from app.js's _AUD_UI_SCOPES/_ROLE_FILTER_IDS rather than
+  // being hardcoded to the "builder" markup, so the Survey Promo tab's Custom
+  // Audience sub-tab (scope="survey") resets its own panel and not this one.
   function discardCustomPlan(scope = "builder") {
-    const ids = _ids(scope), st = _st(scope);
+    const st = _st(scope);
     st.pendingMissingSignal = null;
-    const planActions = document.getElementById("ab-custom-plan-actions");
-    if (planActions) planActions.classList.add("hidden");
-    clearAudienceQuestions(scope === "step3" ? "step3" : "builder");
 
-    const ticker = document.getElementById(ids.customTicker);
+    const ui = (typeof _AUD_UI_SCOPES !== "undefined" && _AUD_UI_SCOPES[scope]) || null;
+    if (!ui) return;
+
+    const planActions = document.getElementById(ui.planActions);
+    if (planActions) planActions.classList.add("hidden");
+    clearAudienceQuestions(scope);
+
+    const ticker = document.getElementById(ui.ticker);
     if (ticker) { ticker.textContent = ""; ticker.classList.add("hidden"); }
 
-    clearStatus("ab-custom-result");
-    clearStatus(ids.customTicker === "ab-custom-ticker" ? "ab-custom-status" : "custom-audience-url-status");
+    clearStatus(ui.statusEl);
+    clearStatus(ui.urlStatus);
 
-    const badge = document.getElementById("ab-custom-status-badge");
+    const badge = document.getElementById(ui.statusBadge);
     if (badge) { badge.textContent = "— describe an audience in your own words"; badge.style.color = "var(--gray-400)"; }
 
-    const buildBtn = document.getElementById("ab-custom-build-btn");
+    const buildBtn = document.getElementById(ui.buildBtn);
     if (buildBtn) buildBtn.disabled = false;
 
-    const roleSpeakers = document.getElementById("ab-role-filter-speakers");
-    if (roleSpeakers) roleSpeakers.checked = false;
-    const roleSpeakerScope = document.getElementById("ab-role-filter-speaker-scope");
-    if (roleSpeakerScope) roleSpeakerScope.value = "current_past";
-    const roleAmbassadors = document.getElementById("ab-role-filter-ambassadors");
-    if (roleAmbassadors) roleAmbassadors.checked = false;
+    const roleIds = (typeof _ROLE_FILTER_IDS !== "undefined" && _ROLE_FILTER_IDS[scope]) || null;
+    if (roleIds) {
+      const roleSpeakers = document.getElementById(roleIds.speakers);
+      if (roleSpeakers) roleSpeakers.checked = false;
+      const roleSpeakerScope = document.getElementById(roleIds.speakerScope);
+      if (roleSpeakerScope) roleSpeakerScope.value = "current_past";
+      const roleAmbassadors = document.getElementById(roleIds.ambassadors);
+      if (roleAmbassadors) roleAmbassadors.checked = false;
+    }
   }
 
   return {
