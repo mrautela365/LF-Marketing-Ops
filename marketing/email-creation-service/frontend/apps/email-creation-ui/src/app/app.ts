@@ -13,7 +13,8 @@ import { StatusService } from './status.service';
   styleUrl: './app.scss',
 })
 export class App {
-  protected readonly title = signal('Email Creation UI');
+  protected readonly title = signal('LF Email Automation');
+  protected readonly subtitle = signal('Campaign Builder');
   protected readonly activeTab = signal<'status' | 'audience-builder' | 'email-creation'>('email-creation');
 
   protected readonly status = signal<StatusResponse | null>(null);

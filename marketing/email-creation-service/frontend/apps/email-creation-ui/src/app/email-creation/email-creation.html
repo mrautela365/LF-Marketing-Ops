@@ -1,18 +1,40 @@
 <div class="steps">
   <div class="step step-clickable" [class.active]="step() === 1" [class.done]="step() > 1" (click)="step.set(1)">
-    <span class="step-circle">1</span>
-    <span class="step-label">Campaign Brief</span>
+    <span class="step-circle">
+      <svg viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
+        <rect x="8" y="2" width="8" height="4" rx="1" />
+      </svg>
+    </span>
+    <span class="step-label">Planning</span>
   </div>
   <div class="step step-clickable" [class.active]="step() === 2" [class.done]="step() > 2" (click)="sessionId() && step.set(2)">
-    <span class="step-circle">2</span>
+    <span class="step-circle">
+      <svg viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z" />
+        <polyline points="22,6 12,13 2,6" />
+      </svg>
+    </span>
     <span class="step-label">Email Preview</span>
   </div>
   <div class="step step-clickable" [class.active]="step() === 3" [class.done]="step() > 3" (click)="sessionId() && step.set(3)">
-    <span class="step-circle">3</span>
-    <span class="step-label">Audience</span>
+    <span class="step-circle">
+      <svg viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+        <circle cx="9" cy="7" r="4" />
+        <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+        <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+      </svg>
+    </span>
+    <span class="step-label">Audience Preview</span>
   </div>
   <div class="step" [class.active]="step() === 4">
-    <span class="step-circle">4</span>
+    <span class="step-circle">
+      <svg viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="22" y1="2" x2="11" y2="13" />
+        <polygon points="22,2 15,22 11,13 2,9 22,2" />
+      </svg>
+    </span>
     <span class="step-label">Implementation</span>
   </div>
 </div>

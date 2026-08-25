@@ -1,12 +1,17 @@
 <header>
   <span class="logo">{{ title() }}</span>
-  <span class="subtitle">Marketing email tooling</span>
+  <span class="subtitle">{{ subtitle() }}</span>
 </header>
+
+<div class="mode-banner">
+  <span class="mode-banner-icon">⚡</span>
+  <strong>Marketing Automation</strong> — connected to HubSpot
+</div>
 
 <div class="container">
   <div class="top-tabs">
     <div class="top-tab" [class.active]="activeTab() === 'email-creation'" (click)="activeTab.set('email-creation')">
-      Email Creation
+      Campaign Builder
     </div>
     <div class="top-tab" [class.active]="activeTab() === 'audience-builder'" (click)="activeTab.set('audience-builder')">
       Audience Builder

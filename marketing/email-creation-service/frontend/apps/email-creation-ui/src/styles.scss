@@ -78,6 +78,18 @@ header .subtitle {
   border-left: 1px solid var(--gray-200);
 }
 
+.mode-banner {
+  padding: 7px 24px;
+  font-size: 12.5px;
+  text-align: center;
+  background: var(--blue-light);
+  color: var(--blue-dark);
+  border-bottom: 1px solid #c7d2fe;
+}
+.mode-banner-icon {
+  margin-right: 4px;
+}
+
 .container {
   width: 100%;
   max-width: none;
@@ -521,6 +533,13 @@ header .subtitle {
   align-items: center;
   font-size: 13px;
   font-weight: 700;
+}
+.step-circle svg {
+  width: 16px;
+  height: 16px;
+  display: block;
+  stroke: currentColor;
+  fill: none;
 }
 .step-label {
   font-size: 13px;
