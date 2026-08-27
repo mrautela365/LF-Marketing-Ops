@@ -483,8 +483,17 @@ func (s *MasterListService) ComposeMasterListFromIDs(
 
 	suppressionListID := ""
 	if len(excludeIDs) > 0 {
-		suppName := strings.TrimSpace(name) + " - Combined Suppression"
-		if strings.TrimSpace(name) == "" {
+		// Mirrors Python's `name and f"{name.strip()} - Combined Suppression"
+		// or build_master_list_name(...)`: the truthiness check is on the raw
+		// (unstripped) name, so a whitespace-only name is truthy and produces
+		// " - Combined Suppression" (leading space, from stripping to "")
+		// rather than falling back to the auto-generated name — a Python
+		// bug preserved here on purpose (see constraint: replicate behavior,
+		// not "fix" known inconsistencies).
+		var suppName string
+		if name != "" {
+			suppName = strings.TrimSpace(name) + " - Combined Suppression"
+		} else {
 			suppName = BuildMasterListName(eventURL, brandShort, eventName, eventDates, "Combined Suppression")
 		}
 		suppResult, resolvedSuppName, err := s.createWithRetry(ctx, suppName, BuildInListOrBranch(excludeIDs))
@@ -499,11 +508,18 @@ func (s *MasterListService) ComposeMasterListFromIDs(
 		}
 		response.SuppressionName = suppNameOut
 		response.SuppressionHubSpotURL = suppResult.HubSpotURL
-		response.SuppressionSize = sizeOrUnknown(suppResult.Size, suppResult.Size != 0)
+		response.SuppressionSize = sizeOrUnknown(suppResult.Size, suppResult.HasSize)
 	}
 
-	resolvedName := strings.TrimSpace(name)
-	if resolvedName == "" {
+	// Mirrors Python's `resolved_name = name.strip() if name else
+	// build_master_list_name(...)`: truthiness is checked on the raw name,
+	// so a whitespace-only name resolves to "" (name.strip() of whitespace)
+	// rather than falling back to the auto-generated name — preserved
+	// intentionally, see the suppression-name comment above.
+	var resolvedName string
+	if name != "" {
+		resolvedName = strings.TrimSpace(name)
+	} else {
 		resolvedName = BuildMasterListName(eventURL, brandShort, eventName, eventDates, "Master")
 	}
 	filterBranch := BuildMasterFilterBranch(listIDs, suppressionListID)
@@ -520,6 +536,6 @@ func (s *MasterListService) ComposeMasterListFromIDs(
 	}
 	response.Name = name2
 	response.HubSpotURL = result.HubSpotURL
-	response.Size = sizeOrUnknown(result.Size, result.Size != 0)
+	response.Size = sizeOrUnknown(result.Size, result.HasSize)
 	return response, nil
 }

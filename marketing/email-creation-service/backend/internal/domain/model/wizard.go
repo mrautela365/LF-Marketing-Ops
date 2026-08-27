@@ -17,6 +17,11 @@ type SessionState struct {
 	EmailID   string `json:"email_id,omitempty"`
 	DraftURL  string `json:"draft_url,omitempty"`
 
+	// Plan holds the structured plan payload produced by the plan
+	// orchestration (create_plan), ported from Python's SessionState.plan:
+	// Optional[dict] = None. Read back verbatim by GET /api/session/{id}.
+	Plan map[string]any `json:"-"`
+
 	// Messages is the full agentic conversation history passed to
 	// LLMGateway.RunAgent on every subsequent turn (plan/chat), letting the
 	// model see what it already told the user.
@@ -76,13 +81,13 @@ type SourceEmailRef struct {
 // PlanResult is the object returned by /api/plan and carried as
 // {"type":"plan_done","result": ...} over /api/progress/{token}.
 type PlanResult struct {
-	SessionID    string          `json:"session_id"`
-	Message      string          `json:"message"`
-	Phase        string          `json:"phase"`
-	Mode         string          `json:"mode"`
-	SourceEmail  *SourceEmailRef `json:"source_email,omitempty"`
-	Stage        map[string]any  `json:"stage,omitempty"`
-	UTM          map[string]any  `json:"utm,omitempty"`
+	SessionID   string          `json:"session_id"`
+	Message     string          `json:"message"`
+	Phase       string          `json:"phase"`
+	Mode        string          `json:"mode"`
+	SourceEmail *SourceEmailRef `json:"source_email,omitempty"`
+	Stage       map[string]any  `json:"stage,omitempty"`
+	UTM         map[string]any  `json:"utm,omitempty"`
 }
 
 // ProgressEvent is one SSE frame on GET /api/progress/{token}. Extra keys
@@ -126,17 +131,17 @@ type GeneratedContent struct {
 // on success or "failed" (with Error set) — a Variant A failure must never
 // block Variant B, so callers treat "failed" as a non-fatal, displayable state.
 type AITemplateContent struct {
-	Subject      string         `json:"subject"`
-	PreviewText  string         `json:"preview_text"`
-	HTML         string         `json:"html"`
-	BodyHTML     string         `json:"body_html"`
-	Sections     []EmailSection `json:"sections"`
-	Sponsors     []Sponsor      `json:"sponsors,omitempty"`
-	BannerURL    string         `json:"banner_url,omitempty"`
-	TemplateKey  string         `json:"template_key,omitempty"`
-	StageName    string         `json:"stage_name,omitempty"`
-	Mode         string         `json:"mode"` // ai-generated | failed
-	Error        string         `json:"error,omitempty"`
+	Subject     string         `json:"subject"`
+	PreviewText string         `json:"preview_text"`
+	HTML        string         `json:"html"`
+	BodyHTML    string         `json:"body_html"`
+	Sections    []EmailSection `json:"sections"`
+	Sponsors    []Sponsor      `json:"sponsors,omitempty"`
+	BannerURL   string         `json:"banner_url,omitempty"`
+	TemplateKey string         `json:"template_key,omitempty"`
+	StageName   string         `json:"stage_name,omitempty"`
+	Mode        string         `json:"mode"` // ai-generated | failed
+	Error       string         `json:"error,omitempty"`
 }
 
 // Sponsor is one sponsor logo scraped from the event page.
@@ -147,27 +152,26 @@ type Sponsor struct {
 	Tier string `json:"tier,omitempty"` // tier1 | tier2
 }
 
-// GenerateContentResponse merges Variant B + Variant A fields, matching the
-// flat dict main.py's /api/generate-content handler returns.
+// GenerateContentResponse matches main.py's /api/generate-content handler's
+// return dict field-for-field (note: "generated_*" prefixes on Variant B's
+// fields, not "variant_b_*" — main.py itself is asymmetric here). BodyHTML/
+// Sponsors and Variant A's BodyHTML/Sections/BannerURL are intentionally
+// absent — Python never returns them from this endpoint either (they live
+// only in session.meta for later steps to read back).
 type GenerateContentResponse struct {
 	SessionID string `json:"session_id"`
 
-	Subject     string         `json:"subject"`
-	PreviewText string         `json:"preview_text"`
-	HTML        string         `json:"html"`
-	BodyHTML    string         `json:"body_html"`
-	Sections    []EmailSection `json:"sections"`
-	Sponsors    []Sponsor      `json:"sponsors,omitempty"`
-	BannerURL   string         `json:"banner_url,omitempty"`
+	GeneratedSubject string         `json:"generated_subject"`
+	GeneratedPreview string         `json:"generated_preview"`
+	GeneratedHTML    string         `json:"generated_html"`
+	Sections         []EmailSection `json:"sections"`
+	BannerURL        string         `json:"banner_url,omitempty"`
 
-	VariantASubject     string         `json:"variant_a_subject"`
-	VariantAPreviewText string         `json:"variant_a_preview_text"`
-	VariantAHTML        string         `json:"variant_a_html"`
-	VariantABodyHTML    string         `json:"variant_a_body_html"`
-	VariantASections    []EmailSection `json:"variant_a_sections"`
-	VariantABannerURL   string         `json:"variant_a_banner_url,omitempty"`
-	VariantATemplateKey string         `json:"variant_a_template_key,omitempty"`
-	VariantAMode        string         `json:"variant_a_mode"`
+	VariantASubject     string `json:"variant_a_subject"`
+	VariantAPreview     string `json:"variant_a_preview"`
+	VariantAHTML        string `json:"variant_a_html"`
+	VariantATemplateKey string `json:"variant_a_template_key,omitempty"`
+	VariantAMode        string `json:"variant_a_mode"`
 }
 
 // UpdateSectionsRequest is POST /api/update-sections's body — the sections
@@ -183,43 +187,45 @@ type UpdateSectionsResponse struct {
 	SessionID     string `json:"session_id"`
 	BodyHTML      string `json:"body_html"`
 	GeneratedHTML string `json:"generated_html"`
+	SectionsCount int    `json:"sections_count"`
 }
 
 // --- Clone / send list -------------------------------------------------------
 
 // CloneRequest is POST /api/clone's body.
 type CloneRequest struct {
-	SessionID     string  `json:"session_id"`
-	Approved      bool    `json:"approved"`
-	Subject       *string `json:"subject,omitempty"`
-	PreviewText   *string `json:"preview_text,omitempty"`
-	SendListID    *string `json:"send_list_id,omitempty"`
+	SessionID   string  `json:"session_id"`
+	Approved    bool    `json:"approved"`
+	Subject     *string `json:"subject,omitempty"`
+	PreviewText *string `json:"preview_text,omitempty"`
+	SendListID  *string `json:"send_list_id,omitempty"`
 }
 
 // CloneResponse is the result of /api/clone — includes the A/B email ids
 // once clone_turn's pipeline has run.
 type CloneResponse struct {
-	SessionID          string `json:"session_id"`
-	Message            string `json:"message"`
-	Phase              string `json:"phase"`
-	EmailID            string `json:"email_id,omitempty"`
-	DraftURL           string `json:"draft_url,omitempty"`
-	VariantAEmailID    string `json:"variant_a_email_id,omitempty"`
-	VariantADraftURL   string `json:"variant_a_draft_url,omitempty"`
-	VariantBEmailID    string `json:"variant_b_email_id,omitempty"`
-	VariantBDraftURL   string `json:"variant_b_draft_url,omitempty"`
-	ValidationPassed   bool   `json:"validation_passed"`
-	ValidationIssues   []string `json:"validation_issues,omitempty"`
+	SessionID        string   `json:"session_id"`
+	Message          string   `json:"message"`
+	Phase            string   `json:"phase"`
+	EmailID          string   `json:"email_id,omitempty"`
+	DraftURL         string   `json:"draft_url,omitempty"`
+	ContentApplied   bool     `json:"content_applied"`
+	VariantAEmailID  string   `json:"variant_a_email_id,omitempty"`
+	VariantADraftURL string   `json:"variant_a_draft_url,omitempty"`
+	VariantBEmailID  string   `json:"variant_b_email_id,omitempty"`
+	VariantBDraftURL string   `json:"variant_b_draft_url,omitempty"`
+	ValidationPassed bool     `json:"validation_passed"`
+	ValidationIssues []string `json:"validation_issues,omitempty"`
 }
 
 // SetSendListRequest is POST /api/set-send-list's body. SendListIDs (plural)
 // takes priority over SendListID (singular, back-compat) when both are set.
 type SetSendListRequest struct {
-	SessionID           string   `json:"session_id,omitempty"`
-	EmailID              string   `json:"email_id,omitempty"`
-	SendListID           string   `json:"send_list_id,omitempty"`
-	SendListIDs          []string `json:"send_list_ids,omitempty"`
-	SuppressionListIDs   []string `json:"suppression_list_ids,omitempty"`
+	SessionID          string   `json:"session_id,omitempty"`
+	EmailID            string   `json:"email_id,omitempty"`
+	SendListID         string   `json:"send_list_id,omitempty"`
+	SendListIDs        []string `json:"send_list_ids,omitempty"`
+	SuppressionListIDs []string `json:"suppression_list_ids,omitempty"`
 }
 
 // SetSendListResponse mirrors hubspot.SetEmailSendList's return shape.
@@ -255,4 +261,68 @@ type SessionSummary struct {
 	Plan      map[string]any `json:"plan,omitempty"`
 	EmailID   string         `json:"email_id,omitempty"`
 	DraftURL  string         `json:"draft_url,omitempty"`
+}
+
+// --- Asana / brief -----------------------------------------------------------
+
+// AsanaPlanRequest is POST /api/plan-from-asana's body.
+type AsanaPlanRequest struct {
+	AsanaURL string `json:"asana_url"`
+}
+
+// AsanaPlanResult is POST /api/plan-from-asana's response — a pre-filled,
+// user-editable brief, matching main.py's plan_from_asana return dict
+// verbatim (including the flat field names, not nested under "brief").
+type AsanaPlanResult struct {
+	EmailName            string   `json:"email_name"`
+	FromName             string   `json:"from_name"`
+	FromAddress          string   `json:"from_address"`
+	Subject              string   `json:"subject"`
+	PreviewText          string   `json:"preview_text"`
+	EmailType            string   `json:"email_type"`
+	CloneBaseID          string   `json:"clone_base_id"`
+	CloneBaseName        string   `json:"clone_base_name"`
+	SuppressionListIDs   []string `json:"suppression_list_ids"`
+	SendListID           string   `json:"send_list_id"`
+	DocHTML              string   `json:"doc_html"`
+	DocURL               string   `json:"doc_url"`
+	EventURL             string   `json:"event_url"`
+	AudienceInstructions string   `json:"audience_instructions"`
+	Warnings             []string `json:"warnings"`
+	TaskName             string   `json:"task_name"`
+	DueOn                string   `json:"due_on"`
+	SubtaskNames         []string `json:"subtask_names"`
+}
+
+// StagingBriefRequest is POST /api/stage-from-brief's body — the stateless
+// clone+settings+content call used by the email-staging skill (bypasses
+// sessions entirely), matching Python's StagingBriefRequest field-for-field.
+type StagingBriefRequest struct {
+	InternalToken      string   `json:"internal_token,omitempty"`
+	CloneBaseID        string   `json:"clone_base_id"`
+	EmailName          string   `json:"email_name"`
+	FromName           string   `json:"from_name,omitempty"`
+	FromAddress        string   `json:"from_address,omitempty"`
+	Subject            string   `json:"subject,omitempty"`
+	PreviewText        string   `json:"preview_text,omitempty"`
+	EmailType          string   `json:"email_type,omitempty"`
+	SendListID         string   `json:"send_list_id,omitempty"`
+	SuppressionListIDs []string `json:"suppression_list_ids,omitempty"`
+	RawHTML            string   `json:"raw_html,omitempty"`
+	EventURL           string   `json:"event_url,omitempty"`
+	EventName          string   `json:"event_name,omitempty"`
+	EventDates         []string `json:"event_dates,omitempty"`
+	Location           string   `json:"location,omitempty"`
+	Description        string   `json:"description,omitempty"`
+}
+
+// StagingBriefResult is POST /api/stage-from-brief's response.
+type StagingBriefResult struct {
+	EmailID        string `json:"email_id"`
+	DraftURL       string `json:"draft_url"`
+	EmailName      string `json:"email_name"`
+	ContentApplied bool   `json:"content_applied"`
+	ContentSource  string `json:"content_source"` // doc | ai | none
+	Subject        string `json:"subject"`
+	PreviewText    string `json:"preview_text"`
 }

@@ -84,7 +84,11 @@ type HubSpotEmailClient interface {
 	CloneEmail(ctx context.Context, sourceEmailID, cloneName string) (*model.ClonedEmail, error)
 	CreateABVariation(ctx context.Context, emailID, variationName string) (*model.EmailSummary, error)
 	UpdateEmailSettings(ctx context.Context, emailID string, update EmailSettingsUpdate) error
-	SetEmailSendList(ctx context.Context, emailID string, update SendListUpdate) error
+	// SetEmailSendList returns the "to" object HubSpot actually stored after
+	// the PATCH, so callers can verify every requested list ID landed and
+	// report the applied namespace — matching Python's set_email_send_list
+	// return dict, which is never discarded.
+	SetEmailSendList(ctx context.Context, emailID string, update SendListUpdate) (model.EmailRecipients, error)
 	GetCampaign(ctx context.Context, emailID string) (campaignGUID, campaignName string, err error)
 	GetCampaignUTM(ctx context.Context, campaignGUID string) (*model.CampaignUTM, error)
 
@@ -119,7 +123,18 @@ type HubSpotEmailClient interface {
 // (/crm/v3/objects/lists...) that diverge from the two consistent, correct
 // implementations and appear to target nonexistent HubSpot endpoints.
 type HubSpotListClient interface {
+	// SearchLists ports audience_tools.py's hubspot_search_lists (count
+	// hardcoded to 20, no processingTypes filter, keeps entries even when
+	// name/id are missing) — used by the audience-builder services.
 	SearchLists(ctx context.Context, query string, limit int) ([]model.ListInfo, error)
+	// SearchListsByName ports integrations/hubspot.py's search_lists — a
+	// distinct function with its own behavior (query<2 chars short-circuits
+	// to empty, limit defaults to 10, filters to
+	// MANUAL/SNAPSHOT/DYNAMIC processingTypes, drops entries missing a
+	// name or id, and reads size only from additionalProperties.hs_list_size)
+	// — used by the /api/lists/search route and the wizard agent's
+	// search_hubspot_lists tool (via search_hubspot_lists's thin wrapper).
+	SearchListsByName(ctx context.Context, query string, limit int) ([]model.ListInfo, error)
 	GetList(ctx context.Context, listID string) (*model.ListInfo, error)
 	// GetListProcessingType returns the list's HubSpot processingType
 	// (MANUAL/SNAPSHOT/DYNAMIC), or "UNKNOWN" if the list isn't found in

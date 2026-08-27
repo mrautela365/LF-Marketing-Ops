@@ -23,7 +23,7 @@ func newTestClient(t *testing.T, handler http.HandlerFunc) *HubSpotClient {
 
 func TestSetEmailSendList_RejectsMixedNamespaces(t *testing.T) {
 	c := NewHubSpotClient("tok", "8112310", "")
-	err := c.SetEmailSendList(context.Background(), "123", domain.SendListUpdate{
+	_, err := c.SetEmailSendList(context.Background(), "123", domain.SendListUpdate{
 		ContactLists:    model.ListIncludeExclude{Include: []string{"1"}},
 		ContactIlsLists: model.ListIncludeExclude{Include: []string{"2"}},
 	})
@@ -58,6 +58,55 @@ func TestSearchLists_HandlesDualIDShapeAndFallbackSize(t *testing.T) {
 	}
 	if lists[1].ID != "222" || lists[1].Size != 9 {
 		t.Errorf("list 1 (fallback size) = %+v", lists[1])
+	}
+}
+
+// TestSearchLists_HsListSizeAsString guards against a regression where
+// HubSpot's real API returns additionalProperties.hs_list_size as a JSON
+// string (unlike every other numeric field in the same response) — a plain
+// `int` struct field silently fails json.Unmarshal per-entry, discarding
+// every single search result.
+func TestSearchLists_HsListSizeAsString(t *testing.T) {
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"lists": []map[string]any{
+				{"id": "222", "name": "B", "additionalProperties": map[string]any{"hs_list_size": "9"}},
+			},
+		})
+	})
+
+	lists, err := c.SearchLists(context.Background(), "kubecon", 0)
+	if err != nil {
+		t.Fatalf("SearchLists: %v", err)
+	}
+	if len(lists) != 1 {
+		t.Fatalf("expected 1 list, got %d", len(lists))
+	}
+	if lists[0].Size != 9 {
+		t.Errorf("expected size 9 parsed from string, got %+v", lists[0])
+	}
+}
+
+func TestSearchListsByName_HsListSizeAsString(t *testing.T) {
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"lists": []map[string]any{
+				{"id": "222", "name": "B", "additionalProperties": map[string]any{"hs_list_size": "9"}},
+			},
+		})
+	})
+
+	lists, err := c.SearchListsByName(context.Background(), "kubecon", 0)
+	if err != nil {
+		t.Fatalf("SearchListsByName: %v", err)
+	}
+	if len(lists) != 1 {
+		t.Fatalf("expected 1 list, got %d", len(lists))
+	}
+	if lists[0].Size != 9 {
+		t.Errorf("expected size 9 parsed from string, got %+v", lists[0])
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
+	"golang.org/x/net/html"
 
 	"github.com/linuxfoundation/lfx-v2-emailcreation-service/internal/domain"
 	"github.com/linuxfoundation/lfx-v2-emailcreation-service/internal/domain/model"
@@ -22,12 +23,33 @@ const scraperUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/
 // goquery, porting utils/content_tools.py.
 type WebScraper struct {
 	client *http.Client
+
+	// googleServiceAccountFile is GOOGLE_SERVICE_ACCOUNT_FILE — when unset,
+	// PrepareContent on a Google Doc URL fails the same way Python's
+	// _fetch_google_doc does when the env var is unset.
+	googleServiceAccountFile string
 }
 
 var _ domain.EventPageScraper = (*WebScraper)(nil)
 
-func NewWebScraper() *WebScraper {
-	return &WebScraper{client: &http.Client{Timeout: 15 * time.Second}}
+// sliceUpTo returns sel.Slice(0, n), clamped to sel's actual length.
+// goquery's Slice panics (like a raw Go slice expression) if the end index
+// exceeds the selection's length, which real event pages hit constantly —
+// e.g. a page with only one <h1> panics on Slice(0, 5). Every fixed-size cap
+// applied to a live DOM selection in this file must go through this helper
+// instead of calling .Slice directly.
+func sliceUpTo(sel *goquery.Selection, n int) *goquery.Selection {
+	if l := sel.Length(); l < n {
+		n = l
+	}
+	return sel.Slice(0, n)
+}
+
+func NewWebScraper(googleServiceAccountFile string) *WebScraper {
+	return &WebScraper{
+		client:                   &http.Client{Timeout: 15 * time.Second},
+		googleServiceAccountFile: googleServiceAccountFile,
+	}
 }
 
 func (w *WebScraper) get(rawURL string, timeout time.Duration) (*goquery.Document, string, error) {
@@ -200,6 +222,84 @@ func collapsedText(s *goquery.Selection) string {
 	return strings.TrimSpace(whitespaceRe.ReplaceAllString(s.Text(), " "))
 }
 
+// textJoin mirrors bs4's get_text(separator=sep, strip=True): every text node
+// under s is individually trimmed, empty ones are dropped, and the survivors
+// are joined with sep — NOT the same as collapsing all whitespace to a single
+// space, since bs4 never inserts a separator where the source markup had none
+// (sep="") and always inserts exactly one where it does (sep=" ").
+func textJoin(s *goquery.Selection, sep string) string {
+	var parts []string
+	var walk func(n *html.Node)
+	walk = func(n *html.Node) {
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			if c.Type == html.TextNode {
+				if t := strings.TrimSpace(c.Data); t != "" {
+					parts = append(parts, t)
+				}
+			} else if c.Type == html.ElementNode {
+				walk(c)
+			}
+		}
+	}
+	for _, n := range s.Nodes {
+		if n.Type == html.TextNode {
+			if t := strings.TrimSpace(n.Data); t != "" {
+				parts = append(parts, t)
+			}
+		} else {
+			walk(n)
+		}
+	}
+	return strings.Join(parts, sep)
+}
+
+// textStripEmpty mirrors get_text(strip=True) (no separator).
+func textStripEmpty(s *goquery.Selection) string { return textJoin(s, "") }
+
+// textStripSpace mirrors get_text(separator=" ", strip=True).
+func textStripSpace(s *goquery.Selection) string { return textJoin(s, " ") }
+
+// soleTextChild mirrors bs4's `string=` tag filter: a tag only satisfies it
+// when its ONE and ONLY child node is itself a NavigableString (no nested
+// markup at all) — a heading like "<h2>Who Should <strong>Attend</strong></h2>"
+// never matches, even though its rendered text does.
+func soleTextChild(n *html.Node) (string, bool) {
+	if n == nil || n.FirstChild == nil || n.FirstChild.NextSibling != nil {
+		return "", false
+	}
+	if n.FirstChild.Type != html.TextNode {
+		return "", false
+	}
+	return n.FirstChild.Data, true
+}
+
+// findHeadingsBySoleText mirrors soup.find_all([...], string=pattern): among
+// the given heading tags, keep only those with a sole-text-node child whose
+// text matches pattern, in document order.
+func findHeadingsBySoleText(doc *goquery.Selection, tags string, pattern *regexp.Regexp) []*html.Node {
+	var out []*html.Node
+	doc.Find(tags).Each(func(_ int, s *goquery.Selection) {
+		if s.Length() == 0 {
+			return
+		}
+		text, ok := soleTextChild(s.Get(0))
+		if !ok {
+			return
+		}
+		if pattern.MatchString(text) {
+			out = append(out, s.Get(0))
+		}
+	})
+	return out
+}
+
+// wrapNode lets a single *html.Node (including a NextSibling walked node
+// that isn't part of the original *goquery.Selection tree) be queried with
+// goquery's Find, matching bs4's tag.find_all(...).
+func wrapNode(n *html.Node) *goquery.Selection {
+	return goquery.NewDocumentFromNode(n).Selection
+}
+
 func metaContent(doc *goquery.Document, attr, value string) string {
 	sel := doc.Find(fmt.Sprintf(`meta[%s="%s"]`, attr, value)).First()
 	if sel.Length() == 0 {
@@ -214,13 +314,26 @@ func metaContent(doc *goquery.Document, attr, value string) string {
 const monthRe = `(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?` +
 	`|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)`
 
+// buggyMonthGroup replicates a Python slicing bug in _normalize_day_first:
+// the normalize regex is built from `month_re[4:-1]`, meant to strip the
+// outer "(?:"/")" wrapper but actually stripping 4 leading chars ("(?:J")
+// instead of 3 ("(?:"), eating the literal "J" off "Jan(?:uary)?". The
+// resulting alternation starts with "an(?:uary)?|Feb(?:ruary)?|..." and can
+// never match a real "Jan"/"January" token, so day-first January dates are
+// silently left unnormalized. Preserved here rather than fixed, per the
+// no-behavior-changes constraint.
+var buggyMonthGroup = "(" + monthRe[4:len(monthRe)-1] + ")"
+
 var (
-	monthFirstDateRe = regexp.MustCompile(`(?i)` + monthRe + `[\s,]+\d{1,2}(?:st|nd|rd|th)?` +
+	// Month-first/day-first extraction has no case-insensitive flag in
+	// Python (no re.IGNORECASE on these two findall calls) — case-sensitive
+	// here to match.
+	monthFirstDateRe = regexp.MustCompile(monthRe + `[\s,]+\d{1,2}(?:st|nd|rd|th)?` +
 		`(?:[\s,\x{2013}\-]+\d{1,2}(?:st|nd|rd|th)?[\s,]+)?20\d{2}\b`)
-	dayFirstDateRe = regexp.MustCompile(`(?i)\b\d{1,2}(?:st|nd|rd|th)?(?:[\x{2013}-]\d{1,2}(?:st|nd|rd|th)?)?\s+` +
+	dayFirstDateRe = regexp.MustCompile(`\b\d{1,2}(?:st|nd|rd|th)?(?:[\x{2013}-]\d{1,2}(?:st|nd|rd|th)?)?\s+` +
 		monthRe + `\s+20\d{2}\b`)
 	dayFirstNormalizeRe = regexp.MustCompile(`(?i)(\d{1,2})(?:st|nd|rd|th)?(?:[\x{2013}-]\d{1,2}(?:st|nd|rd|th)?)?\s+` +
-		monthRe + `\s+(20\d{2})`)
+		buggyMonthGroup + `\s+(20\d{2})`)
 	locPattern1 = regexp.MustCompile(`\bin\s+([A-Z][a-zA-Z\s]+,\s*[A-Z][a-zA-Z]+)\b`)
 	locPattern2 = regexp.MustCompile(`\b([A-Z][a-zA-Z]+,\s*(?:Japan|Germany|USA|UK|France|Spain|India|Canada|Australia))\b`)
 )
@@ -230,12 +343,7 @@ func normalizeDayFirst(s string) string {
 	if m == nil {
 		return s
 	}
-	// m[1]=day, then month text is embedded in the match but not captured
-	// separately since monthRe isn't wrapped in its own group here; re-derive
-	// the month token by re-matching against monthRe alone within the string.
-	monthOnly := regexp.MustCompile(`(?i)` + monthRe)
-	month := monthOnly.FindString(s)
-	return strings.Title(strings.ToLower(month)) + " " + m[1] + ", " + m[2]
+	return strings.Title(strings.ToLower(m[2])) + " " + m[1] + ", " + m[3]
 }
 
 func dedupeKeepOrder(items []string) []string {
@@ -287,7 +395,7 @@ func (w *WebScraper) FetchURL(rawURL string) (model.ScrapedEvent, error) {
 	}
 	if eventName == "" {
 		if h1 := doc.Find("h1").First(); h1.Length() > 0 {
-			eventName = collapsedText(h1)
+			eventName = textStripEmpty(h1)
 		}
 	}
 
@@ -307,7 +415,15 @@ func (w *WebScraper) FetchURL(rawURL string) (model.ScrapedEvent, error) {
 	// --- Description ---
 	description := ""
 	doc.Find("meta").EachWithBreak(func(_ int, s *goquery.Selection) bool {
-		name := strings.ToLower(s.AttrOr("name", s.AttrOr("property", "")))
+		// Mirrors Python's `(meta.get("name") or meta.get("property") or
+		// "").lower()` — an empty (but present) name attribute must still
+		// fall through to property, matching "or" truthiness rather than
+		// mere key-presence.
+		name, _ := s.Attr("name")
+		if name == "" {
+			name, _ = s.Attr("property")
+		}
+		name = strings.ToLower(name)
 		if name == "description" || name == "og:description" || name == "twitter:description" {
 			description = strings.TrimSpace(s.AttrOr("content", ""))
 			if description != "" {
@@ -320,7 +436,7 @@ func (w *WebScraper) FetchURL(rawURL string) (model.ScrapedEvent, error) {
 		description = jsonld.Description
 	}
 
-	bodyText := collapsedText(doc.Selection)
+	bodyText := textStripSpace(doc.Selection)
 
 	// --- Event dates ---
 	monthFirst := monthFirstDateRe.FindAllString(bodyText, -1)
@@ -362,15 +478,19 @@ func (w *WebScraper) FetchURL(rawURL string) (model.ScrapedEvent, error) {
 	}
 
 	// --- H1-H3 headings ---
-	var headings []string
+	headings := make([]string, 0, 6)
 	for _, tag := range []string{"h1", "h2", "h3"} {
-		doc.Find(tag).Slice(0, 5).EachWithBreak(func(_ int, s *goquery.Selection) bool {
-			text := collapsedText(s)
+		sliceUpTo(doc.Find(tag), 5).EachWithBreak(func(_ int, s *goquery.Selection) bool {
+			text := textStripEmpty(s)
 			if text != "" && !contains(headings, text) {
 				headings = append(headings, text)
 			}
 			return true
 		})
+	}
+
+	if allDates == nil {
+		allDates = []string{}
 	}
 
 	return model.ScrapedEvent{
@@ -416,7 +536,10 @@ var (
 	speakerHeadingRe = regexp.MustCompile(`(?i)speakers?|keynotes?|presenters?`)
 	audienceHeadRe   = regexp.MustCompile(`(?i)who\s+(should|is this for|attends?)|is\s+this\s+for\s+you|audience`)
 	inclusionHeadRe  = regexp.MustCompile(`(?i)what.{0,4}included|(?:ticket|pass|registration)\s+includes?|what.{0,6}get`)
-	ticketTypeRe     = regexp.MustCompile(`(?i)(?:Early[ -]Bird|Regular|Standard|Professional|Academic|Student|Late|Final|Onsite)` +
+	// No case-insensitive flag in Python's re.findall for this pattern —
+	// case-sensitive here to match (notably \b[A-Z]{3}\b requires an exact
+	// uppercase 3-letter currency code, e.g. "JPY", not "jpy").
+	ticketTypeRe = regexp.MustCompile(`(?:Early[ -]Bird|Regular|Standard|Professional|Academic|Student|Late|Final|Onsite)` +
 		`[^\n]{0,40}(?:[$\x{20ac}\x{a3}\x{a5}]|\b[A-Z]{3}\b)\s?[\d,]+`)
 	deadlineRe = regexp.MustCompile(`(?i)(?:deadline|closes?|ends?|last day)[^\n.]{0,60}` +
 		`(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*[\s,]+\d{1,2}[^\n.]{0,20}`)
@@ -429,70 +552,85 @@ func hasClassMatch(s *goquery.Selection, re *regexp.Regexp) bool {
 
 // extractBulletsAfterHeading finds a heading matching headRe (e.g. "Who
 // Should Attend"), then pulls short bullet-like strings (<li>, or short <p>)
-// from the section right after it.
+// from the section right after it. Mirrors Python's find_next_sibling()
+// walk, which advances through EVERY sibling node (including whitespace-only
+// text nodes between tags) rather than only element siblings — each such
+// node still counts against the hop budget, and only element nodes can be
+// searched for <li>/<p> descendants (hasattr(section, "find_all") gates
+// text nodes out without erroring).
 func extractBulletsAfterHeading(doc *goquery.Selection, headRe *regexp.Regexp, maxItems int) []string {
-	var items []string
-	doc.Find("h1,h2,h3,h4").EachWithBreak(func(_ int, h *goquery.Selection) bool {
-		if !headRe.MatchString(collapsedText(h)) {
-			return true
-		}
-		section := h.Next()
+	items := make([]string, 0, maxItems)
+	for _, h := range findHeadingsBySoleText(doc, "h1,h2,h3,h4", headRe) {
+		section := h.NextSibling
 		hops := 0
-		for section.Length() > 0 && hops < 3 && len(items) == 0 {
-			section.Find("li").Slice(0, maxItems).Each(func(_ int, li *goquery.Selection) {
-				text := collapsedText(li)
-				if len(text) > 3 && len(text) < 140 && !contains(items, text) {
-					items = append(items, text)
-				}
-			})
-			if len(items) == 0 {
-				section.Find("p").Slice(0, maxItems).Each(func(_ int, p *goquery.Selection) {
-					text := collapsedText(p)
-					if len(text) > 10 && len(text) < 140 && !contains(items, text) {
+		for section != nil && hops < 3 && len(items) == 0 {
+			if section.Type == html.ElementNode {
+				sel := wrapNode(section)
+				sliceUpTo(sel.Find("li"), maxItems).Each(func(_ int, li *goquery.Selection) {
+					text := textStripSpace(li)
+					if len(text) > 3 && len(text) < 140 && !contains(items, text) {
 						items = append(items, text)
 					}
 				})
+				if len(items) == 0 {
+					sliceUpTo(sel.Find("p"), maxItems).Each(func(_ int, p *goquery.Selection) {
+						text := textStripSpace(p)
+						if len(text) > 10 && len(text) < 140 && !contains(items, text) {
+							items = append(items, text)
+						}
+					})
+				}
 			}
-			section = section.Next()
+			section = section.NextSibling
 			hops++
 		}
-		return len(items) == 0
-	})
+		if len(items) > 0 {
+			break
+		}
+	}
 	return truncate(items, maxItems)
 }
 
 // extractSpeakersAfterHeading is a fallback for sites that don't mark up
-// speaker cards with a speaker/keynote/presenter class.
+// speaker cards with a speaker/keynote/presenter class. See
+// extractBulletsAfterHeading for the sibling-walk/hop-accounting semantics.
 func extractSpeakersAfterHeading(doc *goquery.Selection, maxItems int) []string {
-	var names []string
-	doc.Find("h1,h2,h3,h4").EachWithBreak(func(_ int, h *goquery.Selection) bool {
-		if !speakerHeadingRe.MatchString(collapsedText(h)) {
-			return len(names) < maxItems
-		}
-		section := h.Next()
+	names := make([]string, 0, maxItems)
+	for _, h := range findHeadingsBySoleText(doc, "h1,h2,h3,h4", speakerHeadingRe) {
+		section := h.NextSibling
 		hops := 0
-		for section.Length() > 0 && hops < 6 && len(names) < maxItems {
-			cards := section.Find("div,li,article")
-			if cards.Length() == 0 {
-				cards = section
+		for section != nil && hops < 6 && len(names) < maxItems {
+			if section.Type == html.ElementNode {
+				sel := wrapNode(section)
+				cards := sel.Find("div,li,article")
+				cardSels := make([]*goquery.Selection, 0, cards.Length())
+				if cards.Length() == 0 {
+					cardSels = append(cardSels, sel)
+				} else {
+					cards.Each(func(_ int, c *goquery.Selection) { cardSels = append(cardSels, c) })
+				}
+				for _, card := range cardSels {
+					if len(names) >= maxItems {
+						break
+					}
+					nameEl := card.Find("h2,h3,h4,strong").First()
+					if nameEl.Length() == 0 {
+						continue
+					}
+					text := textStripEmpty(nameEl)
+					if len(text) > 3 && len(text) < 60 && !strings.Contains(text, ",") &&
+						!noiseTitleRe.MatchString(text) && !contains(names, text) {
+						names = append(names, text)
+					}
+				}
 			}
-			cards.EachWithBreak(func(_ int, card *goquery.Selection) bool {
-				nameEl := card.Find("h2,h3,h4,strong").First()
-				if nameEl.Length() == 0 {
-					return len(names) < maxItems
-				}
-				text := collapsedText(nameEl)
-				if len(text) > 3 && len(text) < 60 && !strings.Contains(text, ",") &&
-					!noiseTitleRe.MatchString(text) && !contains(names, text) {
-					names = append(names, text)
-				}
-				return len(names) < maxItems
-			})
-			section = section.Next()
+			section = section.NextSibling
 			hops++
 		}
-		return len(names) == 0
-	})
+		if len(names) > 0 {
+			break
+		}
+	}
 	return truncate(names, maxItems)
 }
 
@@ -511,12 +649,18 @@ func absURL(base, ref string) string {
 	return b.ResolveReference(r).String()
 }
 
-// ScrapeEventFull ports utils/content_tools.py's scrape_event_full.
+// ScrapeEventFull ports utils/content_tools.py's scrape_event_full. Python's
+// fetch_url() failure never short-circuits this function — the enhanced
+// scrape runs its own, independent second fetch of the same URL regardless
+// of whether the first one (inside fetch_url) succeeded, so a transient
+// failure on the first request doesn't lose the hero image/speakers/etc.
+// that a successful second request would still recover.
 func (w *WebScraper) ScrapeEventFull(rawURL string) model.ScrapedEventFull {
-	base, err := w.FetchURL(rawURL)
-	empty := model.ScrapedEventFull{ScrapedEvent: base}
-	if err != nil {
-		return empty
+	base, _ := w.FetchURL(rawURL)
+	empty := model.ScrapedEventFull{
+		ScrapedEvent: base,
+		Speakers:     []string{}, Topics: []string{}, Sponsors: []model.ScrapedSponsor{},
+		Audience: []string{}, Inclusions: []string{},
 	}
 
 	doc, _, err := w.get(rawURL, 15*time.Second)
@@ -551,7 +695,7 @@ func (w *WebScraper) ScrapeEventFull(rawURL string) model.ScrapedEventFull {
 	})
 
 	// --- Speakers ---
-	var speakers []string
+	speakers := make([]string, 0, 12)
 	count := 0
 	doc.Find("div,article,li,section").EachWithBreak(func(_ int, el *goquery.Selection) bool {
 		if count >= 8 {
@@ -565,7 +709,7 @@ func (w *WebScraper) ScrapeEventFull(rawURL string) model.ScrapedEventFull {
 		if nameEl.Length() == 0 {
 			return true
 		}
-		name := collapsedText(nameEl)
+		name := textStripEmpty(nameEl)
 		if len(name) > 3 && len(name) < 60 && !contains(speakers, name) {
 			speakers = append(speakers, name)
 		}
@@ -581,7 +725,7 @@ func (w *WebScraper) ScrapeEventFull(rawURL string) model.ScrapedEventFull {
 	}
 
 	// --- Topics / tracks ---
-	var topics []string
+	topics := make([]string, 0, 10)
 	count = 0
 	doc.Find("span,div,li,a").EachWithBreak(func(_ int, el *goquery.Selection) bool {
 		if count >= 10 {
@@ -591,7 +735,7 @@ func (w *WebScraper) ScrapeEventFull(rawURL string) model.ScrapedEventFull {
 			return true
 		}
 		count++
-		text := collapsedText(el)
+		text := textStripEmpty(el)
 		if len(text) > 3 && len(text) < 50 && !contains(topics, text) {
 			topics = append(topics, text)
 		}
@@ -599,7 +743,7 @@ func (w *WebScraper) ScrapeEventFull(rawURL string) model.ScrapedEventFull {
 	})
 
 	// --- Sponsors / partners ---
-	var sponsors []model.ScrapedSponsor
+	sponsors := make([]model.ScrapedSponsor, 0, 10)
 	seenSponsorNames := map[string]struct{}{}
 	noiseNames := map[string]struct{}{
 		"sponsors": {}, "partners": {}, "our sponsors": {}, "our partners": {},
@@ -647,31 +791,35 @@ func (w *WebScraper) ScrapeEventFull(rawURL string) model.ScrapedEventFull {
 			name = strings.TrimSpace(img.AttrOr("alt", ""))
 		}
 		if name == "" {
-			name = truncateRunes(collapsedText(el), 80)
+			name = truncateRunes(textStripSpace(el), 80)
 		}
 		addSponsor(name, logoURL)
 		return true
 	})
 
-	// Strategy 2: headings like "Sponsors" / "Partners" followed by img elements
-	doc.Find("h2,h3,h4").Each(func(_ int, h *goquery.Selection) {
-		if !sponsorHeadRe.MatchString(collapsedText(h)) {
-			return
+	// Strategy 2: headings like "Sponsors" / "Partners" followed by img
+	// elements. Python's `h.find_next_sibling()` (no args) skips
+	// non-element nodes (e.g. whitespace text between tags) and returns
+	// the next actual Tag, so mirror that by walking siblings to the next
+	// ElementNode rather than taking the immediate raw next node.
+	for _, h := range findHeadingsBySoleText(doc.Selection, "h2,h3,h4", sponsorHeadRe) {
+		sibling := h.NextSibling
+		for sibling != nil && sibling.Type != html.ElementNode {
+			sibling = sibling.NextSibling
 		}
-		sibling := h.Next()
-		if sibling.Length() == 0 {
-			return
+		if sibling == nil {
+			continue
 		}
-		sibling.Find("img").Slice(0, 10).Each(func(_ int, img *goquery.Selection) {
+		sliceUpTo(wrapNode(sibling).Find("img"), 10).Each(func(_ int, img *goquery.Selection) {
 			src := img.AttrOr("src", img.AttrOr("data-src", ""))
 			logoURL := absURL(rawURL, src)
 			name := strings.TrimSpace(img.AttrOr("alt", ""))
 			addSponsor(name, logoURL)
 		})
-	})
+	}
 
 	// Strategy 3: any <img> with "sponsor" / "partner" in its src path or alt
-	doc.Find("img").Slice(0, 60).Each(func(_ int, img *goquery.Selection) {
+	sliceUpTo(doc.Find("img"), 60).Each(func(_ int, img *goquery.Selection) {
 		src := img.AttrOr("src", img.AttrOr("data-src", ""))
 		alt := strings.TrimSpace(img.AttrOr("alt", ""))
 		if sponsorWordRe.MatchString(src) || sponsorWordRe.MatchString(alt) {
@@ -712,7 +860,7 @@ func (w *WebScraper) ScrapeEventFull(rawURL string) model.ScrapedEventFull {
 		if err != nil || strings.ToLower(u.Host) != eventHost {
 			return
 		}
-		lowTxt := strings.ToLower(collapsedText(a))
+		lowTxt := strings.ToLower(textStripEmpty(a))
 		lowHref := strings.ToLower(absu)
 		if lowTxt == "" {
 			return
@@ -746,7 +894,7 @@ func (w *WebScraper) ScrapeEventFull(rawURL string) model.ScrapedEventFull {
 			if len(audience) == 0 {
 				audience = extractBulletsAfterHeading(regDoc.Selection, audienceHeadRe, 6)
 			}
-			rt := collapsedText(regDoc.Selection)
+			rt := textStripSpace(regDoc.Selection)
 			_ = regBody
 			regDetails = model.RegistrationDetails{
 				URL:         regURL,
@@ -792,14 +940,11 @@ var (
 	htmlTagRe      = regexp.MustCompile(`<[a-zA-Z][^>]*>`)
 )
 
-// PrepareContent ports utils/content_tools.py's prepare_content. Google Doc
-// URLs are not supported (see domain.ErrGoogleDocsUnsupported) — that path
-// required a Google service-account credential flow explicitly left out of
-// scope for this migration pass.
+// PrepareContent ports utils/content_tools.py's prepare_content.
 func (w *WebScraper) PrepareContent(contentInput string) (string, error) {
 	text := strings.TrimSpace(contentInput)
 	if googleDocURLRe.MatchString(text) {
-		return "", domain.ErrGoogleDocsUnsupported
+		return w.fetchGoogleDoc(text)
 	}
 	if htmlTagRe.MatchString(text) {
 		return text, nil

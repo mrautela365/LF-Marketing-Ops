@@ -44,6 +44,10 @@ type EmailSummary struct {
 	CampaignName string          `json:"campaignName,omitempty"`
 	From         EmailFrom       `json:"from,omitempty"`
 	To           EmailRecipients `json:"to,omitempty"`
+	// Stats is the raw HubSpot "stats" object, only populated by
+	// audience_tools.py's hubspot_search_campaigns projection (id/name/
+	// subject/updatedAt/stats) — left nil for every other caller.
+	Stats map[string]any `json:"stats,omitempty"`
 }
 
 // EmailDetails is the full GET /marketing/v3/emails/{id} shape used across
@@ -99,9 +103,16 @@ type ListInfo struct {
 
 // CreatedList is the result of HubSpotListClient.CreateList.
 type CreatedList struct {
-	ListID     string `json:"listId"`
-	Name       string `json:"name"`
-	Size       int    `json:"size"`
+	ListID string `json:"listId"`
+	Name   string `json:"name"`
+	Size   int    `json:"size"`
+	// HasSize distinguishes "size key absent from the API response" from
+	// "size key present with value 0" — mirrors Python's
+	// result.get("size", "unknown") only substituting the "unknown"
+	// sentinel when the key is genuinely missing, not when it's a
+	// legitimate zero (the common case immediately after list creation,
+	// before HubSpot finishes async size computation).
+	HasSize    bool   `json:"-"`
 	HubSpotURL string `json:"hubspot_url"`
 }
 

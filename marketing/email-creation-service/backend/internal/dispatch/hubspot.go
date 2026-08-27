@@ -24,6 +24,41 @@ import (
 
 const hubspotBaseURL = "https://api.hubapi.com"
 
+// flexInt unmarshals a JSON number or a JSON string containing digits into
+// an int — HubSpot's list-search additionalProperties.hs_list_size comes
+// back as a string, unlike every other numeric field in the same response,
+// so a plain `int` field silently fails json.Unmarshal on every entry.
+type flexInt int
+
+func (f *flexInt) UnmarshalJSON(data []byte) error {
+	if len(data) == 0 || string(data) == "null" {
+		*f = 0
+		return nil
+	}
+	if data[0] == '"' {
+		var s string
+		if err := json.Unmarshal(data, &s); err != nil {
+			return err
+		}
+		if s == "" {
+			*f = 0
+			return nil
+		}
+		n, err := strconv.Atoi(s)
+		if err != nil {
+			return err
+		}
+		*f = flexInt(n)
+		return nil
+	}
+	var n int
+	if err := json.Unmarshal(data, &n); err != nil {
+		return err
+	}
+	*f = flexInt(n)
+	return nil
+}
+
 // ilsProcessingTypes are the CRM v3 processingType values that route
 // through the ILS (contactIlsLists) namespace rather than legacy
 // contactLists. Matches Python's _ILS_PROCESSING_TYPES.
@@ -199,7 +234,7 @@ func (c *HubSpotClient) SearchEmails(ctx context.Context, opts domain.EmailSearc
 func (c *HubSpotClient) CloneEmail(ctx context.Context, sourceEmailID, cloneName string) (*model.ClonedEmail, error) {
 	body := map[string]any{
 		"id":        sourceEmailID,
-		"cloneName": cloneName,
+		"cloneName": c.tagAssetName(cloneName),
 		"language":  "en",
 	}
 	var created struct {
@@ -266,13 +301,17 @@ func (c *HubSpotClient) UpdateEmailSettings(ctx context.Context, emailID string,
 		patch["from"] = from
 	}
 	if update.PreviewText != nil {
+		// Matches the Python client: a failure fetching current content
+		// degrades to a partial, widget-only content payload rather than
+		// aborting the whole settings update (subject/type/from/replyTo
+		// changes in this same patch would otherwise be lost too).
+		var content map[string]any
 		var current struct {
 			Content map[string]any `json:"content"`
 		}
-		if err := c.request(ctx, http.MethodGet, "/marketing/v3/emails/"+emailID, nil, nil, &current); err != nil {
-			return fmt.Errorf("fetch current content before preview-text patch: %w", err)
+		if err := c.request(ctx, http.MethodGet, "/marketing/v3/emails/"+emailID, nil, nil, &current); err == nil {
+			content = current.Content
 		}
-		content := current.Content
 		if content == nil {
 			content = map[string]any{}
 		}
@@ -297,14 +336,19 @@ func (c *HubSpotClient) UpdateEmailSettings(ctx context.Context, emailID string,
 // would leave stale contactIds/lists lingering from a cloned email. Exactly
 // one of ContactLists/ContactIlsLists may be non-empty; mixing both
 // namespaces in one call is rejected by HubSpot.
-func (c *HubSpotClient) SetEmailSendList(ctx context.Context, emailID string, update domain.SendListUpdate) error {
+func (c *HubSpotClient) SetEmailSendList(ctx context.Context, emailID string, update domain.SendListUpdate) (model.EmailRecipients, error) {
 	hasLegacy := len(update.ContactLists.Include) > 0 || len(update.ContactLists.Exclude) > 0
 	hasILS := len(update.ContactIlsLists.Include) > 0 || len(update.ContactIlsLists.Exclude) > 0
 	if hasLegacy && hasILS {
-		return fmt.Errorf("set send list for email %s: cannot mix legacy contactLists and ILS contactIlsLists in one call: %w", emailID, domain.ErrInvalidInput)
+		return model.EmailRecipients{}, fmt.Errorf("set send list for email %s: cannot mix legacy contactLists and ILS contactIlsLists in one call: %w", emailID, domain.ErrInvalidInput)
 	}
 
-	to := map[string]any{}
+	// contactIds is always cleared, matching Python's set_email_send_list —
+	// omitting it would leave stale individually-added contacts from the
+	// clone source, since HubSpot's PATCH keeps omitted sub-fields as-is.
+	to := map[string]any{
+		"contactIds": map[string]any{"include": []string{}, "exclude": []string{}},
+	}
 	if hasLegacy {
 		to["contactLists"] = update.ContactLists
 	}
@@ -316,9 +360,9 @@ func (c *HubSpotClient) SetEmailSendList(ctx context.Context, emailID string, up
 		To model.EmailRecipients `json:"to"`
 	}
 	if err := c.request(ctx, http.MethodPatch, "/marketing/v3/emails/"+emailID, nil, map[string]any{"to": to}, &resp); err != nil {
-		return err
+		return model.EmailRecipients{}, err
 	}
-	return nil
+	return resp.To, nil
 }
 
 func (c *HubSpotClient) GetCampaign(ctx context.Context, emailID string) (string, string, error) {
@@ -370,7 +414,7 @@ func (c *HubSpotClient) SearchLists(ctx context.Context, query string, limit int
 			Size                 int    `json:"size"`
 			ProcessingType       string `json:"processingType"`
 			AdditionalProperties struct {
-				HsListSize int `json:"hs_list_size"`
+				HsListSize flexInt `json:"hs_list_size"`
 			} `json:"additionalProperties"`
 		}
 		if err := json.Unmarshal(raw, &l); err != nil {
@@ -382,9 +426,61 @@ func (c *HubSpotClient) SearchLists(ctx context.Context, query string, limit int
 		}
 		size := l.Size
 		if size == 0 {
-			size = l.AdditionalProperties.HsListSize
+			size = int(l.AdditionalProperties.HsListSize)
 		}
 		lists = append(lists, model.ListInfo{ID: id, Name: l.Name, Size: size, ProcessingType: l.ProcessingType})
+	}
+	return lists, nil
+}
+
+// SearchListsByName ports integrations/hubspot.py's search_lists (distinct
+// from SearchLists, which ports audience_tools.py's hubspot_search_lists).
+func (c *HubSpotClient) SearchListsByName(ctx context.Context, query string, limit int) ([]model.ListInfo, error) {
+	if len(query) < 2 {
+		return []model.ListInfo{}, nil
+	}
+	if limit <= 0 {
+		limit = 10
+	}
+	body := map[string]any{
+		"query":           query,
+		"count":           limit,
+		"processingTypes": []string{"MANUAL", "SNAPSHOT", "DYNAMIC"},
+	}
+	var out struct {
+		Lists []json.RawMessage `json:"lists"`
+	}
+	if err := c.request(ctx, http.MethodPost, "/crm/v3/lists/search", nil, body, &out); err != nil {
+		return nil, err
+	}
+
+	lists := make([]model.ListInfo, 0, len(out.Lists))
+	for _, raw := range out.Lists {
+		var l struct {
+			ListID               string `json:"listId"`
+			ID                   string `json:"id"`
+			Name                 string `json:"name"`
+			ProcessingType       string `json:"processingType"`
+			AdditionalProperties struct {
+				HsListSize flexInt `json:"hs_list_size"`
+			} `json:"additionalProperties"`
+		}
+		if err := json.Unmarshal(raw, &l); err != nil {
+			continue
+		}
+		id := l.ListID
+		if id == "" {
+			id = l.ID
+		}
+		if l.Name == "" || id == "" {
+			continue
+		}
+		lists = append(lists, model.ListInfo{
+			ID:             id,
+			Name:           l.Name,
+			Size:           int(l.AdditionalProperties.HsListSize),
+			ProcessingType: l.ProcessingType,
+		})
 	}
 	return lists, nil
 }
@@ -545,6 +641,7 @@ func (c *HubSpotClient) CreateList(ctx context.Context, name string, filterBranc
 		return nil, fmt.Errorf("create list %q: no listId in response: %w", name, domain.ErrUpstream)
 	}
 	size := 0
+	_, hasSize := data["size"]
 	if v, ok := data["size"].(float64); ok {
 		size = int(v)
 	}
@@ -552,6 +649,7 @@ func (c *HubSpotClient) CreateList(ctx context.Context, name string, filterBranc
 		ListID:     listID,
 		Name:       name,
 		Size:       size,
+		HasSize:    hasSize,
 		HubSpotURL: fmt.Sprintf("https://app.hubspot.com/contacts/%s/objectLists/%s/filters", c.portalID, listID),
 	}, nil
 }

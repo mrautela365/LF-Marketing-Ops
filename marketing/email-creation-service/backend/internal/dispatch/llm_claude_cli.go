@@ -1,9 +1,10 @@
 // Package dispatch's llm_claude_cli.go ports llm/gateway.py's CLI-fallback
 // path (used whenever neither ANTHROPIC_API_KEY nor LITELLM_API_KEY/
 // LITELLM_BASE_URL is set, which is the only backend actually exercised in
-// production today per the startup log: "backend=cli (fallback)"). The
-// Anthropic-SDK / LiteLLM adapters are intentionally deferred — see
-// domain.LLMGateway's doc comment.
+// this deployment today — no valid Anthropic key is ever configured here).
+// The Anthropic-SDK (llm_anthropic_sdk.go) and LiteLLM (llm_litellm.go)
+// adapters exist for source parity with llm/gateway.py's backend_name()
+// priority and are selected by llm_select.go when their env vars are set.
 package dispatch
 
 import (
@@ -22,10 +23,12 @@ import (
 	"github.com/linuxfoundation/lfx-v2-emailcreation-service/internal/domain"
 )
 
-// ClaudeCLIGateway implements domain.LLMGateway by shelling out to the
-// `claude` CLI, mirroring llm/gateway.py's _cli_call / _cli_call_streaming /
-// _agent_cli. It is intentionally the only LLMGateway implementation for
-// now (see package doc comment).
+// ClaudeCLIGateway implements domain.LLMGateway and domain.CLISkillRunner by
+// shelling out to the `claude` CLI, mirroring llm/gateway.py's _cli_call /
+// _cli_call_streaming / _agent_cli / run_cli_skill. This is the only backend
+// actually reachable in this deployment (see package doc comment), but
+// llm_anthropic_sdk.go and llm_litellm.go also implement domain.LLMGateway
+// for source parity with backend_name()'s priority order.
 type ClaudeCLIGateway struct {
 	// Model is passed to every CLI invocation via --model, matching
 	// llm/gateway.py's resolve_model() determinism guarantee (one model id
@@ -526,4 +529,60 @@ func (g *ClaudeCLIGateway) RunAgent(ctx context.Context, messages []domain.Messa
 
 	updated := append(append([]domain.Message{}, messages...), domain.Message{Role: "assistant", Content: finalText})
 	return finalText, updated, nil
+}
+
+// RunCLISkill implements domain.CLISkillRunner, mirroring run_cli_skill: a
+// CLI invocation distinct from call/callStreaming's TOOL_CALL: emulation —
+// no --strict-mcp-config (the CLI's own real MCP tool integrations, e.g. an
+// Asana MCP server, stay available), a flat blocking wait with no idle
+// timeout, and a plain (text, success) result rather than driving a tool
+// loop here (the model is expected to invoke its native MCP tools itself).
+func (g *ClaudeCLIGateway) RunCLISkill(ctx context.Context, prompt string, opts domain.RunCLISkillOptions) (string, bool, error) {
+	extra := []string{}
+	if opts.StreamJSON {
+		extra = append(extra, "--output-format", "stream-json", "--include-partial-messages", "--verbose")
+	}
+	argv, err := g.cliArgv(extra...)
+	if err != nil {
+		return "", false, err
+	}
+	cmd := exec.Command(argv[0], argv[1:]...)
+	if opts.Cwd != "" {
+		cmd.Dir = opts.Cwd
+	}
+	cmd.Stdin = strings.NewReader(prompt)
+	var stdout, stderr strings.Builder
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	timeout := opts.TimeoutSeconds
+	if timeout <= 0 {
+		timeout = 900
+	}
+
+	if err := cmd.Start(); err != nil {
+		return "", false, fmt.Errorf("start claude CLI: %w", err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+
+	select {
+	case err := <-done:
+		out := strings.TrimSpace(stdout.String())
+		if opts.OnEvent != nil && out != "" {
+			emitEvent(opts.OnEvent, domain.AgentEvent{Type: "output", Text: out})
+		}
+		if err != nil {
+			return out, false, nil
+		}
+		return out, true, nil
+	case <-time.After(time.Duration(timeout) * time.Second):
+		killProcessTree(cmd)
+		<-done
+		return "", false, fmt.Errorf("claude CLI (skill) timed out after %ds", timeout)
+	case <-ctx.Done():
+		killProcessTree(cmd)
+		<-done
+		return "", false, ctx.Err()
+	}
 }

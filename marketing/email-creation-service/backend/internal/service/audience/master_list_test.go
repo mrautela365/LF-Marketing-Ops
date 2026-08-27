@@ -136,6 +136,9 @@ type fakeListClient struct {
 func (f *fakeListClient) SearchLists(ctx context.Context, query string, limit int) ([]model.ListInfo, error) {
 	return nil, nil
 }
+func (f *fakeListClient) SearchListsByName(ctx context.Context, query string, limit int) ([]model.ListInfo, error) {
+	return nil, nil
+}
 func (f *fakeListClient) GetList(ctx context.Context, listID string) (*model.ListInfo, error) {
 	return nil, nil
 }

@@ -62,10 +62,11 @@ type RunAgentOptions struct {
 }
 
 // LLMGateway is the single port every service uses for LLM calls — mirrors
-// llm/gateway.py's role as the one place a backend is chosen. Only the
-// Claude CLI subprocess backend is implemented today (dispatch/llm_claude_cli.go);
-// Anthropic-SDK / LiteLLM adapters can implement this same interface later
-// without touching any caller.
+// llm/gateway.py's role as the one place a backend is chosen. Three
+// backends implement this interface (dispatch/llm_claude_cli.go,
+// llm_anthropic_sdk.go, llm_litellm.go); dispatch/llm_select.go picks one at
+// startup with the same priority as Python's backend_name(): Anthropic API
+// key present > LiteLLM configured > CLI fallback.
 type LLMGateway interface {
 	// CompleteText is a single-shot text completion (no tools).
 	CompleteText(ctx context.Context, prompt string, opts CompleteTextOptions) (string, error)
@@ -73,4 +74,37 @@ type LLMGateway interface {
 	// answer (no further tool call) or MaxSteps is exhausted. Returns the
 	// final answer text and the updated message history.
 	RunAgent(ctx context.Context, messages []Message, system string, tools []ToolDef, executeTool ExecuteToolFunc, opts RunAgentOptions) (string, []Message, error)
+}
+
+// RunCLISkillOptions parameterizes CLISkillRunner.RunCLISkill.
+type RunCLISkillOptions struct {
+	// Cwd, if set, is the working directory the CLI subprocess runs in —
+	// mirrors run_cli_skill(cwd=...), used so the CLI's own MCP server
+	// config (e.g. an Asana MCP server) resolves relative to the right
+	// project directory.
+	Cwd string
+	// TimeoutSeconds is a hard ceiling on the whole call. Python defaults
+	// this to 900.
+	TimeoutSeconds int
+	OnEvent        AgentEventFunc
+	// StreamJSON mirrors run_cli_skill(stream_json=...): when true, adds
+	// --output-format stream-json --include-partial-messages so OnEvent
+	// receives incremental output; when false, the call is a flat blocking
+	// wait with no partial-output streaming.
+	StreamJSON bool
+}
+
+// CLISkillRunner is implemented only by the Claude CLI backend — mirrors
+// llm/gateway.py's run_cli_skill, a mechanism distinct from RunAgent's
+// TOOL_CALL:/TOOL_RESULT: text-protocol emulation: it does NOT pass
+// --strict-mcp-config, so the CLI's own native MCP tool integrations (e.g.
+// an Asana MCP server) are available, and it does a flat blocking wait
+// rather than driving a tool-execution loop itself — the model is expected
+// to use its native MCP tools directly. Python's fetch_asana_task_via_mcp
+// is CLI-only regardless of which backend GET /api/status reports, so
+// callers of this capability must obtain a *dispatch.ClaudeCLIGateway
+// directly (or type-assert LLMGateway to this interface) rather than going
+// through whichever backend llm_select.go chose for RunAgent/CompleteText.
+type CLISkillRunner interface {
+	RunCLISkill(ctx context.Context, prompt string, opts RunCLISkillOptions) (text string, success bool, err error)
 }

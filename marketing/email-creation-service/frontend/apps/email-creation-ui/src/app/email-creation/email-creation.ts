@@ -1,4 +1,4 @@
-import { Component, signal, type WritableSignal } from '@angular/core';
+import { Component, computed, signal, type WritableSignal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { DomSanitizer, type SafeHtml } from '@angular/platform-browser';
 import type {
@@ -40,6 +40,29 @@ const ROLE_SPEAKER_SCOPE_TAGS: Record<RoleSpeakerScope, string> = {
 };
 
 const EXTRA_FILTER_NO_VALUE_OPS = new Set(['is known', 'is unknown']);
+
+const FUNNEL_COLORS: Record<string, string> = {
+  TOFU: '#16a34a',
+  MOFU: '#d97706',
+  BOFU: '#dc2626',
+  'FOLLOW-UP': '#7c3aed',
+};
+
+const STAGE_ICONS: Record<string, string> = {
+  TOFU: '📢',
+  MOFU: '🎯',
+  BOFU: '🔥',
+  'FOLLOW-UP': '💌',
+};
+
+const DRAFTING_PLACEHOLDER_HTML = (label: string): string => `<html><body style="margin:48px 40px;font-family:Arial,sans-serif;color:#555;text-align:center">
+  <div style="font-size:36px;margin-bottom:14px">⏳</div>
+  <div style="font-size:15px;font-weight:600;margin-bottom:8px">Drafting ${label}…</div>
+  <div style="font-size:13px;color:#888">Takes ~60 seconds.</div>
+</body></html>`;
+
+const VARIANT_A_UNAVAILABLE_HTML = `<html><body style="margin:48px 40px;font-family:Arial,sans-serif;color:#c00;font-size:13px">
+  <strong>⚠️ AI template content unavailable.</strong></body></html>`;
 
 /**
  * Ports the legacy 4-step email-creation wizard (frontend/app.js Steps 1-2-4;
@@ -87,6 +110,20 @@ export class EmailCreation {
   protected readonly refineText = signal('');
   protected readonly chat2 = signal<ChatEntry[]>([]);
   protected readonly chat2Input = signal('');
+
+  // Full email HTML preview (Variant A + Variant B), sandboxed via [srcdoc].
+  protected readonly previewHtmlA = computed<SafeHtml>(() => {
+    if (this.contentLoading()) return this.sanitizer.bypassSecurityTrustHtml(DRAFTING_PLACEHOLDER_HTML('Variant A (AI Template)'));
+    return this.sanitizer.bypassSecurityTrustHtml(this.variantAHtml() || VARIANT_A_UNAVAILABLE_HTML);
+  });
+  protected readonly previewHtmlB = computed<SafeHtml>(() => {
+    if (this.contentLoading()) return this.sanitizer.bypassSecurityTrustHtml(DRAFTING_PLACEHOLDER_HTML('Variant B (Existing Flow)'));
+    return this.sanitizer.bypassSecurityTrustHtml(this.generatedHtml());
+  });
+
+  // Stage badge + UTM chip, surfaced from the plan_done SSE event.
+  protected readonly stage = signal<Record<string, unknown> | null>(null);
+  protected readonly utm = signal<Record<string, string> | null>(null);
 
   // Step 3 — Audience Preview.
   protected readonly audienceSubTab = signal<'event' | 'custom' | 'reuse'>('event');
@@ -172,6 +209,64 @@ export class EmailCreation {
     return this.sanitizer.bypassSecurityTrustHtml(section.html || '');
   }
 
+  stageVisible(): boolean {
+    const s = this.stage();
+    return !!s && typeof s['name'] === 'string' && s['name'] !== 'Unknown';
+  }
+
+  stageIcon(): string {
+    return STAGE_ICONS[String(this.stage()?.['funnel'] ?? '')] || '📅';
+  }
+
+  stageColor(): string {
+    return FUNNEL_COLORS[String(this.stage()?.['funnel'] ?? '')] || '#6b7280';
+  }
+
+  stageName(): string {
+    return String(this.stage()?.['name'] ?? '');
+  }
+
+  stageFunnel(): string {
+    return String(this.stage()?.['funnel'] ?? '');
+  }
+
+  stageDaysLabel(): string {
+    const d = this.stage()?.['days_to_event'];
+    if (d == null || typeof d !== 'number') return '';
+    if (d > 0) return `(${d}d to event)`;
+    if (d === 0) return '(today!)';
+    return `(${Math.abs(d)}d post-event)`;
+  }
+
+  utmVisible(): boolean {
+    return !!this.utm()?.['utm_campaign'];
+  }
+
+  utmIsRealCampaign(): boolean {
+    return this.utm()?.['source'] === 'hubspot_campaign';
+  }
+
+  utmSourceLabel(): string {
+    return this.utmIsRealCampaign() ? 'HubSpot Campaign:' : 'Auto-generated UTM:';
+  }
+
+  utmCampaignNameLabel(): string {
+    const name = this.utm()?.['campaign_name'];
+    return name ? `(${name})` : '';
+  }
+
+  utmCampaign(): string {
+    return this.utm()?.['utm_campaign'] ?? '';
+  }
+
+  utmSource(): string {
+    return this.utm()?.['utm_source'] || 'email';
+  }
+
+  utmMedium(): string {
+    return this.utm()?.['utm_medium'] ?? '';
+  }
+
   private newToken(): string {
     return `tok-${Math.random().toString(36).slice(2)}${Date.now()}`;
   }
@@ -205,6 +300,8 @@ export class EmailCreation {
     this.openBrief(token, (result) => {
       this.sessionId.set(result.session_id);
       this.planResult.set(result);
+      this.stage.set(result.stage ?? null);
+      this.utm.set(result.utm ?? null);
       this.generateContent('', token);
     });
 
@@ -765,6 +862,8 @@ export class EmailCreation {
     this.briefStatus.set('idle');
     this.sessionId.set(null);
     this.planResult.set(null);
+    this.stage.set(null);
+    this.utm.set(null);
     this.generatedSubject.set('');
     this.generatedPreview.set('');
     this.generatedHtml.set('');

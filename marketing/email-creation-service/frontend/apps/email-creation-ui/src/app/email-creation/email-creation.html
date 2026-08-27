@@ -57,12 +57,12 @@
     <div class="field-row">
       <div class="field">
         <label>Email type (optional)</label>
-        <input
-          type="text"
-          placeholder="e.g. BATCH_EMAIL"
-          [ngModel]="emailType()"
-          (ngModelChange)="emailType.set($event)"
-        />
+        <select [ngModel]="emailType()" (ngModelChange)="emailType.set($event)">
+          <option value="">— Auto-detect —</option>
+          <option value="Newsletter">Newsletter</option>
+          <option value="Invite">Invite</option>
+          <option value="Reminder">Reminder</option>
+        </select>
       </div>
       <div class="field">
         <label>Extra context (optional)</label>
@@ -107,13 +107,45 @@
 
   @if (planResult()) {
     <div class="card">
-      <div class="card-title">Campaign Plan</div>
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap">
+        <div class="card-title" style="margin:0">Campaign Plan</div>
+        @if (stageVisible()) {
+          <div
+            style="display:inline-flex;align-items:center;gap:6px;padding:4px 12px;border-radius:20px;font-size:12px;font-weight:600;color:#fff"
+            [style.background]="stageColor()"
+          >
+            <span>{{ stageIcon() }}</span>
+            <span>{{ stageName() }}</span>
+            <span style="opacity:0.8;font-weight:400">· {{ stageFunnel() }}</span>
+            @if (stageDaysLabel()) {
+              <span style="opacity:0.7;font-weight:400;font-size:11px">{{ stageDaysLabel() }}</span>
+            }
+          </div>
+        }
+      </div>
       <div class="claude-message">
         <div class="claude-label">Claude</div>
         <p>{{ planResult()!.message }}</p>
       </div>
       @if (planResult()!.source_email) {
         <span class="badge badge-blue">Source: {{ planResult()!.source_email!.name }}</span>
+      }
+      @if (utmVisible()) {
+        <div
+          style="display:flex;align-items:center;gap:6px;margin-top:8px;padding:7px 11px;border-radius:6px;font-size:12px;color:var(--gray-700)"
+          [style.background]="utmIsRealCampaign() ? 'var(--green-light)' : 'var(--blue-light)'"
+          [style.border]="utmIsRealCampaign() ? '1px solid #86efac' : '1px solid #c7d2fe'"
+        >
+          <span style="font-size:14px">🔗</span>
+          <span>
+            <strong>{{ utmSourceLabel() }}</strong>
+            {{ utmCampaignNameLabel() }} ·
+            <code style="font-family:monospace">{{ utmCampaign() }}</code>
+            <span style="opacity:0.7">
+              (utm_source={{ utmSource() }}, utm_medium={{ utmMedium() }})
+            </span>
+          </span>
+        </div>
       }
     </div>
   }
@@ -127,12 +159,24 @@
       <div class="error-box">Error: {{ contentError() }}</div>
     } @else if (generatedHtml()) {
       <div class="field">
-        <label>Subject</label>
+        <label>Subject <span style="color:var(--gray-400)">(Variant B, editable)</span></label>
         <input type="text" [ngModel]="generatedSubject()" (ngModelChange)="generatedSubject.set($event)" />
       </div>
       <div class="field">
-        <label>Preview text</label>
+        <label>Preview text <span style="color:var(--gray-400)">(Variant B, editable)</span></label>
         <input type="text" [ngModel]="generatedPreview()" (ngModelChange)="generatedPreview.set($event)" />
+      </div>
+      <div class="field">
+        <label>Subject <span style="color:var(--gray-400)">(Variant A, AI Template — read only)</span></label>
+        <div class="section-html" style="padding:10px 14px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;font-size:14px">
+          {{ variantASubject() || '(unavailable)' }}
+        </div>
+      </div>
+      <div class="field">
+        <label>Preview text <span style="color:var(--gray-400)">(Variant A, AI Template — read only)</span></label>
+        <div class="section-html" style="padding:10px 14px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;font-size:13px;color:var(--gray-600)">
+          {{ variantAPreview() || '(unavailable)' }}
+        </div>
       </div>
 
       @if (sections().length > 0) {
@@ -153,6 +197,28 @@
           }
         </div>
       }
+
+      <div class="section-subhead" style="margin-top:16px">Full email preview</div>
+      <div style="margin-bottom:16px">
+        <div style="font-size:12px;color:var(--gray-600);margin-bottom:6px">
+          <strong>Variant A</strong> <span style="color:var(--gray-400)">(AI Template)</span>
+        </div>
+        <iframe
+          sandbox="allow-same-origin allow-popups"
+          style="width:100%;height:500px;border:1px solid #e2e8f0;border-radius:6px;background:#f9fafb"
+          [srcdoc]="previewHtmlA()"
+        ></iframe>
+      </div>
+      <div>
+        <div style="font-size:12px;color:var(--gray-600);margin-bottom:6px">
+          <strong>Variant B</strong> <span style="color:var(--gray-400)">(Existing Flow)</span>
+        </div>
+        <iframe
+          sandbox="allow-same-origin allow-popups"
+          style="width:100%;height:500px;border:1px solid #e2e8f0;border-radius:6px;background:#f9fafb"
+          [srcdoc]="previewHtmlB()"
+        ></iframe>
+      </div>
     }
   </div>
 

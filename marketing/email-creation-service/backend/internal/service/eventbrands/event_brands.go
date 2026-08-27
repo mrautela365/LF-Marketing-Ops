@@ -135,14 +135,14 @@ var cityToCountry = map[string]cityInfo{
 // email names, so expanding "North America" also matches "NA" emails and
 // vice versa.
 var locationAliases = map[string]string{
-	"north america": "NA",
-	"south america": "SA",
-	"latin america": "LATAM",
-	"europe":        "EU",
-	"asia pacific":  "APAC",
-	"middle east":   "ME",
-	"north africa":  "NA",
-	"united states": "US",
+	"north america":  "NA",
+	"south america":  "SA",
+	"latin america":  "LATAM",
+	"europe":         "EU",
+	"asia pacific":   "APAC",
+	"middle east":    "ME",
+	"north africa":   "NA",
+	"united states":  "US",
 	"united kingdom": "UK",
 }
 

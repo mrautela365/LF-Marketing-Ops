@@ -28,9 +28,9 @@ type ScrapedSponsor struct {
 
 // RegistrationDetails is the registration-page sub-scrape result.
 type RegistrationDetails struct {
-	URL          string   `json:"url,omitempty"`
-	TicketTypes  []string `json:"ticket_types,omitempty"`
-	Deadlines    []string `json:"deadlines,omitempty"`
+	URL         string   `json:"url,omitempty"`
+	TicketTypes []string `json:"ticket_types,omitempty"`
+	Deadlines   []string `json:"deadlines,omitempty"`
 }
 
 // EventLinks is the named-action-link map: register/sponsor/cfp/schedule/venue.
@@ -48,13 +48,13 @@ type EventLinks struct {
 type ScrapedEventFull struct {
 	ScrapedEvent
 
-	HeroImageURL string               `json:"hero_image_url"`
-	LogoURL      string               `json:"logo_url"`
-	Speakers     []string             `json:"speakers"`
-	Topics       []string             `json:"topics"`
-	Sponsors     []ScrapedSponsor     `json:"sponsors"`
-	Registration RegistrationDetails  `json:"registration"`
-	Links        EventLinks           `json:"links"`
-	Audience     []string             `json:"audience"`
-	Inclusions   []string             `json:"inclusions"`
+	HeroImageURL string              `json:"hero_image_url"`
+	LogoURL      string              `json:"logo_url"`
+	Speakers     []string            `json:"speakers"`
+	Topics       []string            `json:"topics"`
+	Sponsors     []ScrapedSponsor    `json:"sponsors"`
+	Registration RegistrationDetails `json:"registration"`
+	Links        EventLinks          `json:"links"`
+	Audience     []string            `json:"audience"`
+	Inclusions   []string            `json:"inclusions"`
 }

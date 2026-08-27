@@ -33,6 +33,17 @@ type Config struct {
 
 	AsanaAccessToken string
 
+	// FrontendDir is the directory of static SPA assets served by the
+	// catch-all route (index.html + hashed bundle files), mirroring
+	// Python's FRONTEND_DIR = os.path.join(os.path.dirname(__file__), "..",
+	// "frontend"). This Go service's frontend (marketing/email-creation-
+	// service/frontend) is an unbuilt Angular monorepo app with no plain
+	// static dist/ directory checked in, so there is no exact equivalent to
+	// point at yet; this defaults to an expected build output directory and
+	// the SPA handler no-ops (falls through to chi's default 404) when the
+	// directory doesn't exist, rather than failing server startup.
+	FrontendDir string
+
 	// AssetTag, if set, is appended to the name of every HubSpot asset this
 	// service creates (cloned emails, audience/suppression lists), e.g.
 	// AssetTag=psh-test -> "... [psh-test]". Leave empty in prod.
@@ -64,7 +75,10 @@ func Load(projectRoot string) (*Config, error) {
 	repoRoot := findRepoRoot(projectRoot)
 	envPaths := []string{
 		repoRoot + string(os.PathSeparator) + ".env",
-		repoRoot + string(os.PathSeparator) + ".." + string(os.PathSeparator) + "survey_workflow" + string(os.PathSeparator) + ".env",
+		// marketing/survey_workflow/.env, a sibling project's secrets file
+		// this service also honors — repoRoot is marketing/email-creation-
+		// service/backend, so survey_workflow lives two levels up.
+		filepath.Join(repoRoot, "..", "..", "survey_workflow", ".env"),
 	}
 
 	fileValues := map[string]string{}
@@ -93,6 +107,7 @@ func Load(projectRoot string) (*Config, error) {
 		GoogleServiceAccountFile: envOr("GOOGLE_SERVICE_ACCOUNT_FILE", ""),
 		InternalAPIToken:         envOr("INTERNAL_API_TOKEN", ""),
 		AsanaAccessToken:         envOr("ASANA_ACCESS_TOKEN", ""),
+		FrontendDir:              envOr("FRONTEND_DIR", filepath.Join(repoRoot, "..", "frontend", "apps", "email-creation-ui", "dist")),
 		AssetTag:                 strings.TrimSpace(envOr("ASSET_TAG", "")),
 		LiteLLMBaseURL:           envOr("LITELLM_BASE_URL", ""),
 		LiteLLMAPIKey:            envOr("LITELLM_API_KEY", ""),
@@ -120,21 +135,14 @@ func (c *Config) TagAssetName(name string) string {
 	return name + suffix
 }
 
-// findRepoRoot looks for the monorepo root .env file. This service lives
-// at marketing/email-creation-service/backend, not inside
-// marketing/emailcreationskill/ (where the .env actually is), so a plain
-// upward walk won't find it — check each ancestor directory itself and its
-// "emailcreationskill" sibling. Falls back to start itself if no .env is
-// found within a few levels.
+// findRepoRoot walks up from start looking for a directory containing
+// .env, stopping at the filesystem root. Falls back to start itself if
+// none is found within a few levels.
 func findRepoRoot(start string) string {
 	dir := start
 	for i := 0; i < 5; i++ {
 		if _, err := os.Stat(dir + string(os.PathSeparator) + ".env"); err == nil {
 			return dir
-		}
-		sibling := filepath.Join(dir, "emailcreationskill")
-		if _, err := os.Stat(sibling + string(os.PathSeparator) + ".env"); err == nil {
-			return sibling
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {

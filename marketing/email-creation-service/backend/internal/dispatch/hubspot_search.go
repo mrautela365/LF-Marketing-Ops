@@ -206,7 +206,9 @@ func (c *HubSpotClient) GetBrandEmails(ctx context.Context, opts domain.GetBrand
 	var all []model.EmailSummary
 
 	fetchAndAdd := func(filter string) error {
-		filter = strings.TrimSpace(filter)
+		// No trimming, matching Python's `if not filt or len(filt) < 2:
+		// return` — the length check and the HubSpot query both use the
+		// filter string exactly as given, whitespace included.
 		if len(filter) < 2 {
 			return nil
 		}
@@ -228,7 +230,6 @@ func (c *HubSpotClient) GetBrandEmails(ctx context.Context, opts domain.GetBrand
 	}
 
 	fetchTokenized := func(anchor string, rest []string) error {
-		anchor = strings.TrimSpace(anchor)
 		if len(anchor) < 2 {
 			return nil
 		}

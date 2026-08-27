@@ -41,6 +41,29 @@ var (
 	tripleNlRe = regexp.MustCompile(`\n{3,}`)
 )
 
+// isPythonTruthy mirrors Python's truthiness rules for a decoded JSON
+// value: None/missing, "", 0, 0.0, false, and empty list/map are falsy;
+// everything else (including non-empty strings, non-zero numbers) is
+// truthy.
+func isPythonTruthy(v any) bool {
+	switch t := v.(type) {
+	case nil:
+		return false
+	case bool:
+		return t
+	case string:
+		return t != ""
+	case float64:
+		return t != 0
+	case []any:
+		return len(t) > 0
+	case map[string]any:
+		return len(t) > 0
+	default:
+		return true
+	}
+}
+
 func widgetBody(topWidgets map[string]any, wid string) map[string]any {
 	w, _ := topWidgets[wid].(map[string]any)
 	body, _ := w["body"].(map[string]any)
@@ -311,9 +334,9 @@ func (c *HubSpotClient) UpdateEmailContent(ctx context.Context, emailID string, 
 				"img": map[string]any{
 					"src": input.BannerURL, "alt": "Email Banner", "width": 600,
 				},
-				"link":                      utmLinkOrEmpty(input.EventURL, input.UTMParams, "banner"),
-				"stretch_on_mobile":         true,
-				"hs_enable_module_padding":  false,
+				"link":                     utmLinkOrEmpty(input.EventURL, input.UTMParams, "banner"),
+				"stretch_on_mobile":        true,
+				"hs_enable_module_padding": false,
 				"hs_wrapper_css": map[string]any{
 					"padding-top": "0px", "padding-bottom": "0px",
 					"padding-left": "0px", "padding-right": "0px",
@@ -466,7 +489,7 @@ func (c *HubSpotClient) UpdateEmailContent(ctx context.Context, emailID string, 
 						},
 					}
 					cols = append(cols, map[string]any{
-						"id": fmt.Sprintf("col-sp-%s-%d-%d", tierKey, r, j),
+						"id":      fmt.Sprintf("col-sp-%s-%d-%d", tierKey, r, j),
 						"widgets": []string{wid}, "width": widths[j],
 					})
 				}
@@ -811,7 +834,7 @@ func (c *HubSpotClient) ValidateStagedEmail(ctx context.Context, emailID string,
 	if expectBanner {
 		hasBanner := false
 		for _, w := range referenced {
-			if _, ok := widgetBody(topWidgets, w)["img"]; ok {
+			if isPythonTruthy(widgetBody(topWidgets, w)["img"]) {
 				hasBanner = true
 				break
 			}
@@ -924,7 +947,11 @@ func (c *HubSpotClient) UploadImageToHubSpot(ctx context.Context, imageURL, file
 	if filename == "" {
 		raw := ""
 		if u, err := url.Parse(imageURL); err == nil {
-			parts := strings.Split(strings.TrimSuffix(u.Path, "/"), "/")
+			// No trailing-slash stripping, matching Python's
+			// path.rsplit("/", 1)[-1] — a path ending in "/" yields an
+			// empty raw filename, falling through to the content-type
+			// default below.
+			parts := strings.Split(u.Path, "/")
 			raw = parts[len(parts)-1]
 			if idx := strings.Index(raw, "?"); idx >= 0 {
 				raw = raw[:idx]

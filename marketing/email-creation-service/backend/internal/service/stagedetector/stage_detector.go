@@ -109,6 +109,14 @@ var (
 
 var dateFormats = []string{"January 2, 2006", "January 2 2006", "Jan 2, 2006", "Jan 2 2006"}
 
+// daysInMonth mirrors Python's strict calendar validation (constructing a
+// datetime with an out-of-range day, e.g. Feb 30, raises and the string is
+// discarded) — unlike time.Date, which silently normalizes overflow days
+// into the next month.
+func daysInMonth(year, month int) int {
+	return time.Date(year, time.Month(month)+1, 0, 0, 0, 0, 0, time.UTC).Day()
+}
+
 // parseAllDates parses scraped date strings into time.Time values, including
 // BOTH ends of any range found in a single string (e.g. "June 15-16, 2026" →
 // [June 15, June 16]), so callers can derive the full event date range, not
@@ -125,7 +133,7 @@ func parseAllDates(dateStrings []string) []time.Time {
 			y, _ := strconv.Atoi(m[1])
 			mo, _ := strconv.Atoi(m[2])
 			d, _ := strconv.Atoi(m[3])
-			if mo >= 1 && mo <= 12 && d >= 1 && d <= 31 {
+			if mo >= 1 && mo <= 12 && d >= 1 && d <= daysInMonth(y, mo) {
 				parsed = append(parsed, time.Date(y, time.Month(mo), d, 0, 0, 0, 0, time.UTC))
 			}
 			continue
@@ -275,7 +283,10 @@ func DetectStage(eventDates []string) Result {
 	eventEndDate, hasEnd := ParseEventEndDate(eventDates)
 	eventDateStr := FormatEventDateRange(eventDate, eventEndDate, hasEnd)
 
-	today := time.Now().UTC().Truncate(24 * time.Hour)
+	// Matches Python's date.today(), which uses the server's local
+	// timezone rather than UTC.
+	now := time.Now()
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 	days := int(eventDate.Sub(today).Hours() / 24)
 
 	for _, s := range stages {

@@ -70,12 +70,24 @@ func (s *LastSentService) resolveListBrief(ctx context.Context, listID string, c
 	legacyName, exists, legacyErr := s.lists.GetLegacyListName(ctx, listID)
 	if legacyErr == nil && exists && legacyName != "" {
 		if results, searchErr := s.lists.SearchLists(ctx, legacyName, 20); searchErr == nil {
-			for _, r := range results {
-				if r.Name == legacyName && r.ID != "" {
-					brief := model.ListBrief{ListID: r.ID, Name: r.Name, Size: optionalSize(r.Size), ResolvedFromLegacyID: listID}
-					cache[listID] = brief
-					return brief
+			// Mirrors Python's `next((r for r in results if r["name"] ==
+			// legacy_name), None)` then checking that ONE match's listId:
+			// Python takes the first name match and stops there, even if it
+			// lacks an ID — it does not keep scanning for a later name match
+			// that does have one. Preserved here rather than "fixed" to keep
+			// scanning, since callers rely on the give-up path for
+			// duplicate/renumbered-list edge cases.
+			var match *model.ListInfo
+			for i := range results {
+				if results[i].Name == legacyName {
+					match = &results[i]
+					break
 				}
+			}
+			if match != nil && match.ID != "" {
+				brief := model.ListBrief{ListID: match.ID, Name: match.Name, Size: optionalSize(match.Size), ResolvedFromLegacyID: listID}
+				cache[listID] = brief
+				return brief
 			}
 		}
 		brief := model.ListBrief{
@@ -129,9 +141,6 @@ type scoredEmail struct {
 // additionally ranked by keyword overlap rather than trusted on substring
 // match alone.
 func (s *LastSentService) FindLastSentEmails(ctx context.Context, eventName, brandShort string, limit int) ([]model.LastSentEmail, error) {
-	if limit <= 0 {
-		limit = 3
-	}
 	term := strings.TrimSpace(eventName)
 	if term == "" {
 		term = strings.TrimSpace(brandShort)

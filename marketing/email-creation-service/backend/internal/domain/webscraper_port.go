@@ -17,7 +17,8 @@ type EventPageScraper interface {
 
 	// PrepareContent normalizes a Google Doc URL, raw HTML, or plain text
 	// into clean email-ready HTML — ports prepare_content. Google Doc URLs
-	// return ErrGoogleDocsUnsupported (not ported: requires a Google service
-	// account credential flow out of scope for this pass).
+	// are fetched via the Google Docs API using the service account file at
+	// GOOGLE_SERVICE_ACCOUNT_FILE; if that's unset, it returns the same error
+	// message _fetch_google_doc raises in that case.
 	PrepareContent(contentInput string) (string, error)
 }
